@@ -1,0 +1,6 @@
+/.agents/
+/references/
+/skills-lock.json
+/.svelte-kit/
+/build/
+/coverage/
