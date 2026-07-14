@@ -67,6 +67,7 @@
 		"idb": "8.0.3",
 		"mammoth": "1.11.0",
 		"mediabunny": "1.50.8",
+		"mermaid": "^11.16.0",
 		"onnxruntime-web-supertone": "npm:onnxruntime-web@1.23.0",
 		"pdfjs-dist": "5.4.624",
 		"remark-gfm": "4.0.1",

@@ -114,3 +114,116 @@ test('keeps Supertonic license acceptance and its visible checkbox in sync', asy
 	await expect(acceptance).toBeChecked();
 	await expect(install).toBeEnabled();
 });
+
+test('renders Mermaid fences as accessible diagrams with a source fallback', async ({ page }) => {
+	await page.goto('./');
+	await page.locator('#document-upload').setInputFiles({
+		name: 'diagram.md',
+		mimeType: 'text/markdown',
+		buffer: Buffer.from(
+			[
+				'# Local pipeline',
+				'',
+				'```mermaid',
+				'sequenceDiagram',
+				'  participant Reader',
+				'  participant Voicebook',
+				'  Reader->>Voicebook: recording notice;<br/>continue locally',
+				'```'
+			].join('\n')
+		)
+	});
+
+	await expect(page.getByRole('figure', { name: /Diagram/ })).toBeVisible();
+	await expect(page.getByRole('img', { name: 'Mermaid diagram' })).toBeVisible();
+	await expect(page.getByText('View diagram source')).toBeVisible();
+	await expect(page.locator('figure.mermaid-diagram')).toHaveAttribute('data-status', 'ready');
+	await expect(page.getByText('Diagram unavailable')).toBeHidden();
+	const sizeToggle = page.getByRole('button', { name: 'Full size' });
+	await sizeToggle.click();
+	await expect(page.getByRole('button', { name: 'Fit width' })).toHaveAttribute(
+		'aria-pressed',
+		'true'
+	);
+});
+
+test('table of contents moves the reading canvas and closes its compact drawer', async ({
+	page
+}) => {
+	await page.goto('./');
+	const openingParagraphs = Array.from(
+		{ length: 28 },
+		(_, index) =>
+			`Opening passage ${index + 1} gives the reader enough material to create a real document scroll.`
+	);
+	await page.locator('#document-upload').setInputFiles({
+		name: 'navigable-reader.md',
+		mimeType: 'text/markdown',
+		buffer: Buffer.from(
+			[
+				'# Navigable Reader',
+				'',
+				'## Opening section',
+				'',
+				...openingParagraphs.flatMap((paragraph) => [paragraph, '']),
+				'## Far section',
+				'',
+				'This is the destination selected from the table of contents.',
+				'',
+				'## Closing section',
+				'',
+				'The document ends here.'
+			].join('\n')
+		)
+	});
+
+	const canvas = page.locator('.reading-canvas');
+	const outline = page.getByRole('complementary', { name: 'Document outline' });
+	const tableOfContents = page.getByRole('navigation', { name: 'Table of contents' });
+	const farSection = tableOfContents.getByRole('button', { name: 'Far section', exact: true });
+	await expect
+		.poll(() => canvas.evaluate((element) => element.scrollHeight > element.clientHeight))
+		.toBe(true);
+
+	await farSection.click();
+	await expect.poll(() => canvas.evaluate((element) => element.scrollTop)).toBeGreaterThan(200);
+	await expect(farSection).toHaveAttribute('aria-current', 'location');
+	await expect
+		.poll(() =>
+			page.getByRole('heading', { name: 'Far section', exact: true }).evaluate((heading) => {
+				const canvasElement = document.querySelector<HTMLElement>('.reading-canvas');
+				if (!canvasElement) return false;
+				const canvasRect = canvasElement.getBoundingClientRect();
+				const headingRect = heading.getBoundingClientRect();
+				return headingRect.top >= canvasRect.top && headingRect.bottom <= canvasRect.bottom;
+			})
+		)
+		.toBe(true);
+
+	await canvas.evaluate((element) => {
+		element.scrollTop = 0;
+		element.dispatchEvent(new WheelEvent('wheel', { bubbles: true }));
+	});
+	const followNarration = page.getByRole('button', { name: 'Follow narration' });
+	await expect(followNarration).toBeVisible();
+	await followNarration.click();
+	await expect(followNarration).toBeHidden();
+	await expect
+		.poll(() =>
+			page.getByRole('heading', { name: 'Far section', exact: true }).evaluate((heading) => {
+				const canvasElement = document.querySelector<HTMLElement>('.reading-canvas');
+				if (!canvasElement) return false;
+				const canvasRect = canvasElement.getBoundingClientRect();
+				const headingRect = heading.getBoundingClientRect();
+				return headingRect.top >= canvasRect.top && headingRect.bottom <= canvasRect.bottom;
+			})
+		)
+		.toBe(true);
+
+	await page.setViewportSize({ width: 800, height: 760 });
+	await tableOfContents.getByRole('button', { name: 'Opening section', exact: true }).click();
+	await expect(outline).toBeHidden();
+	await expect(
+		page.getByRole('heading', { name: 'Opening section', exact: true }).locator('..')
+	).toBeFocused();
+});

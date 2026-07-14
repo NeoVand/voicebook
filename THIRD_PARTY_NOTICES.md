@@ -28,4 +28,12 @@ The following runtime components require prominent source and license notices:
 - License: MIT, <https://github.com/supertone-inc/supertonic/blob/main/LICENSE>.
 - Voicebook modifications: reimplemented as typed worker-owned adapter code with pinned Hugging Face assets, progress reporting, browser cache management, cancellation integration, and reader timing output.
 
+## Mermaid
+
+- Purpose: local rendering of fenced Mermaid diagrams in imported Markdown documents.
+- Version: 11.16.0.
+- Source: <https://github.com/mermaid-js/mermaid>
+- License: MIT, <https://github.com/mermaid-js/mermaid/blob/develop/LICENSE>.
+- Voicebook modifications: none; loaded on demand as an npm dependency and rendered with Mermaid's strict security mode.
+
 Other important runtime projects include Transformers.js (Apache-2.0), PDF.js (Apache-2.0), Mammoth.js (BSD-2-Clause), Unified/remark (MIT), and idb (ISC). Model artifacts retain their own licenses and are not redistributed by this repository.

@@ -4,6 +4,8 @@
 		ArrowLeft,
 		Bookmark,
 		BookOpenText,
+		Check,
+		ChevronDown,
 		ChevronLeft,
 		ChevronRight,
 		Code2,
@@ -13,6 +15,7 @@
 		List,
 		ListMusic,
 		LoaderCircle,
+		LocateFixed,
 		Pause,
 		Play,
 		RotateCcw,
@@ -23,9 +26,18 @@
 		X
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
+	import type { Attachment } from 'svelte/attachments';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import InlineText from '$lib/components/InlineText.svelte';
+	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
 	import { segmentBlocks } from '$lib/domain/segmenter';
-	import type { DocumentBlock, NormalizedDocument, SpeechSegment } from '$lib/domain/types';
+	import type {
+		DocumentBlock,
+		InlineRun,
+		NormalizedDocument,
+		SpeechSegment,
+		TableCell
+	} from '$lib/domain/types';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
 
@@ -34,6 +46,11 @@
 	let bookmarksOpen = $state(false);
 	let readerMenuOpen = $state(false);
 	let installing = $state(false);
+	let activeOutlineBlockId = $state<string>();
+	let outlineAnnouncement = $state('');
+	let readingCanvas = $state<HTMLElement>();
+	let readerScrollFrame = 0;
+	let outlineNavigationBlockId: string | undefined;
 	const segmentElements = new SvelteMap<string, HTMLElement>();
 
 	let segmentsByBlock = $derived.by(() => {
@@ -59,26 +76,67 @@
 			'Voice'
 	);
 	let titleBlock = $derived.by(() => {
-		const first = book?.blocks[0];
-		return first?.kind === 'heading' && first.level === 1 ? first : undefined;
+		return book?.blocks.find((block) => block.kind === 'heading' && block.level === 1);
+	});
+	type ReadingNode =
+		| { type: 'block'; key: string; block: DocumentBlock }
+		| {
+				type: 'list';
+				key: string;
+				ordered: boolean;
+				depth: number;
+				start: number;
+				items: DocumentBlock[];
+		  };
+	let readingFlow = $derived.by(() => {
+		const nodes: ReadingNode[] = [];
+		for (const block of book?.blocks ?? []) {
+			if (block.id === titleBlock?.id) continue;
+			if (block.kind !== 'list-item') {
+				nodes.push({ type: 'block', key: block.id, block });
+				continue;
+			}
+			const ordered = block.list?.ordered ?? false;
+			const depth = block.list?.depth ?? 0;
+			const previous = nodes.at(-1);
+			if (previous?.type === 'list' && previous.ordered === ordered && previous.depth === depth) {
+				previous.items.push(block);
+			} else {
+				nodes.push({
+					type: 'list',
+					key: `list-${block.id}`,
+					ordered,
+					depth,
+					start: block.list?.start ?? 1,
+					items: [block]
+				});
+			}
+		}
+		return nodes;
 	});
 
 	onMount(() => {
 		player.onSegmentChange = (segmentId) => {
-			if (!player.autoFollow) return;
-			requestAnimationFrame(() =>
-				segmentElements.get(segmentId)?.scrollIntoView({ behavior: 'auto', block: 'center' })
-			);
+			if (!player.autoFollow || outlineNavigationBlockId) return;
+			requestAnimationFrame(() => {
+				const element = segmentElements.get(segmentId);
+				if (element) scrollNarrationIntoView(element, false);
+			});
 		};
 		void appState.initialize().then(() => {
 			const id = new URL(window.location.href).searchParams.get('document');
 			book = appState.documents.find((document) => document.id === id) ?? null;
 			if (book) {
 				player.setDocument(book);
+				activeOutlineBlockId =
+					book.outline.find((item) => item.blockId === player.currentSegment?.blockId)?.blockId ??
+					book.outline[0]?.blockId;
 				void player.warmEngine();
+				requestAnimationFrame(scheduleVisibleSectionUpdate);
 			}
 		});
 		return () => {
+			cancelAnimationFrame(readerScrollFrame);
 			player.onSegmentChange = undefined;
 		};
 	});
@@ -90,25 +148,193 @@
 		};
 	}
 
-	function tokens(segment: SpeechSegment): Array<{ text: string; wordIndex?: number }> {
-		const output: Array<{ text: string; wordIndex?: number }> = [];
-		let cursor = 0;
-		segment.words.forEach((word, wordIndex) => {
-			if (word.start > cursor) output.push({ text: segment.text.slice(cursor, word.start) });
-			output.push({ text: segment.text.slice(word.start, word.end), wordIndex });
-			cursor = word.end;
-		});
-		if (cursor < segment.text.length) output.push({ text: segment.text.slice(cursor) });
+	const trackReadingCanvas: Attachment<HTMLElement> = (element) => {
+		readingCanvas = element;
+		requestAnimationFrame(scheduleVisibleSectionUpdate);
+		return () => {
+			if (readingCanvas === element) readingCanvas = undefined;
+		};
+	};
+
+	interface RenderedRun {
+		run: InlineRun;
+		pieces: Array<{ text: string; wordIndex?: number }>;
+	}
+
+	function tokens(block: DocumentBlock, segment: SpeechSegment): RenderedRun[] {
+		const sourceRuns =
+			block.inlines?.length && block.inlines.map((run) => run.text).join('') === block.text
+				? block.inlines
+				: [{ text: block.text }];
+		const output: RenderedRun[] = [];
+		let runStart = 0;
+		for (const run of sourceRuns) {
+			const runEnd = runStart + run.text.length;
+			const start = Math.max(runStart, segment.start);
+			const end = Math.min(runEnd, segment.end);
+			if (start < end) {
+				const pieces: RenderedRun['pieces'] = [];
+				const boundaries = new SvelteSet([start, end]);
+				for (const word of segment.words) {
+					const wordStart = segment.start + word.start;
+					const wordEnd = segment.start + word.end;
+					if (wordStart > start && wordStart < end) boundaries.add(wordStart);
+					if (wordEnd > start && wordEnd < end) boundaries.add(wordEnd);
+				}
+				const points = [...boundaries].sort((left, right) => left - right);
+				for (let index = 0; index < points.length - 1; index += 1) {
+					const tokenStart = points[index];
+					const tokenEnd = points[index + 1];
+					const wordIndex = segment.words.findIndex(
+						(word) =>
+							tokenStart >= segment.start + word.start && tokenEnd <= segment.start + word.end
+					);
+					pieces.push({
+						text: run.text.slice(tokenStart - runStart, tokenEnd - runStart),
+						wordIndex: wordIndex >= 0 ? wordIndex : undefined
+					});
+				}
+				output.push({
+					run: { ...run, text: run.text.slice(start - runStart, end - runStart) },
+					pieces
+				});
+			}
+			runStart = runEnd;
+		}
 		return output;
 	}
 
-	function firstSegmentIndex(block: DocumentBlock): number {
+	function headingTag(block: DocumentBlock): 'h2' | 'h3' | 'h4' | 'h5' | 'h6' {
+		return `h${Math.max(2, Math.min(6, block.level ?? 2))}` as 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+	}
+
+	function firstSegmentIndex(block: DocumentBlock): number | undefined {
 		const segment = segmentsByBlock.get(block.id)?.[0];
-		return segment ? (segmentIndexes.get(segment.id) ?? 0) : 0;
+		return segment ? segmentIndexes.get(segment.id) : undefined;
 	}
 
 	function blockFor(id: string): DocumentBlock | undefined {
 		return book?.blocks.find((block) => block.id === id);
+	}
+
+	function elementInReader(id: string): HTMLElement | undefined {
+		if (!readingCanvas) return;
+		const element = document.getElementById(id);
+		return element instanceof HTMLElement && readingCanvas.contains(element) ? element : undefined;
+	}
+
+	function scrollReaderTo(element: HTMLElement, focusDestination = false): void {
+		if (!readingCanvas) return;
+		const canvasRect = readingCanvas.getBoundingClientRect();
+		const elementRect = element.getBoundingClientRect();
+		const top = Math.max(0, readingCanvas.scrollTop + elementRect.top - canvasRect.top - 24);
+		const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		const longJump = Math.abs(top - readingCanvas.scrollTop) > readingCanvas.clientHeight * 1.5;
+		readingCanvas.scrollTo({ top, behavior: reducedMotion || longJump ? 'auto' : 'smooth' });
+		if (focusDestination) {
+			requestAnimationFrame(() => element.focus({ preventScroll: true }));
+		}
+		scheduleVisibleSectionUpdate();
+	}
+
+	function scrollNarrationIntoView(element: HTMLElement, userRequested: boolean): void {
+		if (!readingCanvas) return;
+		const canvasRect = readingCanvas.getBoundingClientRect();
+		const elementRect = element.getBoundingClientRect();
+		const centeredTop =
+			readingCanvas.scrollTop +
+			elementRect.top -
+			canvasRect.top -
+			(readingCanvas.clientHeight - elementRect.height) / 2;
+		const maximumTop = Math.max(0, readingCanvas.scrollHeight - readingCanvas.clientHeight);
+		const top = Math.max(0, Math.min(maximumTop, centeredTop));
+		const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		const longJump = Math.abs(top - readingCanvas.scrollTop) > readingCanvas.clientHeight * 1.5;
+		readingCanvas.scrollTo({
+			top,
+			behavior: userRequested && !reducedMotion && !longJump ? 'smooth' : 'auto'
+		});
+		scheduleVisibleSectionUpdate();
+	}
+
+	function resumeNarrationFollow(): void {
+		player.autoFollow = true;
+		const segment = player.currentSegment;
+		if (!segment) return;
+		requestAnimationFrame(() => {
+			const element = segmentElements.get(segment.id);
+			if (element) scrollNarrationIntoView(element, true);
+		});
+	}
+
+	function compactOutlineTitle(title: string): string {
+		const normalized = title.replace(/\s+/g, ' ').trim();
+		if (normalized.length <= 56) return normalized;
+		const clipped = normalized.slice(0, 53);
+		const lastSpace = clipped.lastIndexOf(' ');
+		return `${clipped.slice(0, lastSpace > 32 ? lastSpace : 53).trimEnd()}…`;
+	}
+
+	function navigateToOutlineBlock(block: DocumentBlock): void {
+		const element = elementInReader(block.id);
+		if (!element) return;
+
+		const compactOutline = window.matchMedia('(max-width: 820px)').matches;
+		outlineNavigationBlockId = block.id;
+		activeOutlineBlockId = block.id;
+		outlineAnnouncement = `Moved to ${block.text}`;
+		scrollReaderTo(element, compactOutline);
+		if (compactOutline) outlineOpen = false;
+
+		const index = firstSegmentIndex(block);
+		if (index === undefined) {
+			outlineNavigationBlockId = undefined;
+			return;
+		}
+		void player.goToSegment(index).finally(() => {
+			if (outlineNavigationBlockId === block.id) outlineNavigationBlockId = undefined;
+		});
+	}
+
+	function navigateToSegment(segment: SpeechSegment): void {
+		const element = segmentElements.get(segment.id);
+		if (element) scrollReaderTo(element);
+		void player.goToSegment(segmentIndexes.get(segment.id) ?? 0);
+	}
+
+	function updateVisibleSection(): void {
+		readerScrollFrame = 0;
+		if (!readingCanvas || !book?.outline.length) return;
+		const canvasRect = readingCanvas.getBoundingClientRect();
+		const threshold = canvasRect.top + Math.min(160, readingCanvas.clientHeight * 0.22);
+		let lastBeforeThreshold: string | undefined;
+		let firstVisible: string | undefined;
+		for (const item of book.outline) {
+			const element = elementInReader(item.blockId);
+			if (!element) continue;
+			const elementRect = element.getBoundingClientRect();
+			if (elementRect.top <= threshold) lastBeforeThreshold = item.blockId;
+			if (
+				!firstVisible &&
+				elementRect.bottom >= canvasRect.top &&
+				elementRect.top <= canvasRect.bottom
+			)
+				firstVisible = item.blockId;
+		}
+
+		const previous = lastBeforeThreshold ? elementInReader(lastBeforeThreshold) : undefined;
+		const previousStillVisible = previous
+			? previous.getBoundingClientRect().bottom >= canvasRect.top
+			: false;
+		activeOutlineBlockId =
+			(previousStillVisible ? lastBeforeThreshold : firstVisible) ??
+			lastBeforeThreshold ??
+			book.outline[0]?.blockId;
+	}
+
+	function scheduleVisibleSectionUpdate(): void {
+		if (readerScrollFrame) return;
+		readerScrollFrame = requestAnimationFrame(updateVisibleSection);
 	}
 
 	function formatTime(seconds: number): string {
@@ -164,23 +390,23 @@
 	<title>{book ? book.title + ' — Voicebook' : 'Reader — Voicebook'}</title>
 </svelte:head>
 
-{#snippet renderSegment(segment: SpeechSegment)}
+{#snippet renderSegment(block: DocumentBlock, segment: SpeechSegment)}
 	{@const isActive = activeSegmentId === segment.id}
 	<span class="speech-segment" class:active={isActive} {@attach trackSegment(segment.id)}>
-		{#if isActive}
-			{#each tokens(segment) as token, tokenIndex (tokenIndex)}
-				{#if token.wordIndex !== undefined}
-					<span class="spoken-word" class:active-word={player.currentWordIndex === token.wordIndex}>
-						{token.text}
-					</span>
-				{:else}
-					{token.text}
-				{/if}
-			{/each}
-		{:else}
-			{segment.text}
-		{/if}
+		{#each tokens(block, segment) as inline, inlineIndex (inlineIndex)}
+			<InlineText
+				run={inline.run}
+				pieces={inline.pieces}
+				activeWordIndex={isActive ? player.currentWordIndex : undefined}
+			/>
+		{/each}
 	</span>
+{/snippet}
+
+{#snippet renderCell(cell: TableCell)}
+	{#each cell.inlines as inline, inlineIndex (inlineIndex)}
+		<InlineText run={inline} />
+	{/each}
 {/snippet}
 
 {#if !appState.initialized}
@@ -211,6 +437,8 @@
 					class:active={outlineOpen}
 					type="button"
 					aria-label={outlineOpen ? 'Close document outline' : 'Open document outline'}
+					aria-controls="document-outline"
+					aria-expanded={outlineOpen}
 					onclick={() => (outlineOpen = !outlineOpen)}
 				>
 					<List size={18} />
@@ -303,24 +531,26 @@
 		</header>
 
 		{#if outlineOpen}
-			<aside class="outline-panel" aria-label="Document outline">
+			<aside id="document-outline" class="outline-panel" aria-label="Document outline">
 				<header>
 					<strong>Contents</strong>
 					<span>{book.outline.length || book.segments.length} sections</span>
 				</header>
+				<span class="sr-only" aria-live="polite">{outlineAnnouncement}</span>
 				<nav aria-label="Table of contents">
 					{#if book.outline.length}
 						{#each book.outline as item (item.blockId)}
 							{@const outlineBlock = blockFor(item.blockId)}
 							<button
 								type="button"
-								class:active={(segmentsByBlock.get(item.blockId) ?? []).some(
-									(segment) => segment.id === player.currentSegment?.id
-								)}
+								class:active={activeOutlineBlockId === item.blockId}
+								aria-current={activeOutlineBlockId === item.blockId ? 'location' : undefined}
+								aria-label={item.title}
+								title={item.title}
 								style={'--outline-level:' + Math.max(0, item.level - 1)}
-								onclick={() => outlineBlock && player.goToSegment(firstSegmentIndex(outlineBlock))}
+								onclick={() => outlineBlock && navigateToOutlineBlock(outlineBlock)}
 							>
-								{item.title}
+								<span>{compactOutlineTitle(item.title)}</span>
 							</button>
 						{/each}
 					{:else}
@@ -328,7 +558,7 @@
 							<button
 								type="button"
 								class:active={segment.id === player.currentSegment?.id}
-								onclick={() => player.goToSegment(segmentIndexes.get(segment.id) ?? 0)}
+								onclick={() => navigateToSegment(segment)}
 							>
 								{segment.text.slice(0, 54)}{segment.text.length > 54 ? '…' : ''}
 							</button>
@@ -376,15 +606,17 @@
 			<article
 				class="reading-canvas"
 				aria-label={book.title}
+				{@attach trackReadingCanvas}
+				onscroll={scheduleVisibleSectionUpdate}
 				onwheel={() => (player.autoFollow = false)}
 				ontouchmove={() => (player.autoFollow = false)}
 			>
-				<header class="document-heading">
+				<header class="document-heading" id={titleBlock?.id} tabindex="-1">
 					<span>{book.sourceKind.toUpperCase()} · Local library</span>
 					<h1>
 						{#if titleBlock}
 							{#each segmentsByBlock.get(titleBlock.id) ?? [] as segment (segment.id)}
-								{@render renderSegment(segment)}
+								{@render renderSegment(titleBlock, segment)}
 							{/each}
 						{:else}
 							{book.title}
@@ -396,59 +628,115 @@
 					</p>
 				</header>
 
-				{#each book.blocks as block (block.id)}
-					{@const blockSegments = segmentsByBlock.get(block.id) ?? []}
-					{@const pageLabel = block.anchor.page ? 'Page ' + block.anchor.page : ''}
-					{#if block.id === titleBlock?.id}
-						<!-- The level-one title is rendered in the document heading above. -->
-					{:else if block.kind === 'heading'}
-						<section class="document-section" id={block.id}>
-							{#if pageLabel}<span class="page-anchor">{pageLabel}</span>{/if}
-							{#if (block.level ?? 2) <= 2}
-								<h2>
-									{#each blockSegments as segment (segment.id)}
-										{@render renderSegment(segment)}
+				<div class="document-body">
+					{#each readingFlow as node (node.key)}
+						{#if node.type === 'list'}
+							{#if node.ordered}
+								<ol class="document-list" style:--list-depth={node.depth} start={node.start}>
+									{#each node.items as block (block.id)}
+										<li id={block.id}>
+											{#each segmentsByBlock.get(block.id) ?? [] as segment (segment.id)}
+												{@render renderSegment(block, segment)}
+											{/each}
+										</li>
 									{/each}
-								</h2>
+								</ol>
 							{:else}
-								<h3>
-									{#each blockSegments as segment (segment.id)}
-										{@render renderSegment(segment)}
+								<ul
+									class="document-list"
+									class:task-list={node.items.some((item) => item.list?.checked !== undefined)}
+									style:--list-depth={node.depth}
+								>
+									{#each node.items as block (block.id)}
+										<li id={block.id} class:task-item={block.list?.checked !== undefined}>
+											{#if block.list?.checked !== undefined}
+												<span class="task-marker" aria-hidden="true">
+													{#if block.list.checked}<Check size={11} strokeWidth={2.6} />{/if}
+												</span>
+												<span class="sr-only"
+													>{block.list.checked ? 'Completed: ' : 'Not completed: '}</span
+												>
+											{/if}
+											{#each segmentsByBlock.get(block.id) ?? [] as segment (segment.id)}
+												{@render renderSegment(block, segment)}
+											{/each}
+										</li>
 									{/each}
-								</h3>
+								</ul>
 							{/if}
-						</section>
-					{:else if block.kind === 'code'}
-						<pre id={block.id}><code>{block.text}</code></pre>
-					{:else if block.kind === 'quote'}
-						<blockquote id={block.id}>
-							{#each blockSegments as segment (segment.id)}
-								{@render renderSegment(segment)}
-							{/each}
-						</blockquote>
-					{:else if block.kind === 'list-item'}
-						<p class="list-item" id={block.id}>
-							{#each blockSegments as segment (segment.id)}
-								{@render renderSegment(segment)}
-							{/each}
-						</p>
-					{:else}
-						<p id={block.id}>
-							{#each blockSegments as segment (segment.id)}
-								{@render renderSegment(segment)}
-							{/each}
-						</p>
-					{/if}
-				{/each}
+						{:else}
+							{@const block = node.block}
+							{@const blockSegments = segmentsByBlock.get(block.id) ?? []}
+							{@const pageLabel = block.anchor.page ? 'Page ' + block.anchor.page : ''}
+							{#if block.kind === 'heading'}
+								<section class="document-section" id={block.id} tabindex="-1">
+									{#if pageLabel}<span class="page-anchor">{pageLabel}</span>{/if}
+									<svelte:element this={headingTag(block)}>
+										{#each blockSegments as segment (segment.id)}
+											{@render renderSegment(block, segment)}
+										{/each}
+									</svelte:element>
+								</section>
+							{:else if block.kind === 'frontmatter'}
+								<details class="document-metadata" id={block.id}>
+									<summary>Document metadata</summary>
+									<pre><code>{block.text}</code></pre>
+								</details>
+							{:else if block.kind === 'code' && block.codeLanguage?.toLowerCase() === 'mermaid'}
+								<MermaidDiagram id={block.id} source={block.text} />
+							{:else if block.kind === 'code'}
+								<figure class="code-block" id={block.id}>
+									{#if block.codeLanguage}<figcaption>{block.codeLanguage}</figcaption>{/if}
+									<pre><code>{block.text}</code></pre>
+								</figure>
+							{:else if block.kind === 'quote'}
+								<blockquote id={block.id}>
+									{#each blockSegments as segment (segment.id)}
+										{@render renderSegment(block, segment)}
+									{/each}
+								</blockquote>
+							{:else if block.kind === 'table' && block.table}
+								<div class="table-region" id={block.id} role="region" aria-label="Document table">
+									<table>
+										<thead>
+											<tr>
+												{#each block.table.header as cell, index (index)}
+													<th scope="col" style:text-align={block.table.align[index] ?? undefined}>
+														{@render renderCell(cell)}
+													</th>
+												{/each}
+											</tr>
+										</thead>
+										<tbody>
+											{#each block.table.rows as row, rowIndex (rowIndex)}
+												<tr>
+													{#each row as cell, index (index)}
+														<td style:text-align={block.table.align[index] ?? undefined}>
+															{@render renderCell(cell)}
+														</td>
+													{/each}
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{:else if block.kind === 'divider'}
+								<hr id={block.id} />
+							{:else}
+								<p id={block.id}>
+									{#each blockSegments as segment (segment.id)}
+										{@render renderSegment(block, segment)}
+									{/each}
+								</p>
+							{/if}
+						{/if}
+					{/each}
+				</div>
 			</article>
 
 			{#if !player.autoFollow}
-				<button
-					class="return-follow button"
-					type="button"
-					onclick={() => (player.autoFollow = true)}
-				>
-					<Sparkles size={15} /> Follow narration
+				<button class="return-follow button" type="button" onclick={resumeNarrationFollow}>
+					<LocateFixed size={15} /> Follow narration
 				</button>
 			{/if}
 		</section>
@@ -584,6 +872,7 @@
 							min="0"
 							max="1000"
 							value={Math.round(player.progress * 1000)}
+							style:--timeline-progress={`${Math.round(player.progress * 100)}%`}
 							aria-label="Reading position"
 							onchange={(event) =>
 								player.seekToProgress(
@@ -597,28 +886,34 @@
 
 			<div class="player-options">
 				<label class="compact-select">
-					<span>Voice</span>
-					<select aria-label="Voice" value={appState.selectedVoiceId} onchange={changeVoice}>
-						{#each appState.selectedModel.voices as voice (voice.id)}
-							<option value={voice.id}>{voice.name}</option>
-						{/each}
-					</select>
+					<span class="control-label">Voice</span>
+					<span class="select-field">
+						<select aria-label="Voice" value={appState.selectedVoiceId} onchange={changeVoice}>
+							{#each appState.selectedModel.voices as voice (voice.id)}
+								<option value={voice.id}>{voice.name}</option>
+							{/each}
+						</select>
+						<span class="select-chevron" aria-hidden="true"><ChevronDown size={14} /></span>
+					</span>
 				</label>
 				<label class="compact-select speed">
-					<Gauge size={15} />
-					<select
-						aria-label="Playback speed"
-						value={player.rate}
-						onchange={(event) =>
-							player.setRate(Number((event.currentTarget as HTMLSelectElement).value))}
-					>
-						{#each [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as speed (speed)}
-							<option value={speed}>{speed}×</option>
-						{/each}
-					</select>
+					<span class="control-label"><Gauge size={12} /> Speed</span>
+					<span class="select-field">
+						<select
+							aria-label="Playback speed"
+							value={player.rate}
+							onchange={(event) =>
+								player.setRate(Number((event.currentTarget as HTMLSelectElement).value))}
+						>
+							{#each [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as speed (speed)}
+								<option value={speed}>{speed}×</option>
+							{/each}
+						</select>
+						<span class="select-chevron" aria-hidden="true"><ChevronDown size={14} /></span>
+					</span>
 				</label>
 				<label class="volume-control">
-					<Volume2 size={15} />
+					<span class="control-label"><Volume2 size={13} /> Volume</span>
 					<input
 						aria-label="Volume"
 						type="range"
@@ -626,6 +921,7 @@
 						max="1"
 						step="0.05"
 						value={player.volume}
+						style:--volume-progress={`${Math.round(player.volume * 100)}%`}
 						oninput={(event) =>
 							player.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
 					/>
@@ -667,11 +963,12 @@
 	}
 
 	.reader-shell {
+		--player-height: 104px;
 		display: grid;
 		height: 100dvh;
 		min-height: 0;
-		grid-template-columns: 232px minmax(0, 1fr);
-		grid-template-rows: 54px minmax(0, 1fr) 86px;
+		grid-template-columns: 252px minmax(0, 1fr);
+		grid-template-rows: 54px minmax(0, 1fr) var(--player-height);
 		overflow: hidden;
 		background: var(--bg);
 	}
@@ -681,7 +978,7 @@
 	}
 
 	.reader-shell.bookmarks-open {
-		grid-template-columns: 232px minmax(0, 1fr) 264px;
+		grid-template-columns: 252px minmax(0, 1fr) 264px;
 	}
 
 	.reader-shell.outline-closed.bookmarks-open {
@@ -856,7 +1153,7 @@
 
 	.outline-panel header strong,
 	.bookmarks-panel header strong {
-		font-size: 10px;
+		font-size: 12px;
 		font-weight: 650;
 	}
 
@@ -864,7 +1161,7 @@
 	.bookmarks-panel header span {
 		margin-top: 3px;
 		color: var(--faint);
-		font-size: 8px;
+		font-size: 10px;
 	}
 
 	.outline-panel nav {
@@ -876,15 +1173,25 @@
 	}
 
 	.outline-panel nav button {
-		min-height: 36px;
-		padding: 7px 9px 7px calc(9px + var(--outline-level, 0) * 8px);
+		display: flex;
+		min-width: 0;
+		min-height: 42px;
+		align-items: center;
+		padding: 8px 11px 8px calc(11px + var(--outline-level, 0) * 10px);
 		border: 0;
-		border-radius: 5px;
+		border-radius: 6px;
 		background: transparent;
 		color: var(--muted);
-		font-size: 9px;
-		line-height: 1.35;
+		font-size: 11px;
+		line-height: 1.25;
 		text-align: left;
+	}
+
+	.outline-panel nav button span {
+		display: block;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.outline-panel nav button:hover,
@@ -894,7 +1201,8 @@
 	}
 
 	.outline-panel nav button.active {
-		color: #dedaff;
+		background: var(--primary-soft);
+		color: var(--text);
 		box-shadow: inset 2px 0 var(--primary);
 	}
 
@@ -983,27 +1291,35 @@
 	}
 
 	.reading-canvas {
-		width: min(820px, 100%);
+		--reader-ink: #d8d6d0;
+		--reader-ink-strong: #f4f1e9;
+		--reader-quiet: #8f919b;
+		--reader-link: #aaa0f4;
+		--reader-rule: rgba(31, 32, 38, 0.14);
+		--reader-code-soft: rgba(31, 32, 38, 0.065);
+		width: min(900px, 100%);
 		min-height: 0;
 		margin: 0 auto;
 		overflow-y: auto;
+		overflow-x: hidden;
 		overscroll-behavior: contain;
 		scrollbar-gutter: stable;
-		padding: 54px clamp(42px, 6vw, 78px) 80px;
+		padding: 58px clamp(48px, 7vw, 92px) 92px;
 		border-radius: 7px 7px 0 0;
 		background: var(--reader);
-		color: #d9d8d4;
+		color: var(--reader-ink);
 		font-family: var(--font-reading);
-		font-size: clamp(1.02rem, 1.1vw, 1.15rem);
+		font-size: clamp(1.04rem, 1vw, 1.16rem);
 		font-variation-settings: 'opsz' 20;
-		line-height: 1.75;
+		line-height: 1.72;
 		flex: 1 1 auto;
 	}
 
 	.document-heading {
-		margin-bottom: 44px;
-		padding-bottom: 25px;
-		border-bottom: 1px solid var(--line);
+		max-width: 70ch;
+		margin: 0 auto 50px;
+		padding-bottom: 28px;
+		border-bottom: 1px solid var(--reader-rule);
 	}
 
 	.document-heading > span,
@@ -1017,32 +1333,42 @@
 
 	.document-heading h1 {
 		max-width: 24ch;
-		margin: 11px 0 13px;
-		color: var(--text);
-		font-size: clamp(2rem, 3.4vw, 3.2rem);
-		font-weight: 520;
+		margin: 13px 0 15px;
+		color: var(--reader-ink-strong);
+		font-size: clamp(2.15rem, 3.2vw, 3.15rem);
+		font-weight: 540;
 		letter-spacing: -0.04em;
-		line-height: 1.02;
+		line-height: 1.04;
 	}
 
 	.document-heading > p {
 		margin: 0;
 	}
 
-	.reading-canvas > p,
-	.reading-canvas blockquote {
+	.document-body {
+		max-width: 70ch;
+		margin: 0 auto;
+	}
+
+	.document-body > p,
+	.document-body blockquote,
+	.document-list {
 		margin: 0 0 1.22em;
 	}
 
 	.document-section {
 		position: relative;
-		margin: 2.35em 0 0.85em;
+		margin: 2.75em 0 0.9em;
+		scroll-margin-top: 1.5rem;
 	}
 
 	.document-section h2,
-	.document-section h3 {
+	.document-section h3,
+	.document-section h4,
+	.document-section h5,
+	.document-section h6 {
 		margin: 0;
-		color: var(--text);
+		color: var(--reader-ink-strong);
 		font-weight: 560;
 		letter-spacing: -0.025em;
 	}
@@ -1053,8 +1379,19 @@
 	}
 
 	.document-section h3 {
-		font-size: 1.14em;
+		font-size: 1.22em;
 		line-height: 1.25;
+	}
+
+	.document-section h4,
+	.document-section h5,
+	.document-section h6 {
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.82em;
+		font-weight: 690;
+		letter-spacing: 0.035em;
+		line-height: 1.35;
+		text-transform: uppercase;
 	}
 
 	.page-anchor {
@@ -1069,33 +1406,157 @@
 	}
 
 	.reading-canvas blockquote {
-		padding-left: 18px;
-		border-left: 2px solid var(--primary);
-		color: #cbc8d2;
+		padding: 0.1em 0 0.1em 1.25em;
+		border-left: 2px solid color-mix(in srgb, var(--primary) 68%, transparent);
+		color: color-mix(in srgb, var(--reader-ink) 88%, var(--primary));
 		font-style: italic;
 	}
 
-	.reading-canvas pre {
+	.code-block,
+	.document-metadata {
+		margin: 1.8em 0;
+	}
+
+	.code-block {
+		position: relative;
+	}
+
+	.code-block figcaption {
+		position: absolute;
+		top: 10px;
+		right: 13px;
+		z-index: 1;
+		color: var(--reader-quiet);
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.58em;
+		font-weight: 680;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.code-block pre,
+	.document-metadata pre {
 		overflow: auto;
-		margin: 1.7em 0;
-		padding: 16px 18px;
-		border-radius: 6px;
-		background: #101116;
+		margin: 0;
+		padding: 17px 19px;
+		border-radius: 5px;
+		background: color-mix(in srgb, var(--reader) 88%, #000);
+		color: var(--reader-ink);
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 0.66em;
 		line-height: 1.55;
 	}
 
-	.list-item {
-		position: relative;
-		padding-left: 1.2em;
+	.document-metadata {
+		border-top: 1px solid var(--reader-rule);
+		border-bottom: 1px solid var(--reader-rule);
 	}
 
-	.list-item::before {
+	.document-metadata summary {
+		padding: 10px 0;
+		color: var(--reader-quiet);
+		cursor: pointer;
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.68em;
+		font-weight: 630;
+		letter-spacing: 0.04em;
+	}
+
+	.document-metadata pre {
+		margin-bottom: 12px;
+	}
+
+	.document-list {
+		padding-left: calc(1.35em + var(--list-depth, 0) * 1.15em);
+	}
+
+	.document-list li {
+		padding-left: 0.22em;
+		margin-bottom: 0.38em;
+	}
+
+	.document-list li::marker {
+		color: color-mix(in srgb, var(--primary) 72%, var(--reader-ink));
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.78em;
+		font-weight: 680;
+	}
+
+	.document-list.task-list {
+		padding-left: calc(0.1em + var(--list-depth, 0) * 1.15em);
+		list-style: none;
+	}
+
+	.task-item {
+		position: relative;
+		padding-left: 1.55em !important;
+	}
+
+	.task-marker {
 		position: absolute;
+		top: 0.44em;
 		left: 0;
+		display: grid;
+		width: 0.95em;
+		height: 0.95em;
+		place-items: center;
+		border: 1px solid color-mix(in srgb, var(--reader-quiet) 58%, transparent);
+		border-radius: 0.2em;
 		color: var(--primary);
-		content: '•';
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.72em;
+		font-style: normal;
+		line-height: 1;
+	}
+
+	.table-region {
+		overflow-x: auto;
+		margin: 2em 0;
+		border-top: 1px solid var(--reader-rule);
+		border-bottom: 1px solid var(--reader-rule);
+	}
+
+	.table-region table {
+		width: 100%;
+		border-collapse: collapse;
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.73em;
+		line-height: 1.55;
+	}
+
+	.table-region th,
+	.table-region td {
+		min-width: 8rem;
+		padding: 0.75rem 0.8rem;
+		border-bottom: 1px solid var(--reader-rule);
+		vertical-align: top;
+	}
+
+	.table-region th {
+		color: var(--reader-ink-strong);
+		font-size: 0.88em;
+		font-weight: 680;
+		letter-spacing: 0.025em;
+	}
+
+	.table-region tbody tr:last-child td {
+		border-bottom: 0;
+	}
+
+	.document-body hr {
+		width: 3.5rem;
+		height: 1px;
+		margin: 3.2em auto;
+		border: 0;
+		background: var(--reader-rule);
+	}
+
+	.document-body p,
+	.document-body li,
+	.document-body blockquote,
+	.table-region td,
+	.table-region th {
+		overflow-wrap: anywhere;
 	}
 
 	.speech-segment {
@@ -1112,18 +1573,27 @@
 		color: #f3f1fb;
 	}
 
-	.active-word {
-		background: transparent;
-		box-shadow: inset 0 -0.16em rgba(168, 157, 246, 0.74);
-		color: white;
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		clip-path: inset(50%);
 	}
 
 	.return-follow {
 		position: absolute;
 		right: 28px;
-		bottom: 18px;
+		bottom: 20px;
 		z-index: 15;
-		box-shadow: 0 8px 28px rgba(0, 0, 0, 0.36);
+		min-height: 38px;
+		border-color: color-mix(in srgb, var(--primary) 42%, transparent);
+		background: color-mix(in srgb, var(--surface) 94%, transparent);
+		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38);
+		color: var(--text);
+		backdrop-filter: blur(14px);
 	}
 
 	.bookmark-list {
@@ -1187,16 +1657,17 @@
 		position: relative;
 		z-index: 35;
 		display: grid;
-		height: 86px;
+		height: var(--player-height);
 		min-width: 0;
 		grid-row: 3;
 		grid-column: 1 / -1;
-		grid-template-columns: minmax(170px, 0.7fr) minmax(390px, 1.45fr) minmax(245px, 0.85fr);
+		grid-template-columns: minmax(190px, 0.7fr) minmax(390px, 1.5fr) minmax(300px, 0.9fr);
 		align-items: center;
-		gap: 18px;
-		padding: 8px 16px;
+		gap: 24px;
+		padding: 12px 20px;
 		border-top: 1px solid var(--line);
-		background: #14151a;
+		background: color-mix(in srgb, var(--surface) 96%, black);
+		box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.18);
 	}
 
 	.now-playing {
@@ -1204,7 +1675,7 @@
 		min-width: 0;
 		grid-template-columns: auto minmax(0, 1fr);
 		align-items: center;
-		gap: 10px;
+		gap: 12px;
 		color: var(--primary);
 	}
 
@@ -1218,26 +1689,26 @@
 
 	.now-playing strong {
 		color: var(--text-soft);
-		font-size: 9px;
+		font-size: 11px;
 		font-weight: 620;
 	}
 
 	.now-playing span {
-		margin-top: 4px;
+		margin-top: 5px;
 		color: var(--faint);
-		font-size: 8px;
+		font-size: 9px;
 	}
 
 	.transport {
 		display: grid;
-		gap: 4px;
+		gap: 8px;
 	}
 
 	.transport-buttons {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 2px;
+		gap: 4px;
 	}
 
 	.mini-button,
@@ -1248,11 +1719,16 @@
 		border: 0;
 		background: transparent;
 		color: var(--text-soft);
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease),
+			transform 150ms var(--ease);
 	}
 
 	.mini-button {
-		width: 32px;
-		height: 32px;
+		width: 38px;
+		height: 38px;
+		border-radius: 50%;
 	}
 
 	.mini-button:disabled {
@@ -1261,32 +1737,44 @@
 
 	.seek-button {
 		position: relative;
-		width: 36px;
-		height: 36px;
+		width: 40px;
+		height: 40px;
+		border-radius: 50%;
 	}
 
 	.seek-button span {
 		position: absolute;
-		font-size: 6px;
+		font-size: 7px;
 		font-weight: 750;
 	}
 
+	.mini-button:hover:not(:disabled),
+	.seek-button:hover {
+		background: var(--control-hover);
+		color: var(--text);
+	}
+
 	.play-button {
-		width: 42px;
-		height: 42px;
-		margin: 0 4px;
+		width: 48px;
+		height: 48px;
+		margin: 0 6px;
 		border-radius: 50%;
 		background: var(--text);
 		color: var(--primary-ink);
 	}
 
+	.play-button:hover {
+		background: var(--primary-hover);
+		transform: translateY(-1px);
+	}
+
 	.timeline {
 		display: grid;
-		grid-template-columns: 34px 1fr 34px;
+		grid-template-columns: 42px 1fr 42px;
 		align-items: center;
-		gap: 7px;
+		gap: 10px;
 		color: var(--faint);
-		font-size: 7px;
+		font-size: 9px;
 		font-variant-numeric: tabular-nums;
 	}
 
@@ -1295,9 +1783,58 @@
 	}
 
 	.timeline input {
+		appearance: none;
 		width: 100%;
-		height: 14px;
-		accent-color: var(--primary);
+		height: 20px;
+		margin: 0;
+		background: transparent;
+	}
+
+	.timeline input::-webkit-slider-runnable-track,
+	.volume-control input::-webkit-slider-runnable-track {
+		height: 4px;
+		border-radius: 999px;
+		background: linear-gradient(
+			to right,
+			var(--primary) 0 var(--timeline-progress, var(--volume-progress, 0%)),
+			var(--track) var(--timeline-progress, var(--volume-progress, 0%)) 100%
+		);
+	}
+
+	.timeline input::-webkit-slider-thumb,
+	.volume-control input::-webkit-slider-thumb {
+		appearance: none;
+		width: 12px;
+		height: 12px;
+		margin-top: -4px;
+		border: 2px solid var(--surface);
+		border-radius: 50%;
+		background: var(--text);
+		box-shadow: 0 0 0 1px var(--control-border);
+	}
+
+	.timeline input::-moz-range-track,
+	.volume-control input::-moz-range-track {
+		height: 4px;
+		border: 0;
+		border-radius: 999px;
+		background: var(--track);
+	}
+
+	.timeline input::-moz-range-progress,
+	.volume-control input::-moz-range-progress {
+		height: 4px;
+		border-radius: 999px;
+		background: var(--primary);
+	}
+
+	.timeline input::-moz-range-thumb,
+	.volume-control input::-moz-range-thumb {
+		width: 10px;
+		height: 10px;
+		border: 2px solid var(--surface);
+		border-radius: 50%;
+		background: var(--text);
 	}
 
 	.generation-status {
@@ -1315,7 +1852,7 @@
 
 	.generation-status strong {
 		color: var(--text-soft);
-		font-size: 8px;
+		font-size: 10px;
 		font-weight: 650;
 	}
 
@@ -1324,63 +1861,99 @@
 		overflow: hidden;
 		margin-top: 2px;
 		color: var(--faint);
-		font-size: 7px;
+		font-size: 9px;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
 	.generation-status button {
-		height: 26px;
-		padding: 0 9px;
+		height: 32px;
+		padding: 0 12px;
 		border: 0;
 		border-radius: 5px;
 		background: var(--danger-soft);
 		color: var(--danger);
-		font-size: 8px;
+		font-size: 10px;
 		font-weight: 650;
 	}
 
 	.player-options {
 		display: grid;
-		grid-template-columns: minmax(100px, 1fr) 68px 92px;
-		align-items: center;
-		gap: 6px;
+		grid-template-columns: minmax(120px, 1fr) 82px 104px;
+		align-items: end;
+		gap: 10px;
 	}
 
 	.compact-select,
 	.volume-control {
-		display: flex;
-		height: 34px;
-		align-items: center;
-		gap: 6px;
-		padding: 0 8px;
-		border-radius: 5px;
-		background: rgba(255, 255, 255, 0.035);
+		display: grid;
+		min-width: 0;
+		gap: 5px;
 		color: var(--faint);
 	}
 
-	.compact-select > span {
-		font-size: 7px;
-		text-transform: uppercase;
+	.control-label {
+		display: flex;
+		min-width: 0;
+		align-items: center;
+		gap: 4px;
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: 0.02em;
+	}
+
+	.select-field {
+		position: relative;
+		display: block;
+		min-width: 0;
+	}
+
+	.select-chevron {
+		position: absolute;
+		top: 50%;
+		right: 9px;
+		pointer-events: none;
+		transform: translateY(-50%);
 	}
 
 	.compact-select select {
+		appearance: none;
+		width: 100%;
 		min-width: 0;
-		height: 30px;
-		padding: 0;
-		border: 0;
-		background: transparent;
+		height: 36px;
+		padding: 0 28px 0 10px;
+		border: 1px solid var(--control-border);
+		border-radius: 7px;
+		background: var(--control-strong);
 		color: var(--text-soft);
-		font-size: 8px;
+		font-size: 10px;
+		color-scheme: inherit;
+	}
+
+	.compact-select select:hover {
+		border-color: var(--line-strong);
+		background: var(--control);
+	}
+
+	.compact-select select option {
+		background: var(--control-strong);
+		color: var(--text);
 	}
 
 	.compact-select.speed select {
-		width: 42px;
+		width: 100%;
 	}
 
 	.volume-control input {
+		appearance: none;
 		width: 100%;
-		accent-color: var(--primary);
+		height: 36px;
+		margin: 0;
+		background: transparent;
+	}
+
+	.volume-control input {
+		--timeline-progress: var(--volume-progress);
 	}
 
 	.player-error {
@@ -1412,7 +1985,7 @@
 			position: absolute;
 			top: 54px;
 			right: 0;
-			bottom: 86px;
+			bottom: var(--player-height);
 			z-index: 32;
 			width: 264px;
 			border-left: 1px solid var(--line);
@@ -1420,7 +1993,8 @@
 		}
 
 		.player-bar {
-			grid-template-columns: minmax(340px, 1fr) 260px;
+			grid-template-columns: minmax(380px, 1fr) 300px;
+			gap: 20px;
 		}
 
 		.now-playing {
@@ -1439,7 +2013,7 @@
 		.outline-panel {
 			position: absolute;
 			top: 54px;
-			bottom: 86px;
+			bottom: var(--player-height);
 			left: 0;
 			z-index: 32;
 			width: 250px;

@@ -1,6 +1,11 @@
 import { MODEL_CATALOG, getModel } from '$lib/domain/model-catalog';
-import { documentFromText, fingerprint, importFile } from '$lib/domain/importers';
-import { refreshDocumentSegments } from '$lib/domain/segmenter';
+import {
+	DOCUMENT_NORMALIZATION_VERSION,
+	documentFromText,
+	fingerprint,
+	importFile
+} from '$lib/domain/importers';
+import { refreshDocumentSegments, segmentBlocks } from '$lib/domain/segmenter';
 import type {
 	DeviceCapabilities,
 	ModelDescriptor,
@@ -11,6 +16,7 @@ import {
 	clearGeneratedAudio,
 	deleteDocument as deleteStoredDocument,
 	getDocumentByFingerprint,
+	getSource,
 	getSetting,
 	listDocuments,
 	putDocument,
@@ -48,6 +54,76 @@ const EMPTY_CAPABILITIES: DeviceCapabilities = {
 	opfs: false,
 	backend: 'wasm'
 };
+
+function findMigratedSegment(
+	previous: NormalizedDocument,
+	migrated: NormalizedDocument,
+	segmentId: string,
+	excerpt = ''
+) {
+	const oldSegment = previous.segments.find((segment) => segment.id === segmentId);
+	const sameId = migrated.segments.find((segment) => segment.id === segmentId);
+	if (sameId && (!oldSegment || sameId.normalizedText === oldSegment.normalizedText)) return sameId;
+	if (oldSegment) {
+		const sameText = migrated.segments.find(
+			(segment) => segment.normalizedText === oldSegment.normalizedText
+		);
+		if (sameText) return sameText;
+	}
+	const normalizedExcerpt = excerpt.toLocaleLowerCase().replace(/\s+/g, ' ').trim();
+	return normalizedExcerpt
+		? migrated.segments.find((segment) =>
+				segment.normalizedText.toLocaleLowerCase().includes(normalizedExcerpt)
+			)
+		: undefined;
+}
+
+async function migrateDocumentNormalization(
+	document: NormalizedDocument
+): Promise<NormalizedDocument> {
+	if (document.normalizationVersion === DOCUMENT_NORMALIZATION_VERSION) return document;
+	if (document.sourceKind !== 'markdown') {
+		return { ...document, normalizationVersion: DOCUMENT_NORMALIZATION_VERSION };
+	}
+	const source = await getSource(document);
+	if (!source) return document;
+	try {
+		const reparsed = await importFile(
+			new File([source], document.sourceName, { type: document.mimeType })
+		);
+		reparsed.includeCode = document.includeCode;
+		reparsed.segments = segmentBlocks(reparsed.blocks, reparsed.includeCode);
+		reparsed.id = document.id;
+		reparsed.fingerprint = document.fingerprint;
+		reparsed.createdAt = document.createdAt;
+		reparsed.updatedAt = document.updatedAt;
+		reparsed.sourcePath = document.sourcePath;
+		reparsed.sourceBlob = document.sourceBlob;
+		reparsed.bookmarks = document.bookmarks.map((bookmark) => {
+			const segment = findMigratedSegment(document, reparsed, bookmark.segmentId, bookmark.excerpt);
+			return segment
+				? {
+						...bookmark,
+						segmentId: segment.id,
+						wordIndex: Math.min(bookmark.wordIndex, Math.max(0, segment.words.length - 1))
+					}
+				: bookmark;
+		});
+		if (document.playback) {
+			const segment = findMigratedSegment(document, reparsed, document.playback.segmentId);
+			reparsed.playback = segment
+				? {
+						...document.playback,
+						segmentId: segment.id,
+						wordIndex: Math.min(document.playback.wordIndex, Math.max(0, segment.words.length - 1))
+					}
+				: document.playback;
+		}
+		return reparsed;
+	} catch {
+		return document;
+	}
+}
 
 export class VoicebookState {
 	private initialization?: Promise<void>;
@@ -90,7 +166,8 @@ export class VoicebookState {
 					ttsClient.capabilities(),
 					storageSnapshot()
 				]);
-			const refreshedDocuments = documents.map(refreshDocumentSegments);
+			const normalizedDocuments = await Promise.all(documents.map(migrateDocumentNormalization));
+			const refreshedDocuments = normalizedDocuments.map(refreshDocumentSegments);
 			this.documents = refreshedDocuments;
 			await Promise.all(
 				refreshedDocuments.map((document, index) =>

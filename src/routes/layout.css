@@ -12,6 +12,11 @@
 	--sidebar: #101115;
 	--surface: #14161b;
 	--surface-hover: #191b21;
+	--control: #191b21;
+	--control-hover: #20232a;
+	--control-strong: #0f1014;
+	--control-border: rgba(242, 243, 246, 0.13);
+	--track: rgba(242, 243, 246, 0.16);
 	--reader: #18191d;
 	--text: #f4f4f2;
 	--text-soft: #d6d6d2;
