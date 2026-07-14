@@ -1,0 +1,329 @@
+import { MODEL_CATALOG, getModel } from '$lib/domain/model-catalog';
+import { documentFromText, fingerprint, importFile } from '$lib/domain/importers';
+import { refreshDocumentSegments } from '$lib/domain/segmenter';
+import type {
+	DeviceCapabilities,
+	ModelDescriptor,
+	NormalizedDocument,
+	StorageSnapshot
+} from '$lib/domain/types';
+import {
+	clearGeneratedAudio,
+	deleteDocument as deleteStoredDocument,
+	getDocumentByFingerprint,
+	getSetting,
+	listDocuments,
+	putDocument,
+	reconcileStorage,
+	requestPersistentStorage,
+	setSetting,
+	storageSnapshot
+} from '$lib/services/repository';
+import { ttsClient } from '$lib/services/tts-client';
+import { clearLegacyModelAssets, clearPinnedModelAssets } from '$lib/services/model-asset-cache';
+
+interface DuplicateImport {
+	file: File;
+	existing: NormalizedDocument;
+}
+
+interface ModelProgress {
+	status: 'idle' | 'loading' | 'ready' | 'error';
+	progress: number;
+	file?: string;
+	message?: string;
+}
+
+interface ModelLoadUpdate {
+	status: string;
+	progress: number;
+	file?: string;
+}
+
+const EMPTY_STORAGE: StorageSnapshot = { usage: 0, quota: 0, persisted: false };
+const EMPTY_CAPABILITIES: DeviceCapabilities = {
+	webgpu: false,
+	shaderF16: false,
+	webCodecs: false,
+	opfs: false,
+	backend: 'wasm'
+};
+
+export class VoicebookState {
+	private initialization?: Promise<void>;
+	documents = $state<NormalizedDocument[]>([]);
+	initialized = $state(false);
+	importing = $state(false);
+	statusMessage = $state('Preparing your private library…');
+	errorMessage = $state('');
+	duplicate = $state<DuplicateImport | null>(null);
+	capabilities = $state<DeviceCapabilities>(EMPTY_CAPABILITIES);
+	storage = $state<StorageSnapshot>(EMPTY_STORAGE);
+	selectedModelId = $state<ModelDescriptor['id']>('supertonic-3');
+	selectedVoiceId = $state('F1');
+	installedModels = $state<ModelDescriptor['id'][]>([]);
+	acceptedLicenses = $state<string[]>([]);
+	modelProgress = $state<Record<string, ModelProgress>>({
+		'supertonic-3': { status: 'idle', progress: 0 }
+	});
+
+	get selectedModel(): ModelDescriptor {
+		return getModel(this.selectedModelId);
+	}
+
+	async initialize(): Promise<void> {
+		if (this.initialized) return;
+		this.initialization ??= this.openLibrary();
+		await this.initialization;
+	}
+
+	private async openLibrary(): Promise<void> {
+		try {
+			await clearLegacyModelAssets();
+			const [documents, modelId, voiceId, installed, accepted, capabilities, storage] =
+				await Promise.all([
+					listDocuments(),
+					getSetting<string>('selected-model', 'supertonic-3'),
+					getSetting('selected-voice', 'F1'),
+					getSetting<ModelDescriptor['id'][]>('installed-models', []),
+					getSetting<string[]>('accepted-licenses', []),
+					ttsClient.capabilities(),
+					storageSnapshot()
+				]);
+			const refreshedDocuments = documents.map(refreshDocumentSegments);
+			this.documents = refreshedDocuments;
+			await Promise.all(
+				refreshedDocuments.map((document, index) =>
+					document === documents[index]
+						? Promise.resolve()
+						: putDocument(document).then(() => undefined)
+				)
+			);
+			const migratedModelId = 'supertonic-3' as const;
+			this.selectedModelId = migratedModelId;
+			this.selectedVoiceId = getModel(migratedModelId).voices.some((voice) => voice.id === voiceId)
+				? voiceId
+				: getModel(migratedModelId).defaultVoice;
+			// Retired engine caches are legacy state. Only an explicit V3 installation
+			// is considered runnable by the current four-session engine.
+			this.installedModels = installed.filter((id) => (id as string) === 'supertonic-3');
+			this.acceptedLicenses = accepted.filter((id) => id === 'supertonic-3');
+			this.capabilities = capabilities;
+			this.storage = storage;
+			for (const id of this.installedModels)
+				this.modelProgress[id] = { status: 'ready', progress: 100 };
+			if (modelId !== migratedModelId || installed.length !== this.installedModels.length) {
+				await Promise.all([
+					setSetting('selected-model', migratedModelId),
+					setSetting('selected-voice', this.selectedVoiceId),
+					setSetting('installed-models', [...this.installedModels])
+				]);
+			}
+			await reconcileStorage();
+			this.statusMessage = '';
+		} catch (error) {
+			this.errorMessage =
+				error instanceof Error ? error.message : 'Voicebook could not open its local library.';
+		} finally {
+			this.initialized = true;
+		}
+	}
+
+	private async addImportedDocument(
+		document: NormalizedDocument,
+		source?: Blob
+	): Promise<NormalizedDocument> {
+		const saved = await putDocument(document, source);
+		this.documents = [saved, ...this.documents.filter((candidate) => candidate.id !== saved.id)];
+		this.storage = await storageSnapshot();
+		if (!this.storage.persisted && this.documents.length === 1) {
+			await requestPersistentStorage();
+			this.storage = await storageSnapshot();
+		}
+		return saved;
+	}
+
+	async importFiles(files: File[]): Promise<NormalizedDocument[]> {
+		if (!files.length) return [];
+		this.importing = true;
+		this.errorMessage = '';
+		const imported: NormalizedDocument[] = [];
+		try {
+			for (const file of files) {
+				this.statusMessage = `Reading ${file.name}…`;
+				const hash = await fingerprint(file);
+				const existing = await getDocumentByFingerprint(hash);
+				if (existing) {
+					this.duplicate = { file, existing };
+					continue;
+				}
+				const document = await importFile(file);
+				imported.push(await this.addImportedDocument(document, file));
+			}
+			this.statusMessage = imported.length
+				? `${imported.length} ${imported.length === 1 ? 'document' : 'documents'} added.`
+				: '';
+			return imported;
+		} catch (error) {
+			this.errorMessage =
+				error instanceof Error ? error.message : 'The document could not be imported.';
+			return imported;
+		} finally {
+			this.importing = false;
+		}
+	}
+
+	async importDuplicateCopy(): Promise<NormalizedDocument | null> {
+		if (!this.duplicate) return null;
+		const { file } = this.duplicate;
+		this.duplicate = null;
+		try {
+			const document = await importFile(file);
+			document.title = `${document.title} — Copy`;
+			document.fingerprint = `${document.fingerprint}:${document.id}`;
+			return await this.addImportedDocument(document, file);
+		} catch (error) {
+			this.errorMessage =
+				error instanceof Error ? error.message : 'The duplicate could not be imported.';
+			return null;
+		}
+	}
+
+	async addPastedText(title: string, text: string): Promise<NormalizedDocument | null> {
+		if (!text.trim()) return null;
+		try {
+			return await this.addImportedDocument(documentFromText(title, text));
+		} catch (error) {
+			this.errorMessage =
+				error instanceof Error ? error.message : 'The pasted text could not be saved.';
+			return null;
+		}
+	}
+
+	async saveDocument(document: NormalizedDocument): Promise<void> {
+		const saved = await putDocument($state.snapshot(document));
+		this.documents = this.documents.map((candidate) =>
+			candidate.id === saved.id ? saved : candidate
+		);
+	}
+
+	async deleteDocument(id: string): Promise<void> {
+		await deleteStoredDocument(id);
+		this.documents = this.documents.filter((document) => document.id !== id);
+		this.storage = await storageSnapshot();
+	}
+
+	async selectModel(id: ModelDescriptor['id']): Promise<void> {
+		this.selectedModelId = id;
+		this.selectedVoiceId = getModel(id).defaultVoice;
+		await Promise.all([
+			setSetting('selected-model', id),
+			setSetting('selected-voice', this.selectedVoiceId)
+		]);
+	}
+
+	async selectVoice(id: string): Promise<void> {
+		if (!this.selectedModel.voices.some((voice) => voice.id === id)) return;
+		this.selectedVoiceId = id;
+		await setSetting('selected-voice', id);
+	}
+
+	async setLicenseAcceptance(modelId: ModelDescriptor['id'], accepted: boolean): Promise<void> {
+		this.acceptedLicenses = accepted
+			? this.acceptedLicenses.includes(modelId)
+				? [...this.acceptedLicenses]
+				: [...this.acceptedLicenses, modelId]
+			: this.acceptedLicenses.filter((id) => id !== modelId);
+		await setSetting('accepted-licenses', [...this.acceptedLicenses]);
+	}
+
+	async acceptLicense(modelId: ModelDescriptor['id']): Promise<void> {
+		await this.setLicenseAcceptance(modelId, true);
+	}
+
+	async installModel(
+		modelId: ModelDescriptor['id'],
+		backend: 'auto' | 'webgpu' | 'wasm' = 'auto',
+		onProgress?: (update: ModelLoadUpdate) => void
+	): Promise<void> {
+		const model = getModel(modelId);
+		if (model.license === 'OpenRAIL-M' && !this.acceptedLicenses.includes(modelId)) {
+			throw new Error('Review and accept the OpenRAIL license before installing this model.');
+		}
+		this.modelProgress[modelId] = {
+			status: 'loading',
+			progress: 0,
+			message: 'Preparing model files…'
+		};
+		try {
+			await ttsClient.load(modelId, backend, (update) => {
+				onProgress?.(update);
+				this.modelProgress[modelId] = {
+					status: 'loading',
+					progress: update.progress,
+					file: update.file,
+					message:
+						update.status === 'progress'
+							? 'Downloading securely from Hugging Face…'
+							: 'Initializing the local model…'
+				};
+			});
+			if (!this.installedModels.includes(modelId))
+				this.installedModels = [...this.installedModels, modelId];
+			this.modelProgress[modelId] = {
+				status: 'ready',
+				progress: 100,
+				message: `Ready on ${ttsClient.backend.toUpperCase()}`
+			};
+			onProgress?.({ status: 'Saving the local installation…', progress: 100 });
+			await setSetting('installed-models', [...this.installedModels]);
+			onProgress?.({ status: 'Voice engine ready.', progress: 100 });
+		} catch (error) {
+			if (error instanceof DOMException && error.name === 'AbortError') {
+				this.modelProgress[modelId] = this.installedModels.includes(modelId)
+					? { status: 'ready', progress: 100, message: 'Ready to resume' }
+					: { status: 'idle', progress: 0 };
+				throw error;
+			}
+			this.modelProgress[modelId] = {
+				status: 'error',
+				progress: 0,
+				message: error instanceof Error ? error.message : 'The model could not be installed.'
+			};
+			throw error;
+		}
+	}
+
+	cancelModelInstall(modelId: ModelDescriptor['id']): void {
+		ttsClient.cancelAll();
+		this.modelProgress[modelId] = this.installedModels.includes(modelId)
+			? { status: 'ready', progress: 100, message: 'Ready' }
+			: { status: 'idle', progress: 0 };
+	}
+
+	async removeModel(modelId: ModelDescriptor['id']): Promise<void> {
+		const model = getModel(modelId);
+		if (ttsClient.modelId === modelId) await ttsClient.dispose();
+		await clearPinnedModelAssets(model);
+		this.installedModels = this.installedModels.filter((id) => id !== modelId);
+		this.modelProgress[modelId] = { status: 'idle', progress: 0 };
+		await setSetting('installed-models', [...this.installedModels]);
+		this.storage = await storageSnapshot();
+	}
+
+	async clearAudio(documentId?: string): Promise<void> {
+		await clearGeneratedAudio(documentId);
+		this.storage = await storageSnapshot();
+	}
+
+	async refreshStorage(): Promise<void> {
+		this.storage = await storageSnapshot();
+	}
+
+	clearError(): void {
+		this.errorMessage = '';
+	}
+}
+
+export const appState = new VoicebookState();
+export { MODEL_CATALOG };

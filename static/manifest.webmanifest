@@ -1,0 +1,18 @@
+{
+	"name": "Voicebook",
+	"short_name": "Voicebook",
+	"description": "Private, on-device text to speech for your documents.",
+	"start_url": "./",
+	"scope": "./",
+	"display": "standalone",
+	"background_color": "#09090f",
+	"theme_color": "#09090f",
+	"icons": [
+		{
+			"src": "./voicebook-mark.svg",
+			"sizes": "any",
+			"type": "image/svg+xml",
+			"purpose": "any maskable"
+		}
+	]
+}

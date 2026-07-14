@@ -1,0 +1,26 @@
+name: Feature proposal
+description: Suggest a focused, local-first improvement.
+title: '[Feature]: '
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What becomes easier or possible?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed experience
+      description: Describe the smallest complete version.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Privacy, storage, licensing, and device impact
+      description: Include model size/license or new network behavior when relevant.
+    validations:
+      required: true
