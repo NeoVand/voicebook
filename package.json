@@ -65,11 +65,11 @@
 		"@lucide/svelte": "1.24.0",
 		"@soundtouchjs/audio-worklet": "2.1.0",
 		"idb": "8.0.3",
-		"mammoth": "1.11.0",
+		"mammoth": "1.12.0",
 		"mediabunny": "1.50.8",
 		"mermaid": "^11.16.0",
 		"onnxruntime-web-supertone": "npm:onnxruntime-web@1.23.0",
-		"pdfjs-dist": "5.4.624",
+		"pdfjs-dist": "6.1.200",
 		"remark-gfm": "4.0.1",
 		"remark-parse": "11.0.0",
 		"unified": "11.0.5"
