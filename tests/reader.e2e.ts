@@ -200,6 +200,26 @@ test('table of contents moves the reading canvas and closes its compact drawer',
 		)
 		.toBe(true);
 
+	await canvas.evaluate((element) => {
+		element.scrollTop = 0;
+		element.dispatchEvent(new WheelEvent('wheel', { bubbles: true }));
+	});
+	const followNarration = page.getByRole('button', { name: 'Follow narration' });
+	await expect(followNarration).toBeVisible();
+	await followNarration.click();
+	await expect(followNarration).toBeHidden();
+	await expect
+		.poll(() =>
+			page.getByRole('heading', { name: 'Far section', exact: true }).evaluate((heading) => {
+				const canvasElement = document.querySelector<HTMLElement>('.reading-canvas');
+				if (!canvasElement) return false;
+				const canvasRect = canvasElement.getBoundingClientRect();
+				const headingRect = heading.getBoundingClientRect();
+				return headingRect.top >= canvasRect.top && headingRect.bottom <= canvasRect.bottom;
+			})
+		)
+		.toBe(true);
+
 	await page.setViewportSize({ width: 800, height: 760 });
 	await tableOfContents.getByRole('button', { name: 'Opening section', exact: true }).click();
 	await expect(outline).toBeHidden();

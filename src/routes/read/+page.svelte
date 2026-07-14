@@ -4,6 +4,8 @@
 		ArrowLeft,
 		Bookmark,
 		BookOpenText,
+		Check,
+		ChevronDown,
 		ChevronLeft,
 		ChevronRight,
 		Code2,
@@ -13,6 +15,7 @@
 		List,
 		ListMusic,
 		LoaderCircle,
+		LocateFixed,
 		Pause,
 		Play,
 		RotateCcw,
@@ -116,8 +119,8 @@
 		player.onSegmentChange = (segmentId) => {
 			if (!player.autoFollow || outlineNavigationBlockId) return;
 			requestAnimationFrame(() => {
-				segmentElements.get(segmentId)?.scrollIntoView({ behavior: 'auto', block: 'center' });
-				scheduleVisibleSectionUpdate();
+				const element = segmentElements.get(segmentId);
+				if (element) scrollNarrationIntoView(element, false);
 			});
 		};
 		void appState.initialize().then(() => {
@@ -232,6 +235,44 @@
 			requestAnimationFrame(() => element.focus({ preventScroll: true }));
 		}
 		scheduleVisibleSectionUpdate();
+	}
+
+	function scrollNarrationIntoView(element: HTMLElement, userRequested: boolean): void {
+		if (!readingCanvas) return;
+		const canvasRect = readingCanvas.getBoundingClientRect();
+		const elementRect = element.getBoundingClientRect();
+		const centeredTop =
+			readingCanvas.scrollTop +
+			elementRect.top -
+			canvasRect.top -
+			(readingCanvas.clientHeight - elementRect.height) / 2;
+		const maximumTop = Math.max(0, readingCanvas.scrollHeight - readingCanvas.clientHeight);
+		const top = Math.max(0, Math.min(maximumTop, centeredTop));
+		const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		const longJump = Math.abs(top - readingCanvas.scrollTop) > readingCanvas.clientHeight * 1.5;
+		readingCanvas.scrollTo({
+			top,
+			behavior: userRequested && !reducedMotion && !longJump ? 'smooth' : 'auto'
+		});
+		scheduleVisibleSectionUpdate();
+	}
+
+	function resumeNarrationFollow(): void {
+		player.autoFollow = true;
+		const segment = player.currentSegment;
+		if (!segment) return;
+		requestAnimationFrame(() => {
+			const element = segmentElements.get(segment.id);
+			if (element) scrollNarrationIntoView(element, true);
+		});
+	}
+
+	function compactOutlineTitle(title: string): string {
+		const normalized = title.replace(/\s+/g, ' ').trim();
+		if (normalized.length <= 56) return normalized;
+		const clipped = normalized.slice(0, 53);
+		const lastSpace = clipped.lastIndexOf(' ');
+		return `${clipped.slice(0, lastSpace > 32 ? lastSpace : 53).trimEnd()}…`;
 	}
 
 	function navigateToOutlineBlock(block: DocumentBlock): void {
@@ -504,10 +545,12 @@
 								type="button"
 								class:active={activeOutlineBlockId === item.blockId}
 								aria-current={activeOutlineBlockId === item.blockId ? 'location' : undefined}
+								aria-label={item.title}
+								title={item.title}
 								style={'--outline-level:' + Math.max(0, item.level - 1)}
 								onclick={() => outlineBlock && navigateToOutlineBlock(outlineBlock)}
 							>
-								{item.title}
+								<span>{compactOutlineTitle(item.title)}</span>
 							</button>
 						{/each}
 					{:else}
@@ -607,9 +650,9 @@
 									{#each node.items as block (block.id)}
 										<li id={block.id} class:task-item={block.list?.checked !== undefined}>
 											{#if block.list?.checked !== undefined}
-												<span class="task-marker" aria-hidden="true"
-													>{block.list.checked ? '✓' : ''}</span
-												>
+												<span class="task-marker" aria-hidden="true">
+													{#if block.list.checked}<Check size={11} strokeWidth={2.6} />{/if}
+												</span>
 												<span class="sr-only"
 													>{block.list.checked ? 'Completed: ' : 'Not completed: '}</span
 												>
@@ -692,12 +735,8 @@
 			</article>
 
 			{#if !player.autoFollow}
-				<button
-					class="return-follow button"
-					type="button"
-					onclick={() => (player.autoFollow = true)}
-				>
-					<Sparkles size={15} /> Follow narration
+				<button class="return-follow button" type="button" onclick={resumeNarrationFollow}>
+					<LocateFixed size={15} /> Follow narration
 				</button>
 			{/if}
 		</section>
@@ -833,6 +872,7 @@
 							min="0"
 							max="1000"
 							value={Math.round(player.progress * 1000)}
+							style:--timeline-progress={`${Math.round(player.progress * 100)}%`}
 							aria-label="Reading position"
 							onchange={(event) =>
 								player.seekToProgress(
@@ -846,28 +886,34 @@
 
 			<div class="player-options">
 				<label class="compact-select">
-					<span>Voice</span>
-					<select aria-label="Voice" value={appState.selectedVoiceId} onchange={changeVoice}>
-						{#each appState.selectedModel.voices as voice (voice.id)}
-							<option value={voice.id}>{voice.name}</option>
-						{/each}
-					</select>
+					<span class="control-label">Voice</span>
+					<span class="select-field">
+						<select aria-label="Voice" value={appState.selectedVoiceId} onchange={changeVoice}>
+							{#each appState.selectedModel.voices as voice (voice.id)}
+								<option value={voice.id}>{voice.name}</option>
+							{/each}
+						</select>
+						<span class="select-chevron" aria-hidden="true"><ChevronDown size={14} /></span>
+					</span>
 				</label>
 				<label class="compact-select speed">
-					<Gauge size={15} />
-					<select
-						aria-label="Playback speed"
-						value={player.rate}
-						onchange={(event) =>
-							player.setRate(Number((event.currentTarget as HTMLSelectElement).value))}
-					>
-						{#each [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as speed (speed)}
-							<option value={speed}>{speed}×</option>
-						{/each}
-					</select>
+					<span class="control-label"><Gauge size={12} /> Speed</span>
+					<span class="select-field">
+						<select
+							aria-label="Playback speed"
+							value={player.rate}
+							onchange={(event) =>
+								player.setRate(Number((event.currentTarget as HTMLSelectElement).value))}
+						>
+							{#each [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as speed (speed)}
+								<option value={speed}>{speed}×</option>
+							{/each}
+						</select>
+						<span class="select-chevron" aria-hidden="true"><ChevronDown size={14} /></span>
+					</span>
 				</label>
 				<label class="volume-control">
-					<Volume2 size={15} />
+					<span class="control-label"><Volume2 size={13} /> Volume</span>
 					<input
 						aria-label="Volume"
 						type="range"
@@ -875,6 +921,7 @@
 						max="1"
 						step="0.05"
 						value={player.volume}
+						style:--volume-progress={`${Math.round(player.volume * 100)}%`}
 						oninput={(event) =>
 							player.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
 					/>
@@ -916,11 +963,12 @@
 	}
 
 	.reader-shell {
+		--player-height: 104px;
 		display: grid;
 		height: 100dvh;
 		min-height: 0;
-		grid-template-columns: 232px minmax(0, 1fr);
-		grid-template-rows: 54px minmax(0, 1fr) 86px;
+		grid-template-columns: 252px minmax(0, 1fr);
+		grid-template-rows: 54px minmax(0, 1fr) var(--player-height);
 		overflow: hidden;
 		background: var(--bg);
 	}
@@ -930,7 +978,7 @@
 	}
 
 	.reader-shell.bookmarks-open {
-		grid-template-columns: 232px minmax(0, 1fr) 264px;
+		grid-template-columns: 252px minmax(0, 1fr) 264px;
 	}
 
 	.reader-shell.outline-closed.bookmarks-open {
@@ -1105,7 +1153,7 @@
 
 	.outline-panel header strong,
 	.bookmarks-panel header strong {
-		font-size: 10px;
+		font-size: 12px;
 		font-weight: 650;
 	}
 
@@ -1113,7 +1161,7 @@
 	.bookmarks-panel header span {
 		margin-top: 3px;
 		color: var(--faint);
-		font-size: 8px;
+		font-size: 10px;
 	}
 
 	.outline-panel nav {
@@ -1125,15 +1173,25 @@
 	}
 
 	.outline-panel nav button {
-		min-height: 36px;
-		padding: 7px 9px 7px calc(9px + var(--outline-level, 0) * 8px);
+		display: flex;
+		min-width: 0;
+		min-height: 42px;
+		align-items: center;
+		padding: 8px 11px 8px calc(11px + var(--outline-level, 0) * 10px);
 		border: 0;
-		border-radius: 5px;
+		border-radius: 6px;
 		background: transparent;
 		color: var(--muted);
-		font-size: 9px;
-		line-height: 1.35;
+		font-size: 11px;
+		line-height: 1.25;
 		text-align: left;
+	}
+
+	.outline-panel nav button span {
+		display: block;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.outline-panel nav button:hover,
@@ -1143,7 +1201,8 @@
 	}
 
 	.outline-panel nav button.active {
-		color: #dedaff;
+		background: var(--primary-soft);
+		color: var(--text);
 		box-shadow: inset 2px 0 var(--primary);
 	}
 
@@ -1527,9 +1586,14 @@
 	.return-follow {
 		position: absolute;
 		right: 28px;
-		bottom: 18px;
+		bottom: 20px;
 		z-index: 15;
-		box-shadow: 0 8px 28px rgba(0, 0, 0, 0.36);
+		min-height: 38px;
+		border-color: color-mix(in srgb, var(--primary) 42%, transparent);
+		background: color-mix(in srgb, var(--surface) 94%, transparent);
+		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38);
+		color: var(--text);
+		backdrop-filter: blur(14px);
 	}
 
 	.bookmark-list {
@@ -1593,16 +1657,17 @@
 		position: relative;
 		z-index: 35;
 		display: grid;
-		height: 86px;
+		height: var(--player-height);
 		min-width: 0;
 		grid-row: 3;
 		grid-column: 1 / -1;
-		grid-template-columns: minmax(170px, 0.7fr) minmax(390px, 1.45fr) minmax(245px, 0.85fr);
+		grid-template-columns: minmax(190px, 0.7fr) minmax(390px, 1.5fr) minmax(300px, 0.9fr);
 		align-items: center;
-		gap: 18px;
-		padding: 8px 16px;
+		gap: 24px;
+		padding: 12px 20px;
 		border-top: 1px solid var(--line);
-		background: #14151a;
+		background: color-mix(in srgb, var(--surface) 96%, black);
+		box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.18);
 	}
 
 	.now-playing {
@@ -1610,7 +1675,7 @@
 		min-width: 0;
 		grid-template-columns: auto minmax(0, 1fr);
 		align-items: center;
-		gap: 10px;
+		gap: 12px;
 		color: var(--primary);
 	}
 
@@ -1624,26 +1689,26 @@
 
 	.now-playing strong {
 		color: var(--text-soft);
-		font-size: 9px;
+		font-size: 11px;
 		font-weight: 620;
 	}
 
 	.now-playing span {
-		margin-top: 4px;
+		margin-top: 5px;
 		color: var(--faint);
-		font-size: 8px;
+		font-size: 9px;
 	}
 
 	.transport {
 		display: grid;
-		gap: 4px;
+		gap: 8px;
 	}
 
 	.transport-buttons {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 2px;
+		gap: 4px;
 	}
 
 	.mini-button,
@@ -1654,11 +1719,16 @@
 		border: 0;
 		background: transparent;
 		color: var(--text-soft);
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease),
+			transform 150ms var(--ease);
 	}
 
 	.mini-button {
-		width: 32px;
-		height: 32px;
+		width: 38px;
+		height: 38px;
+		border-radius: 50%;
 	}
 
 	.mini-button:disabled {
@@ -1667,32 +1737,44 @@
 
 	.seek-button {
 		position: relative;
-		width: 36px;
-		height: 36px;
+		width: 40px;
+		height: 40px;
+		border-radius: 50%;
 	}
 
 	.seek-button span {
 		position: absolute;
-		font-size: 6px;
+		font-size: 7px;
 		font-weight: 750;
 	}
 
+	.mini-button:hover:not(:disabled),
+	.seek-button:hover {
+		background: var(--control-hover);
+		color: var(--text);
+	}
+
 	.play-button {
-		width: 42px;
-		height: 42px;
-		margin: 0 4px;
+		width: 48px;
+		height: 48px;
+		margin: 0 6px;
 		border-radius: 50%;
 		background: var(--text);
 		color: var(--primary-ink);
 	}
 
+	.play-button:hover {
+		background: var(--primary-hover);
+		transform: translateY(-1px);
+	}
+
 	.timeline {
 		display: grid;
-		grid-template-columns: 34px 1fr 34px;
+		grid-template-columns: 42px 1fr 42px;
 		align-items: center;
-		gap: 7px;
+		gap: 10px;
 		color: var(--faint);
-		font-size: 7px;
+		font-size: 9px;
 		font-variant-numeric: tabular-nums;
 	}
 
@@ -1701,9 +1783,58 @@
 	}
 
 	.timeline input {
+		appearance: none;
 		width: 100%;
-		height: 14px;
-		accent-color: var(--primary);
+		height: 20px;
+		margin: 0;
+		background: transparent;
+	}
+
+	.timeline input::-webkit-slider-runnable-track,
+	.volume-control input::-webkit-slider-runnable-track {
+		height: 4px;
+		border-radius: 999px;
+		background: linear-gradient(
+			to right,
+			var(--primary) 0 var(--timeline-progress, var(--volume-progress, 0%)),
+			var(--track) var(--timeline-progress, var(--volume-progress, 0%)) 100%
+		);
+	}
+
+	.timeline input::-webkit-slider-thumb,
+	.volume-control input::-webkit-slider-thumb {
+		appearance: none;
+		width: 12px;
+		height: 12px;
+		margin-top: -4px;
+		border: 2px solid var(--surface);
+		border-radius: 50%;
+		background: var(--text);
+		box-shadow: 0 0 0 1px var(--control-border);
+	}
+
+	.timeline input::-moz-range-track,
+	.volume-control input::-moz-range-track {
+		height: 4px;
+		border: 0;
+		border-radius: 999px;
+		background: var(--track);
+	}
+
+	.timeline input::-moz-range-progress,
+	.volume-control input::-moz-range-progress {
+		height: 4px;
+		border-radius: 999px;
+		background: var(--primary);
+	}
+
+	.timeline input::-moz-range-thumb,
+	.volume-control input::-moz-range-thumb {
+		width: 10px;
+		height: 10px;
+		border: 2px solid var(--surface);
+		border-radius: 50%;
+		background: var(--text);
 	}
 
 	.generation-status {
@@ -1721,7 +1852,7 @@
 
 	.generation-status strong {
 		color: var(--text-soft);
-		font-size: 8px;
+		font-size: 10px;
 		font-weight: 650;
 	}
 
@@ -1730,63 +1861,99 @@
 		overflow: hidden;
 		margin-top: 2px;
 		color: var(--faint);
-		font-size: 7px;
+		font-size: 9px;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
 	.generation-status button {
-		height: 26px;
-		padding: 0 9px;
+		height: 32px;
+		padding: 0 12px;
 		border: 0;
 		border-radius: 5px;
 		background: var(--danger-soft);
 		color: var(--danger);
-		font-size: 8px;
+		font-size: 10px;
 		font-weight: 650;
 	}
 
 	.player-options {
 		display: grid;
-		grid-template-columns: minmax(100px, 1fr) 68px 92px;
-		align-items: center;
-		gap: 6px;
+		grid-template-columns: minmax(120px, 1fr) 82px 104px;
+		align-items: end;
+		gap: 10px;
 	}
 
 	.compact-select,
 	.volume-control {
-		display: flex;
-		height: 34px;
-		align-items: center;
-		gap: 6px;
-		padding: 0 8px;
-		border-radius: 5px;
-		background: rgba(255, 255, 255, 0.035);
+		display: grid;
+		min-width: 0;
+		gap: 5px;
 		color: var(--faint);
 	}
 
-	.compact-select > span {
-		font-size: 7px;
-		text-transform: uppercase;
+	.control-label {
+		display: flex;
+		min-width: 0;
+		align-items: center;
+		gap: 4px;
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: 0.02em;
+	}
+
+	.select-field {
+		position: relative;
+		display: block;
+		min-width: 0;
+	}
+
+	.select-chevron {
+		position: absolute;
+		top: 50%;
+		right: 9px;
+		pointer-events: none;
+		transform: translateY(-50%);
 	}
 
 	.compact-select select {
+		appearance: none;
+		width: 100%;
 		min-width: 0;
-		height: 30px;
-		padding: 0;
-		border: 0;
-		background: transparent;
+		height: 36px;
+		padding: 0 28px 0 10px;
+		border: 1px solid var(--control-border);
+		border-radius: 7px;
+		background: var(--control-strong);
 		color: var(--text-soft);
-		font-size: 8px;
+		font-size: 10px;
+		color-scheme: inherit;
+	}
+
+	.compact-select select:hover {
+		border-color: var(--line-strong);
+		background: var(--control);
+	}
+
+	.compact-select select option {
+		background: var(--control-strong);
+		color: var(--text);
 	}
 
 	.compact-select.speed select {
-		width: 42px;
+		width: 100%;
 	}
 
 	.volume-control input {
+		appearance: none;
 		width: 100%;
-		accent-color: var(--primary);
+		height: 36px;
+		margin: 0;
+		background: transparent;
+	}
+
+	.volume-control input {
+		--timeline-progress: var(--volume-progress);
 	}
 
 	.player-error {
@@ -1818,7 +1985,7 @@
 			position: absolute;
 			top: 54px;
 			right: 0;
-			bottom: 86px;
+			bottom: var(--player-height);
 			z-index: 32;
 			width: 264px;
 			border-left: 1px solid var(--line);
@@ -1826,7 +1993,8 @@
 		}
 
 		.player-bar {
-			grid-template-columns: minmax(340px, 1fr) 260px;
+			grid-template-columns: minmax(380px, 1fr) 300px;
+			gap: 20px;
 		}
 
 		.now-playing {
@@ -1845,7 +2013,7 @@
 		.outline-panel {
 			position: absolute;
 			top: 54px;
-			bottom: 86px;
+			bottom: var(--player-height);
 			left: 0;
 			z-index: 32;
 			width: 250px;
