@@ -5,7 +5,6 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import {
-		ArrowLeft,
 		Bookmark,
 		BookOpenText,
 		CloudRain,
@@ -30,6 +29,7 @@
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
+	import GitHubMark from '$lib/components/GitHubMark.svelte';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
@@ -39,6 +39,7 @@
 
 	const homeHref = resolve('/');
 	const settingsHref = resolve('/settings');
+	const repositoryHref = 'https://github.com/NeoVand/voicebook';
 	const sidebarStorageKey = 'voicebook:sidebar-collapsed';
 	const themeStorageKey = 'voicebook:theme';
 	type ThemeId = 'sunny' | 'cloudy' | 'rainy' | 'midnight';
@@ -139,15 +140,6 @@
 			</div>
 
 			<div class="reader-commandbar-actions">
-				<a
-					class="icon-button"
-					href={homeHref}
-					aria-label="Back to library"
-					title="Back to library"
-					onclick={() => readerChrome.closeTransientPanels()}
-				>
-					<ArrowLeft size={17} />
-				</a>
 				<button
 					class="icon-button"
 					class:active={readerChrome.outlineOpen}
@@ -190,6 +182,17 @@
 					>
 						<ZoomIn size={16} />
 					</button>
+					<span class="zoom-divider" aria-hidden="true"></span>
+					<button
+						class="icon-button"
+						class:active={isFullscreen}
+						type="button"
+						aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+						title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+						onclick={() => void toggleFullscreen()}
+					>
+						{#if isFullscreen}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
+					</button>
 				</div>
 				<button
 					class="icon-button"
@@ -229,16 +232,16 @@
 						<Moon size={16} />
 					{/if}
 				</button>
-				<button
+				<a
 					class="icon-button"
-					class:active={isFullscreen}
-					type="button"
-					aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-					title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-					onclick={() => void toggleFullscreen()}
+					href={repositoryHref}
+					target="_blank"
+					rel="noreferrer"
+					aria-label="Open Voicebook on GitHub"
+					title="Open Voicebook on GitHub"
 				>
-					{#if isFullscreen}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
-				</button>
+					<GitHubMark size={16} />
+				</a>
 			</div>
 		</div>
 	{:else}
@@ -260,16 +263,16 @@
 					<Moon size={16} />
 				{/if}
 			</button>
-			<button
+			<a
 				class="icon-button"
-				class:active={isFullscreen}
-				type="button"
-				aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-				title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-				onclick={() => void toggleFullscreen()}
+				href={repositoryHref}
+				target="_blank"
+				rel="noreferrer"
+				aria-label="Open Voicebook on GitHub"
+				title="Open Voicebook on GitHub"
 			>
-				{#if isFullscreen}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
-			</button>
+				<GitHubMark size={16} />
+			</a>
 		</div>
 	{/if}
 </header>

@@ -46,7 +46,19 @@ test('import → install → play → seek → bookmark → reload → offline r
 		return Math.abs(titleRect.x + titleRect.width / 2 - (headerRect.x + headerRect.width / 2));
 	});
 	expect(titleAlignment).toBeLessThan(1);
-	await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'Back to library' })).toHaveCount(0);
+	const fullscreenButton = page.getByRole('button', { name: 'Enter fullscreen' });
+	await expect(fullscreenButton).toBeVisible();
+	await expect(page.getByRole('group', { name: 'Document zoom' })).toContainText('100%');
+	expect(
+		await fullscreenButton.evaluate((button) =>
+			button.parentElement?.classList.contains('document-zoom')
+		)
+	).toBe(true);
+	await expect(page.getByRole('link', { name: 'Open Voicebook on GitHub' })).toHaveAttribute(
+		'href',
+		'https://github.com/NeoVand/voicebook'
+	);
 
 	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
 	await expect(page.getByRole('button', { name: 'Prepare whole document audio' })).toBeVisible();
@@ -143,22 +155,38 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		.fill('The playback dock should remain compact, aligned, and fully visible.');
 	await page.getByRole('button', { name: 'Add to library' }).click();
 	await expect(page.getByRole('heading', { name: 'Player spacing check' })).toBeVisible();
+	await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
 
 	for (const width of [1024, 1280, 1440]) {
 		await page.setViewportSize({ width, height: 800 });
 		const geometry = await page.locator('.player-options').evaluate((options) => {
 			const player = options.closest<HTMLElement>('.player-bar');
 			const shell = player?.closest<HTMLElement>('.reader-shell');
+			const header = document.querySelector<HTMLElement>('.app-header');
+			const sidebar = document.querySelector<HTMLElement>('.app-sidebar');
 			const stage = shell?.querySelector<HTMLElement>('.reader-stage');
 			const outline = shell?.querySelector<HTMLElement>('.outline-panel');
 			const volume = options.querySelector<HTMLElement>('.player-volume');
 			const generation = player?.querySelector<HTMLElement>('.generation-options');
 			const transport = player?.querySelector<HTMLElement>('.transport');
-			if (!player || !shell || !stage || !outline || !volume || !generation || !transport)
+			if (
+				!player ||
+				!shell ||
+				!header ||
+				!sidebar ||
+				!stage ||
+				!outline ||
+				!volume ||
+				!generation ||
+				!transport
+			)
 				throw new Error('Player settings geometry is unavailable');
 
 			const playerRect = player.getBoundingClientRect();
 			const shellRect = shell.getBoundingClientRect();
+			const headerRect = header.getBoundingClientRect();
+			const sidebarRect = sidebar.getBoundingClientRect();
 			const stageRect = stage.getBoundingClientRect();
 			const outlineRect = outline.getBoundingClientRect();
 			const optionsRect = options.getBoundingClientRect();
@@ -187,6 +215,11 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 						? playerStyle.backdropFilter
 						: playerStyle.getPropertyValue('-webkit-backdrop-filter'),
 				boxShadow: playerStyle.boxShadow,
+				chromeThickness: {
+					header: headerRect.height,
+					sidebar: sidebarRect.width,
+					player: playerRect.height
+				},
 				singleLine:
 					Math.abs(
 						generationRect.y +
@@ -202,8 +235,8 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		expect(geometry.documentOverflow, `${width}px document overflow`).toBe(0);
 		expect(geometry.optionsOverflow, `${width}px settings overflow`).toBe(0);
 		expect(geometry.playerOverflow, `${width}px player overflow`).toBe(0);
-		expect(geometry.playerRightInset, `${width}px settings right inset`).toBeGreaterThanOrEqual(19);
-		expect(geometry.volumeRightInset, `${width}px volume right inset`).toBeGreaterThanOrEqual(19);
+		expect(geometry.playerRightInset, `${width}px settings right inset`).toBeGreaterThanOrEqual(15);
+		expect(geometry.volumeRightInset, `${width}px volume right inset`).toBeGreaterThanOrEqual(15);
 		expect(geometry.flushBottom, `${width}px player is flush with the shell bottom`).toBe(true);
 		expect(geometry.fullWidth, `${width}px player spans the reader shell`).toBe(true);
 		expect(geometry.contentUnderlay, `${width}px reader content continues below the player`).toBe(
@@ -212,6 +245,11 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		expect(geometry.position, `${width}px player overlays the reader`).toBe('absolute');
 		expect(geometry.backdropFilter, `${width}px player uses frosted glass`).toContain('blur(22px)');
 		expect(geometry.boxShadow, `${width}px player has no drop shadow`).toBe('none');
+		expect(geometry.chromeThickness, `${width}px chrome uses one 48px rhythm`).toEqual({
+			header: 48,
+			sidebar: 48,
+			player: 48
+		});
 		expect(geometry.singleLine, `${width}px player controls use one line`).toBe(true);
 	}
 
@@ -245,6 +283,8 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 	await page.getByRole('button', { name: 'Collapse sidebar' }).click();
 	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
 	await expect(header.getByRole('link', { name: 'Voicebook library' })).toBeVisible();
+	await expect(header.locator('.brand > span:last-child')).toHaveText('Voicebook');
+	await expect(header.locator('.brand > span:last-child')).toBeVisible();
 	const collapsedWidth = (await sidebar.boundingBox())?.width ?? 0;
 	expect(collapsedWidth).toBeLessThan(expandedWidth);
 
@@ -268,12 +308,11 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 	await expect(page.getByRole('button', { name: /^Theme:/ })).toHaveAccessibleName(
 		'Theme: Rainy. Switch to Midnight theme'
 	);
-	if (await page.evaluate(() => document.fullscreenEnabled)) {
-		await page.getByRole('button', { name: 'Enter fullscreen' }).click();
-		await expect(page.getByRole('button', { name: 'Exit fullscreen' })).toBeVisible();
-		await page.getByRole('button', { name: 'Exit fullscreen' }).click();
-		await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toBeVisible();
-	}
+	await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toHaveCount(0);
+	await expect(page.getByRole('link', { name: 'Open Voicebook on GitHub' })).toHaveAttribute(
+		'href',
+		'https://github.com/NeoVand/voicebook'
+	);
 });
 
 test('starts narration from a chosen passage or selected word', async ({ page }) => {
@@ -368,7 +407,7 @@ test('detects duplicate file imports and keeps navigation under the Pages base p
 		buffer: Buffer.from('A repeatable local document.')
 	});
 	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
-	await page.getByRole('link', { name: 'Back to library' }).click();
+	await page.getByRole('link', { name: 'Voicebook library' }).click();
 	await input.setInputFiles({
 		name: 'repeat.txt',
 		mimeType: 'text/plain',

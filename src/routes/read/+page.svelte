@@ -1111,7 +1111,7 @@
 	}
 
 	.reader-shell {
-		--player-height: 72px;
+		--player-height: var(--chrome-size);
 		position: relative;
 		display: grid;
 		height: 100%;
@@ -1928,7 +1928,7 @@
 		grid-template-columns: 236px minmax(280px, 1fr) 168px;
 		align-items: center;
 		gap: 10px;
-		padding: 8px 20px;
+		padding: 1px 16px 0;
 		border-top: 1px solid var(--line);
 		background: color-mix(in srgb, var(--bg) 68%, transparent);
 		box-shadow: none;

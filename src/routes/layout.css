@@ -7,9 +7,11 @@
 	font-synthesis: none;
 	color-scheme: dark;
 	--font-reading: 'Newsreader Variable', Newsreader, Georgia, serif;
-	--app-header-height: 52px;
+	--chrome-size: 48px;
+	--app-header-height: var(--chrome-size);
+	--brand-slot-width: 132px;
 	--sidebar-width: 216px;
-	--sidebar-collapsed-width: 48px;
+	--sidebar-collapsed-width: var(--chrome-size);
 	--bg: #0b0c0f;
 	--sidebar: #101115;
 	--surface: #14161b;
@@ -343,7 +345,7 @@ h3 {
 	z-index: 80;
 	display: grid;
 	height: var(--app-header-height);
-	grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+	grid-template-columns: var(--brand-slot-width) minmax(0, 1fr);
 	align-items: center;
 	border-bottom: 1px solid var(--line);
 	background: color-mix(in srgb, var(--bg) 68%, transparent);
@@ -355,12 +357,13 @@ h3 {
 }
 
 .app-header.sidebar-collapsed {
-	--sidebar-width: var(--sidebar-collapsed-width);
+	--brand-slot-width: 132px;
 }
 
 .app-brand-slot {
 	display: flex;
 	min-width: 0;
+	overflow: visible;
 	align-items: center;
 	align-self: stretch;
 	pointer-events: auto;
@@ -399,6 +402,13 @@ h3 {
 	align-items: center;
 	gap: 0;
 	margin: 0 3px;
+}
+
+.zoom-divider {
+	width: 1px;
+	height: 18px;
+	margin: 0 3px;
+	background: var(--line-strong);
 }
 
 .document-zoom .icon-button {
@@ -513,11 +523,11 @@ h3 {
 
 .brand {
 	display: flex;
-	width: 100%;
+	width: max-content;
 	height: 40px;
 	align-items: center;
-	gap: 4px;
-	padding: 0;
+	gap: 8px;
+	padding: 0 14px 0 0;
 	font-size: 13px;
 	font-weight: 680;
 	letter-spacing: -0.02em;
@@ -532,10 +542,6 @@ h3 {
 	border-radius: 0;
 	background: transparent;
 	color: var(--primary);
-}
-
-.app-header.sidebar-collapsed .brand > span:last-child {
-	display: none;
 }
 
 .sidebar-head {
@@ -961,6 +967,7 @@ textarea {
 	}
 
 	.app-header {
+		--brand-slot-width: var(--sidebar-collapsed-width);
 		grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr);
 	}
 
