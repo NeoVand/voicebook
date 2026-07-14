@@ -74,6 +74,11 @@ describe('document importers', () => {
 			'const privateByDefault = true;',
 			'```',
 			'',
+			'```mermaid',
+			'flowchart LR',
+			'  Document --> Speech',
+			'```',
+			'',
 			'<script>alert(1)</script>'
 		].join('\n');
 		const document = await importFile(new File([markdown], 'guide.md', { type: 'text/markdown' }));
@@ -87,8 +92,14 @@ describe('document importers', () => {
 			'list-item',
 			'list-item',
 			'code',
+			'code',
 			'code'
 		]);
+		expect(document.blocks.find((item) => item.codeLanguage === 'mermaid')).toMatchObject({
+			kind: 'code',
+			text: 'flowchart LR\n  Document --> Speech',
+			speak: false
+		});
 		expect(
 			document.blocks.filter((item) => item.kind === 'code').every((item) => !item.speak)
 		).toBe(true);

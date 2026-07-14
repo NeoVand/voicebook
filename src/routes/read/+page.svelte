@@ -25,6 +25,7 @@
 	import { onMount } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import InlineText from '$lib/components/InlineText.svelte';
+	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
 	import { segmentBlocks } from '$lib/domain/segmenter';
 	import type {
 		DocumentBlock,
@@ -532,6 +533,8 @@
 									<summary>Document metadata</summary>
 									<pre><code>{block.text}</code></pre>
 								</details>
+							{:else if block.kind === 'code' && block.codeLanguage?.toLowerCase() === 'mermaid'}
+								<MermaidDiagram id={block.id} source={block.text} />
 							{:else if block.kind === 'code'}
 								<figure class="code-block" id={block.id}>
 									{#if block.codeLanguage}<figcaption>{block.codeLanguage}</figcaption>{/if}

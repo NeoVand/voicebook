@@ -114,3 +114,35 @@ test('keeps Supertonic license acceptance and its visible checkbox in sync', asy
 	await expect(acceptance).toBeChecked();
 	await expect(install).toBeEnabled();
 });
+
+test('renders Mermaid fences as accessible diagrams with a source fallback', async ({ page }) => {
+	await page.goto('./');
+	await page.locator('#document-upload').setInputFiles({
+		name: 'diagram.md',
+		mimeType: 'text/markdown',
+		buffer: Buffer.from(
+			[
+				'# Local pipeline',
+				'',
+				'```mermaid',
+				'sequenceDiagram',
+				'  participant Reader',
+				'  participant Voicebook',
+				'  Reader->>Voicebook: recording notice;<br/>continue locally',
+				'```'
+			].join('\n')
+		)
+	});
+
+	await expect(page.getByRole('figure', { name: /Diagram/ })).toBeVisible();
+	await expect(page.getByRole('img', { name: 'Mermaid diagram' })).toBeVisible();
+	await expect(page.getByText('View diagram source')).toBeVisible();
+	await expect(page.locator('figure.mermaid-diagram')).toHaveAttribute('data-status', 'ready');
+	await expect(page.getByText('Diagram unavailable')).toBeHidden();
+	const sizeToggle = page.getByRole('button', { name: 'Full size' });
+	await sizeToggle.click();
+	await expect(page.getByRole('button', { name: 'Fit width' })).toHaveAttribute(
+		'aria-pressed',
+		'true'
+	);
+});
