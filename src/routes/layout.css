@@ -120,6 +120,10 @@ h3 {
 	min-height: 100dvh;
 }
 
+.app-shell.sidebar-collapsed {
+	--sidebar-width: 68px;
+}
+
 .app-sidebar {
 	position: fixed;
 	inset: 0 auto 0 0;
@@ -184,12 +188,35 @@ h3 {
 	color: #e2deff;
 }
 
+.sidebar-toggle {
+	display: flex;
+	height: 40px;
+	align-items: center;
+	gap: 10px;
+	margin-top: auto;
+	padding: 0 11px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--faint);
+	font-size: 10px;
+	font-weight: 580;
+	transition:
+		background 150ms var(--ease),
+		color 150ms var(--ease);
+}
+
+.sidebar-toggle:hover {
+	background: rgba(255, 255, 255, 0.04);
+	color: var(--text-soft);
+}
+
 .sidebar-foot {
 	display: grid;
 	grid-template-columns: auto 1fr auto;
 	align-items: center;
 	gap: 9px;
-	margin-top: auto;
+	margin-top: 4px;
 	padding: 12px 9px 4px;
 	border-top: 1px solid var(--line);
 	color: var(--faint);
@@ -229,29 +256,8 @@ h3 {
 	min-height: 0;
 	overflow: hidden;
 }
-
-.commandbar {
-	display: flex;
-	height: 56px;
-	align-items: center;
-	justify-content: space-between;
-	padding: 0 32px;
-	border-bottom: 1px solid var(--line);
-	background: var(--bg);
-}
-
-.commandbar strong {
-	font-size: 12px;
-	font-weight: 650;
-}
-
-.commandbar span {
-	color: var(--faint);
-	font-size: 10px;
-}
-
 main {
-	min-height: calc(100dvh - 56px);
+	min-height: 100dvh;
 }
 
 .workspace-page {
@@ -440,6 +446,10 @@ textarea {
 		--sidebar-width: 64px;
 	}
 
+	.app-shell.sidebar-collapsed {
+		--sidebar-width: 64px;
+	}
+
 	.app-sidebar {
 		width: 64px;
 		align-items: center;
@@ -463,13 +473,46 @@ textarea {
 		padding: 0;
 	}
 
-	.commandbar {
-		padding: 0 20px;
+	.sidebar-toggle {
+		display: none;
 	}
 
 	.workspace-page {
 		width: min(100% - 32px, 760px);
 	}
+}
+
+.app-shell.sidebar-collapsed .app-sidebar {
+	align-items: center;
+	padding-right: 8px;
+	padding-left: 8px;
+}
+
+.app-shell.sidebar-collapsed .brand {
+	padding: 0;
+}
+
+.app-shell.sidebar-collapsed .brand > span:last-child,
+.app-shell.sidebar-collapsed .primary-nav a span,
+.app-shell.sidebar-collapsed .sidebar-toggle span,
+.app-shell.sidebar-collapsed .sidebar-foot div,
+.app-shell.sidebar-collapsed .sidebar-foot > svg {
+	display: none;
+}
+
+.app-shell.sidebar-collapsed .primary-nav a,
+.app-shell.sidebar-collapsed .sidebar-toggle {
+	width: 40px;
+	justify-content: center;
+	padding: 0;
+}
+
+.app-shell.sidebar-collapsed .sidebar-foot {
+	display: grid;
+	width: 40px;
+	grid-template-columns: 1fr;
+	justify-items: center;
+	padding: 12px 0 4px;
 }
 
 @media (max-width: 560px) {

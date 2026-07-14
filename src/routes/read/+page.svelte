@@ -11,7 +11,6 @@
 		Code2,
 		Download,
 		Ellipsis,
-		Gauge,
 		List,
 		ListMusic,
 		LoaderCircle,
@@ -1026,49 +1025,44 @@
 				</span>
 			</div>
 
-			<div class="player-options">
-				<label class="compact-select">
-					<span class="control-label">Voice</span>
-					<span class="select-field">
-						<select aria-label="Voice" value={appState.selectedVoiceId} onchange={changeVoice}>
-							{#each appState.selectedModel.voices as voice (voice.id)}
-								<option value={voice.id}>{voice.name}</option>
-							{/each}
-						</select>
-						<span class="select-chevron" aria-hidden="true"><ChevronDown size={14} /></span>
-					</span>
+			<div class="player-options" role="group" aria-label="Playback settings">
+				<label class="player-select voice-select">
+					<span class="sr-only">Voice</span>
+					<select aria-label="Voice" value={appState.selectedVoiceId} onchange={changeVoice}>
+						{#each appState.selectedModel.voices as voice (voice.id)}
+							<option value={voice.id}>{voice.name}</option>
+						{/each}
+					</select>
+					<span class="select-chevron" aria-hidden="true"><ChevronDown size={13} /></span>
 				</label>
-				<label class="compact-select speed">
-					<span class="control-label"><Gauge size={12} /> Speed</span>
-					<span class="select-field">
-						<select
-							aria-label="Playback speed"
-							value={player.rate}
-							onchange={(event) =>
-								player.setRate(Number((event.currentTarget as HTMLSelectElement).value))}
-						>
-							{#each [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as speed (speed)}
-								<option value={speed}>{speed}×</option>
-							{/each}
-						</select>
-						<span class="select-chevron" aria-hidden="true"><ChevronDown size={14} /></span>
-					</span>
+				<label class="player-select speed-select">
+					<span class="sr-only">Playback speed</span>
+					<select
+						aria-label="Playback speed"
+						value={player.rate}
+						onchange={(event) =>
+							player.setRate(Number((event.currentTarget as HTMLSelectElement).value))}
+					>
+						{#each [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as speed (speed)}
+							<option value={speed}>{speed}×</option>
+						{/each}
+					</select>
+					<span class="select-chevron" aria-hidden="true"><ChevronDown size={13} /></span>
 				</label>
-				<label class="volume-control">
-					<span class="control-label"><Volume2 size={13} /> Volume</span>
-					<span class="volume-field">
-						<input
-							aria-label="Volume"
-							type="range"
-							min="0"
-							max="1"
-							step="0.05"
-							value={player.volume}
-							style:--volume-progress={`${Math.round(player.volume * 100)}%`}
-							oninput={(event) =>
-								player.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
-						/>
-					</span>
+				<label class="player-volume">
+					<span class="sr-only">Volume</span>
+					<Volume2 size={16} aria-hidden="true" />
+					<input
+						aria-label="Volume"
+						type="range"
+						min="0"
+						max="1"
+						step="0.05"
+						value={player.volume}
+						style:--volume-progress={`${Math.round(player.volume * 100)}%`}
+						oninput={(event) =>
+							player.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
+					/>
 				</label>
 			</div>
 
@@ -2005,7 +1999,7 @@
 	}
 
 	.timeline input::-webkit-slider-runnable-track,
-	.volume-control input::-webkit-slider-runnable-track {
+	.player-volume input::-webkit-slider-runnable-track {
 		height: 4px;
 		border-radius: 999px;
 		background: linear-gradient(
@@ -2016,7 +2010,7 @@
 	}
 
 	.timeline input::-webkit-slider-thumb,
-	.volume-control input::-webkit-slider-thumb {
+	.player-volume input::-webkit-slider-thumb {
 		appearance: none;
 		width: 12px;
 		height: 12px;
@@ -2028,7 +2022,7 @@
 	}
 
 	.timeline input::-moz-range-track,
-	.volume-control input::-moz-range-track {
+	.player-volume input::-moz-range-track {
 		height: 4px;
 		border: 0;
 		border-radius: 999px;
@@ -2036,14 +2030,14 @@
 	}
 
 	.timeline input::-moz-range-progress,
-	.volume-control input::-moz-range-progress {
+	.player-volume input::-moz-range-progress {
 		height: 4px;
 		border-radius: 999px;
 		background: var(--primary);
 	}
 
 	.timeline input::-moz-range-thumb,
-	.volume-control input::-moz-range-thumb {
+	.player-volume input::-moz-range-thumb {
 		width: 10px;
 		height: 10px;
 		border: 2px solid var(--surface);
@@ -2052,99 +2046,76 @@
 	}
 
 	.player-options {
-		display: grid;
-		width: min(100%, 336px);
-		min-width: 0;
-		grid-template-columns: minmax(104px, 1fr) 74px minmax(96px, 104px);
-		align-items: end;
-		justify-self: end;
-		gap: 8px;
-	}
-
-	.compact-select,
-	.volume-control {
-		display: grid;
-		min-width: 0;
-		grid-template-rows: 14px 38px;
-		gap: 4px;
-		color: var(--faint);
-	}
-
-	.control-label {
 		display: flex;
+		width: min(100%, 304px);
 		min-width: 0;
 		align-items: center;
-		gap: 4px;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.02em;
-		line-height: 1;
+		justify-self: end;
+		justify-content: flex-end;
+		gap: 10px;
 	}
 
-	.select-field {
+	.player-select {
 		position: relative;
-		display: block;
+		display: flex;
+		height: 44px;
 		min-width: 0;
+		align-items: center;
+	}
+
+	.voice-select {
+		width: 112px;
+	}
+
+	.speed-select {
+		width: 62px;
 	}
 
 	.select-chevron {
 		position: absolute;
 		top: 50%;
-		right: 9px;
+		right: 6px;
 		pointer-events: none;
 		transform: translateY(-50%);
 	}
 
-	.compact-select select {
+	.player-select select {
 		appearance: none;
 		width: 100%;
 		min-width: 0;
-		height: 38px;
-		padding: 0 28px 0 10px;
-		border: 1px solid var(--control-border);
-		border-radius: 7px;
-		background: var(--control-strong);
+		height: 44px;
+		padding: 0 24px 0 7px;
+		border: 0;
+		border-radius: 6px;
+		background: transparent;
 		color: var(--text-soft);
-		font-size: 10px;
+		font-size: 11px;
+		font-weight: 580;
 		color-scheme: inherit;
 	}
 
-	.compact-select select:hover {
-		border-color: var(--line-strong);
-		background: var(--control);
+	.player-select select:hover {
+		background: rgba(255, 255, 255, 0.04);
+		color: var(--text);
 	}
 
-	.compact-select select option {
+	.player-select select option {
 		background: var(--control-strong);
 		color: var(--text);
 	}
 
-	.compact-select.speed select {
-		width: 100%;
-	}
-
-	.volume-field {
+	.player-volume {
 		display: flex;
 		min-width: 0;
-		height: 38px;
+		width: 110px;
+		height: 44px;
 		align-items: center;
-		padding: 0 10px;
-		border: 1px solid var(--control-border);
-		border-radius: 7px;
-		background: var(--control-strong);
+		gap: 8px;
+		padding: 0 3px 0 5px;
+		color: var(--muted);
 	}
 
-	.volume-field:hover {
-		border-color: var(--line-strong);
-		background: var(--control);
-	}
-
-	.volume-field:focus-within {
-		border-color: var(--primary);
-		box-shadow: 0 0 0 2px var(--primary-soft);
-	}
-
-	.volume-control input {
+	.player-volume input {
 		appearance: none;
 		width: 100%;
 		height: 20px;
@@ -2152,7 +2123,7 @@
 		background: transparent;
 	}
 
-	.volume-control input {
+	.player-volume input {
 		--timeline-progress: var(--volume-progress);
 	}
 

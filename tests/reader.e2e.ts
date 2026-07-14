@@ -110,7 +110,7 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		await page.setViewportSize({ width, height: 800 });
 		const geometry = await page.locator('.player-options').evaluate((options) => {
 			const player = options.closest<HTMLElement>('.player-bar');
-			const volume = options.querySelector<HTMLElement>('.volume-field');
+			const volume = options.querySelector<HTMLElement>('.player-volume');
 			if (!player || !volume) throw new Error('Player settings geometry is unavailable');
 
 			const playerRect = player.getBoundingClientRect();
@@ -131,6 +131,25 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		expect(geometry.playerRightInset, `${width}px settings right inset`).toBeGreaterThanOrEqual(19);
 		expect(geometry.volumeRightInset, `${width}px volume right inset`).toBeGreaterThanOrEqual(19);
 	}
+});
+
+test('collapses and remembers the desktop sidebar', async ({ page }) => {
+	await page.setViewportSize({ width: 1280, height: 800 });
+	await page.goto('./');
+	await expect(page.getByText('Supertonic 3', { exact: true })).toHaveCount(0);
+
+	const sidebar = page.getByRole('complementary', { name: 'Voicebook navigation' });
+	const expandedWidth = (await sidebar.boundingBox())?.width ?? 0;
+	await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
+	const collapsedWidth = (await sidebar.boundingBox())?.width ?? 0;
+	expect(collapsedWidth).toBeLessThan(expandedWidth);
+
+	await page.reload();
+	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
+	await expect(sidebar).toHaveCSS('width', '68px');
+	await page.getByRole('button', { name: 'Expand sidebar' }).click();
+	await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
 });
 
 test('starts narration from a chosen passage or selected word', async ({ page }) => {
