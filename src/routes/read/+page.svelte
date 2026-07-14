@@ -23,9 +23,16 @@
 		X
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import InlineText from '$lib/components/InlineText.svelte';
 	import { segmentBlocks } from '$lib/domain/segmenter';
-	import type { DocumentBlock, NormalizedDocument, SpeechSegment } from '$lib/domain/types';
+	import type {
+		DocumentBlock,
+		InlineRun,
+		NormalizedDocument,
+		SpeechSegment,
+		TableCell
+	} from '$lib/domain/types';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
 
@@ -59,8 +66,43 @@
 			'Voice'
 	);
 	let titleBlock = $derived.by(() => {
-		const first = book?.blocks[0];
-		return first?.kind === 'heading' && first.level === 1 ? first : undefined;
+		return book?.blocks.find((block) => block.kind === 'heading' && block.level === 1);
+	});
+	type ReadingNode =
+		| { type: 'block'; key: string; block: DocumentBlock }
+		| {
+				type: 'list';
+				key: string;
+				ordered: boolean;
+				depth: number;
+				start: number;
+				items: DocumentBlock[];
+		  };
+	let readingFlow = $derived.by(() => {
+		const nodes: ReadingNode[] = [];
+		for (const block of book?.blocks ?? []) {
+			if (block.id === titleBlock?.id) continue;
+			if (block.kind !== 'list-item') {
+				nodes.push({ type: 'block', key: block.id, block });
+				continue;
+			}
+			const ordered = block.list?.ordered ?? false;
+			const depth = block.list?.depth ?? 0;
+			const previous = nodes.at(-1);
+			if (previous?.type === 'list' && previous.ordered === ordered && previous.depth === depth) {
+				previous.items.push(block);
+			} else {
+				nodes.push({
+					type: 'list',
+					key: `list-${block.id}`,
+					ordered,
+					depth,
+					start: block.list?.start ?? 1,
+					items: [block]
+				});
+			}
+		}
+		return nodes;
 	});
 
 	onMount(() => {
@@ -90,16 +132,56 @@
 		};
 	}
 
-	function tokens(segment: SpeechSegment): Array<{ text: string; wordIndex?: number }> {
-		const output: Array<{ text: string; wordIndex?: number }> = [];
-		let cursor = 0;
-		segment.words.forEach((word, wordIndex) => {
-			if (word.start > cursor) output.push({ text: segment.text.slice(cursor, word.start) });
-			output.push({ text: segment.text.slice(word.start, word.end), wordIndex });
-			cursor = word.end;
-		});
-		if (cursor < segment.text.length) output.push({ text: segment.text.slice(cursor) });
+	interface RenderedRun {
+		run: InlineRun;
+		pieces: Array<{ text: string; wordIndex?: number }>;
+	}
+
+	function tokens(block: DocumentBlock, segment: SpeechSegment): RenderedRun[] {
+		const sourceRuns =
+			block.inlines?.length && block.inlines.map((run) => run.text).join('') === block.text
+				? block.inlines
+				: [{ text: block.text }];
+		const output: RenderedRun[] = [];
+		let runStart = 0;
+		for (const run of sourceRuns) {
+			const runEnd = runStart + run.text.length;
+			const start = Math.max(runStart, segment.start);
+			const end = Math.min(runEnd, segment.end);
+			if (start < end) {
+				const pieces: RenderedRun['pieces'] = [];
+				const boundaries = new SvelteSet([start, end]);
+				for (const word of segment.words) {
+					const wordStart = segment.start + word.start;
+					const wordEnd = segment.start + word.end;
+					if (wordStart > start && wordStart < end) boundaries.add(wordStart);
+					if (wordEnd > start && wordEnd < end) boundaries.add(wordEnd);
+				}
+				const points = [...boundaries].sort((left, right) => left - right);
+				for (let index = 0; index < points.length - 1; index += 1) {
+					const tokenStart = points[index];
+					const tokenEnd = points[index + 1];
+					const wordIndex = segment.words.findIndex(
+						(word) =>
+							tokenStart >= segment.start + word.start && tokenEnd <= segment.start + word.end
+					);
+					pieces.push({
+						text: run.text.slice(tokenStart - runStart, tokenEnd - runStart),
+						wordIndex: wordIndex >= 0 ? wordIndex : undefined
+					});
+				}
+				output.push({
+					run: { ...run, text: run.text.slice(start - runStart, end - runStart) },
+					pieces
+				});
+			}
+			runStart = runEnd;
+		}
 		return output;
+	}
+
+	function headingTag(block: DocumentBlock): 'h2' | 'h3' | 'h4' | 'h5' | 'h6' {
+		return `h${Math.max(2, Math.min(6, block.level ?? 2))}` as 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
 	}
 
 	function firstSegmentIndex(block: DocumentBlock): number {
@@ -164,23 +246,23 @@
 	<title>{book ? book.title + ' — Voicebook' : 'Reader — Voicebook'}</title>
 </svelte:head>
 
-{#snippet renderSegment(segment: SpeechSegment)}
+{#snippet renderSegment(block: DocumentBlock, segment: SpeechSegment)}
 	{@const isActive = activeSegmentId === segment.id}
 	<span class="speech-segment" class:active={isActive} {@attach trackSegment(segment.id)}>
-		{#if isActive}
-			{#each tokens(segment) as token, tokenIndex (tokenIndex)}
-				{#if token.wordIndex !== undefined}
-					<span class="spoken-word" class:active-word={player.currentWordIndex === token.wordIndex}>
-						{token.text}
-					</span>
-				{:else}
-					{token.text}
-				{/if}
-			{/each}
-		{:else}
-			{segment.text}
-		{/if}
+		{#each tokens(block, segment) as inline, inlineIndex (inlineIndex)}
+			<InlineText
+				run={inline.run}
+				pieces={inline.pieces}
+				activeWordIndex={isActive ? player.currentWordIndex : undefined}
+			/>
+		{/each}
 	</span>
+{/snippet}
+
+{#snippet renderCell(cell: TableCell)}
+	{#each cell.inlines as inline, inlineIndex (inlineIndex)}
+		<InlineText run={inline} />
+	{/each}
 {/snippet}
 
 {#if !appState.initialized}
@@ -384,7 +466,7 @@
 					<h1>
 						{#if titleBlock}
 							{#each segmentsByBlock.get(titleBlock.id) ?? [] as segment (segment.id)}
-								{@render renderSegment(segment)}
+								{@render renderSegment(titleBlock, segment)}
 							{/each}
 						{:else}
 							{book.title}
@@ -396,50 +478,108 @@
 					</p>
 				</header>
 
-				{#each book.blocks as block (block.id)}
-					{@const blockSegments = segmentsByBlock.get(block.id) ?? []}
-					{@const pageLabel = block.anchor.page ? 'Page ' + block.anchor.page : ''}
-					{#if block.id === titleBlock?.id}
-						<!-- The level-one title is rendered in the document heading above. -->
-					{:else if block.kind === 'heading'}
-						<section class="document-section" id={block.id}>
-							{#if pageLabel}<span class="page-anchor">{pageLabel}</span>{/if}
-							{#if (block.level ?? 2) <= 2}
-								<h2>
-									{#each blockSegments as segment (segment.id)}
-										{@render renderSegment(segment)}
+				<div class="document-body">
+					{#each readingFlow as node (node.key)}
+						{#if node.type === 'list'}
+							{#if node.ordered}
+								<ol class="document-list" style:--list-depth={node.depth} start={node.start}>
+									{#each node.items as block (block.id)}
+										<li id={block.id}>
+											{#each segmentsByBlock.get(block.id) ?? [] as segment (segment.id)}
+												{@render renderSegment(block, segment)}
+											{/each}
+										</li>
 									{/each}
-								</h2>
+								</ol>
 							{:else}
-								<h3>
-									{#each blockSegments as segment (segment.id)}
-										{@render renderSegment(segment)}
+								<ul
+									class="document-list"
+									class:task-list={node.items.some((item) => item.list?.checked !== undefined)}
+									style:--list-depth={node.depth}
+								>
+									{#each node.items as block (block.id)}
+										<li id={block.id} class:task-item={block.list?.checked !== undefined}>
+											{#if block.list?.checked !== undefined}
+												<span class="task-marker" aria-hidden="true"
+													>{block.list.checked ? '✓' : ''}</span
+												>
+												<span class="sr-only"
+													>{block.list.checked ? 'Completed: ' : 'Not completed: '}</span
+												>
+											{/if}
+											{#each segmentsByBlock.get(block.id) ?? [] as segment (segment.id)}
+												{@render renderSegment(block, segment)}
+											{/each}
+										</li>
 									{/each}
-								</h3>
+								</ul>
 							{/if}
-						</section>
-					{:else if block.kind === 'code'}
-						<pre id={block.id}><code>{block.text}</code></pre>
-					{:else if block.kind === 'quote'}
-						<blockquote id={block.id}>
-							{#each blockSegments as segment (segment.id)}
-								{@render renderSegment(segment)}
-							{/each}
-						</blockquote>
-					{:else if block.kind === 'list-item'}
-						<p class="list-item" id={block.id}>
-							{#each blockSegments as segment (segment.id)}
-								{@render renderSegment(segment)}
-							{/each}
-						</p>
-					{:else}
-						<p id={block.id}>
-							{#each blockSegments as segment (segment.id)}
-								{@render renderSegment(segment)}
-							{/each}
-						</p>
-					{/if}
-				{/each}
+						{:else}
+							{@const block = node.block}
+							{@const blockSegments = segmentsByBlock.get(block.id) ?? []}
+							{@const pageLabel = block.anchor.page ? 'Page ' + block.anchor.page : ''}
+							{#if block.kind === 'heading'}
+								<section class="document-section" id={block.id}>
+									{#if pageLabel}<span class="page-anchor">{pageLabel}</span>{/if}
+									<svelte:element this={headingTag(block)}>
+										{#each blockSegments as segment (segment.id)}
+											{@render renderSegment(block, segment)}
+										{/each}
+									</svelte:element>
+								</section>
+							{:else if block.kind === 'frontmatter'}
+								<details class="document-metadata" id={block.id}>
+									<summary>Document metadata</summary>
+									<pre><code>{block.text}</code></pre>
+								</details>
+							{:else if block.kind === 'code'}
+								<figure class="code-block" id={block.id}>
+									{#if block.codeLanguage}<figcaption>{block.codeLanguage}</figcaption>{/if}
+									<pre><code>{block.text}</code></pre>
+								</figure>
+							{:else if block.kind === 'quote'}
+								<blockquote id={block.id}>
+									{#each blockSegments as segment (segment.id)}
+										{@render renderSegment(block, segment)}
+									{/each}
+								</blockquote>
+							{:else if block.kind === 'table' && block.table}
+								<div class="table-region" id={block.id} role="region" aria-label="Document table">
+									<table>
+										<thead>
+											<tr>
+												{#each block.table.header as cell, index (index)}
+													<th scope="col" style:text-align={block.table.align[index] ?? undefined}>
+														{@render renderCell(cell)}
+													</th>
+												{/each}
+											</tr>
+										</thead>
+										<tbody>
+											{#each block.table.rows as row, rowIndex (rowIndex)}
+												<tr>
+													{#each row as cell, index (index)}
+														<td style:text-align={block.table.align[index] ?? undefined}>
+															{@render renderCell(cell)}
+														</td>
+													{/each}
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{:else if block.kind === 'divider'}
+								<hr id={block.id} />
+							{:else}
+								<p id={block.id}>
+									{#each blockSegments as segment (segment.id)}
+										{@render renderSegment(block, segment)}
+									{/each}
+								</p>
+							{/if}
+						{/if}
+					{/each}
+				</div>
 			</article>
 
 			{#if !player.autoFollow}
@@ -983,27 +1123,35 @@
 	}
 
 	.reading-canvas {
-		width: min(820px, 100%);
+		--reader-ink: #d8d6d0;
+		--reader-ink-strong: #f4f1e9;
+		--reader-quiet: #8f919b;
+		--reader-link: #aaa0f4;
+		--reader-rule: rgba(31, 32, 38, 0.14);
+		--reader-code-soft: rgba(31, 32, 38, 0.065);
+		width: min(900px, 100%);
 		min-height: 0;
 		margin: 0 auto;
 		overflow-y: auto;
+		overflow-x: hidden;
 		overscroll-behavior: contain;
 		scrollbar-gutter: stable;
-		padding: 54px clamp(42px, 6vw, 78px) 80px;
+		padding: 58px clamp(48px, 7vw, 92px) 92px;
 		border-radius: 7px 7px 0 0;
 		background: var(--reader);
-		color: #d9d8d4;
+		color: var(--reader-ink);
 		font-family: var(--font-reading);
-		font-size: clamp(1.02rem, 1.1vw, 1.15rem);
+		font-size: clamp(1.04rem, 1vw, 1.16rem);
 		font-variation-settings: 'opsz' 20;
-		line-height: 1.75;
+		line-height: 1.72;
 		flex: 1 1 auto;
 	}
 
 	.document-heading {
-		margin-bottom: 44px;
-		padding-bottom: 25px;
-		border-bottom: 1px solid var(--line);
+		max-width: 70ch;
+		margin: 0 auto 50px;
+		padding-bottom: 28px;
+		border-bottom: 1px solid var(--reader-rule);
 	}
 
 	.document-heading > span,
@@ -1017,32 +1165,42 @@
 
 	.document-heading h1 {
 		max-width: 24ch;
-		margin: 11px 0 13px;
-		color: var(--text);
-		font-size: clamp(2rem, 3.4vw, 3.2rem);
-		font-weight: 520;
+		margin: 13px 0 15px;
+		color: var(--reader-ink-strong);
+		font-size: clamp(2.15rem, 3.2vw, 3.15rem);
+		font-weight: 540;
 		letter-spacing: -0.04em;
-		line-height: 1.02;
+		line-height: 1.04;
 	}
 
 	.document-heading > p {
 		margin: 0;
 	}
 
-	.reading-canvas > p,
-	.reading-canvas blockquote {
+	.document-body {
+		max-width: 70ch;
+		margin: 0 auto;
+	}
+
+	.document-body > p,
+	.document-body blockquote,
+	.document-list {
 		margin: 0 0 1.22em;
 	}
 
 	.document-section {
 		position: relative;
-		margin: 2.35em 0 0.85em;
+		margin: 2.75em 0 0.9em;
+		scroll-margin-top: 1.5rem;
 	}
 
 	.document-section h2,
-	.document-section h3 {
+	.document-section h3,
+	.document-section h4,
+	.document-section h5,
+	.document-section h6 {
 		margin: 0;
-		color: var(--text);
+		color: var(--reader-ink-strong);
 		font-weight: 560;
 		letter-spacing: -0.025em;
 	}
@@ -1053,8 +1211,19 @@
 	}
 
 	.document-section h3 {
-		font-size: 1.14em;
+		font-size: 1.22em;
 		line-height: 1.25;
+	}
+
+	.document-section h4,
+	.document-section h5,
+	.document-section h6 {
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.82em;
+		font-weight: 690;
+		letter-spacing: 0.035em;
+		line-height: 1.35;
+		text-transform: uppercase;
 	}
 
 	.page-anchor {
@@ -1069,33 +1238,157 @@
 	}
 
 	.reading-canvas blockquote {
-		padding-left: 18px;
-		border-left: 2px solid var(--primary);
-		color: #cbc8d2;
+		padding: 0.1em 0 0.1em 1.25em;
+		border-left: 2px solid color-mix(in srgb, var(--primary) 68%, transparent);
+		color: color-mix(in srgb, var(--reader-ink) 88%, var(--primary));
 		font-style: italic;
 	}
 
-	.reading-canvas pre {
+	.code-block,
+	.document-metadata {
+		margin: 1.8em 0;
+	}
+
+	.code-block {
+		position: relative;
+	}
+
+	.code-block figcaption {
+		position: absolute;
+		top: 10px;
+		right: 13px;
+		z-index: 1;
+		color: var(--reader-quiet);
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.58em;
+		font-weight: 680;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.code-block pre,
+	.document-metadata pre {
 		overflow: auto;
-		margin: 1.7em 0;
-		padding: 16px 18px;
-		border-radius: 6px;
-		background: #101116;
+		margin: 0;
+		padding: 17px 19px;
+		border-radius: 5px;
+		background: color-mix(in srgb, var(--reader) 88%, #000);
+		color: var(--reader-ink);
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 0.66em;
 		line-height: 1.55;
 	}
 
-	.list-item {
-		position: relative;
-		padding-left: 1.2em;
+	.document-metadata {
+		border-top: 1px solid var(--reader-rule);
+		border-bottom: 1px solid var(--reader-rule);
 	}
 
-	.list-item::before {
+	.document-metadata summary {
+		padding: 10px 0;
+		color: var(--reader-quiet);
+		cursor: pointer;
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.68em;
+		font-weight: 630;
+		letter-spacing: 0.04em;
+	}
+
+	.document-metadata pre {
+		margin-bottom: 12px;
+	}
+
+	.document-list {
+		padding-left: calc(1.35em + var(--list-depth, 0) * 1.15em);
+	}
+
+	.document-list li {
+		padding-left: 0.22em;
+		margin-bottom: 0.38em;
+	}
+
+	.document-list li::marker {
+		color: color-mix(in srgb, var(--primary) 72%, var(--reader-ink));
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.78em;
+		font-weight: 680;
+	}
+
+	.document-list.task-list {
+		padding-left: calc(0.1em + var(--list-depth, 0) * 1.15em);
+		list-style: none;
+	}
+
+	.task-item {
+		position: relative;
+		padding-left: 1.55em !important;
+	}
+
+	.task-marker {
 		position: absolute;
+		top: 0.44em;
 		left: 0;
+		display: grid;
+		width: 0.95em;
+		height: 0.95em;
+		place-items: center;
+		border: 1px solid color-mix(in srgb, var(--reader-quiet) 58%, transparent);
+		border-radius: 0.2em;
 		color: var(--primary);
-		content: '•';
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.72em;
+		font-style: normal;
+		line-height: 1;
+	}
+
+	.table-region {
+		overflow-x: auto;
+		margin: 2em 0;
+		border-top: 1px solid var(--reader-rule);
+		border-bottom: 1px solid var(--reader-rule);
+	}
+
+	.table-region table {
+		width: 100%;
+		border-collapse: collapse;
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.73em;
+		line-height: 1.55;
+	}
+
+	.table-region th,
+	.table-region td {
+		min-width: 8rem;
+		padding: 0.75rem 0.8rem;
+		border-bottom: 1px solid var(--reader-rule);
+		vertical-align: top;
+	}
+
+	.table-region th {
+		color: var(--reader-ink-strong);
+		font-size: 0.88em;
+		font-weight: 680;
+		letter-spacing: 0.025em;
+	}
+
+	.table-region tbody tr:last-child td {
+		border-bottom: 0;
+	}
+
+	.document-body hr {
+		width: 3.5rem;
+		height: 1px;
+		margin: 3.2em auto;
+		border: 0;
+		background: var(--reader-rule);
+	}
+
+	.document-body p,
+	.document-body li,
+	.document-body blockquote,
+	.table-region td,
+	.table-region th {
+		overflow-wrap: anywhere;
 	}
 
 	.speech-segment {
@@ -1112,10 +1405,14 @@
 		color: #f3f1fb;
 	}
 
-	.active-word {
-		background: transparent;
-		box-shadow: inset 0 -0.16em rgba(168, 157, 246, 0.74);
-		color: white;
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		clip-path: inset(50%);
 	}
 
 	.return-follow {

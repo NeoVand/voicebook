@@ -5,16 +5,36 @@ import { unified } from 'unified';
 import { segmentBlocks } from './segmenter';
 import type {
 	BlockKind,
+	DocumentTable,
 	DocumentBlock,
 	DocumentKind,
+	InlineMark,
+	InlineRun,
 	NormalizedDocument,
-	OutlineEntry
+	OutlineEntry,
+	SourceAnchor,
+	TableAlignment,
+	TableCell
 } from './types';
+
+export const DOCUMENT_NORMALIZATION_VERSION = 2;
 
 interface AstNode {
 	type: string;
 	value?: string;
 	depth?: number;
+	lang?: string;
+	ordered?: boolean;
+	start?: number | null;
+	checked?: boolean | null;
+	align?: TableAlignment[];
+	url?: string;
+	title?: string;
+	alt?: string;
+	position?: {
+		start?: { offset?: number };
+		end?: { offset?: number };
+	};
 	children?: AstNode[];
 }
 
@@ -75,58 +95,265 @@ function block(
 	index: number,
 	extras: Partial<DocumentBlock> = {}
 ): DocumentBlock {
+	const normalizedText = text
+		.replace(/[ \t]+\n/g, '\n')
+		.replace(/\n{3,}/g, '\n\n')
+		.trim();
 	return {
 		id: `b${index}`,
 		kind,
-		text: text
-			.replace(/[ \t]+\n/g, '\n')
-			.replace(/\n{3,}/g, '\n\n')
-			.trim(),
-		speak: kind !== 'code' && kind !== 'page-break',
+		text: normalizedText,
+		speak: !['code', 'frontmatter', 'divider', 'page-break'].includes(kind),
 		anchor: {},
 		...extras
 	};
 }
 
-function textFromAst(node: AstNode): string {
-	if (typeof node.value === 'string') return node.value;
-	return (node.children ?? [])
-		.map(textFromAst)
-		.join(node.type === 'paragraph' ? '' : ' ')
-		.replace(/\s+/g, ' ')
-		.trim();
+function sameRun(left: InlineRun, right: InlineRun): boolean {
+	return (
+		left.href === right.href &&
+		left.title === right.title &&
+		(left.marks ?? []).join(':') === (right.marks ?? []).join(':')
+	);
 }
 
-function markdownBlocks(markdown: string): DocumentBlock[] {
-	const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown) as AstNode;
-	const blocks: DocumentBlock[] = [];
-	const add = (kind: BlockKind, text: string, extras: Partial<DocumentBlock> = {}) => {
-		if (text.trim()) blocks.push(block(kind, text, blocks.length, extras));
+function normalizeRuns(runs: InlineRun[]): InlineRun[] {
+	const normalized: InlineRun[] = [];
+	for (const run of runs) {
+		const candidate = { ...run, text: run.text.replace(/\s+/g, ' ') };
+		if (!candidate.text) continue;
+		const previous = normalized.at(-1);
+		if (previous && sameRun(previous, candidate)) previous.text += candidate.text;
+		else normalized.push(candidate);
+	}
+	if (normalized[0]) normalized[0].text = normalized[0].text.trimStart();
+	if (normalized.at(-1)) normalized[normalized.length - 1].text = normalized.at(-1)!.text.trimEnd();
+	return normalized.filter((run) => run.text.length > 0);
+}
+
+function safeHref(value?: string): string | undefined {
+	if (!value) return undefined;
+	if (value.startsWith('#')) return value;
+	try {
+		const url = new URL(value);
+		return ['http:', 'https:', 'mailto:'].includes(url.protocol) ? url.href : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function run(
+	text: string,
+	marks: InlineMark[],
+	link?: Pick<InlineRun, 'href' | 'title'>
+): InlineRun {
+	return {
+		text,
+		...(marks.length ? { marks } : {}),
+		...(link?.href ? { href: link.href } : {}),
+		...(link?.title ? { title: link.title } : {})
 	};
+}
+
+function inlineRuns(
+	node: AstNode,
+	marks: InlineMark[] = [],
+	link?: Pick<InlineRun, 'href' | 'title'>
+): InlineRun[] {
+	if (node.type === 'text') return [run(node.value ?? '', marks, link)];
+	if (node.type === 'inlineCode') return [run(node.value ?? '', [...marks, 'code'], link)];
+	if (node.type === 'break') return [run(' ', marks, link)];
+	if (node.type === 'image') {
+		const text = node.alt?.trim();
+		return text ? [run(text, [...marks, 'emphasis'], link)] : [];
+	}
+	if (node.type === 'html') return [run(node.value ?? '', [...marks, 'code'], link)];
+
+	let nextMarks = marks;
+	if (node.type === 'strong') nextMarks = [...marks, 'strong'];
+	else if (node.type === 'emphasis') nextMarks = [...marks, 'emphasis'];
+	else if (node.type === 'delete') nextMarks = [...marks, 'delete'];
+	const nextLink =
+		node.type === 'link'
+			? {
+					href: safeHref(node.url),
+					title: node.title?.trim() || undefined
+				}
+			: link;
+	return (node.children ?? []).flatMap((child) => inlineRuns(child, nextMarks, nextLink));
+}
+
+function runsForBlocks(nodes: AstNode[]): InlineRun[] {
+	const runs: InlineRun[] = [];
+	for (const node of nodes) {
+		const candidate = inlineRuns(node);
+		if (candidate.length && runs.length) runs.push({ text: ' ' });
+		runs.push(...candidate);
+	}
+	return normalizeRuns(runs);
+}
+
+function anchorFor(node: AstNode, offsetBase: number): SourceAnchor {
+	const start = node.position?.start?.offset;
+	const end = node.position?.end?.offset;
+	return {
+		start: start === undefined ? undefined : offsetBase + start,
+		end: end === undefined ? undefined : offsetBase + end
+	};
+}
+
+interface FrontmatterResult {
+	content: string;
+	offset: number;
+	raw?: string;
+	language?: 'yaml' | 'toml';
+	title?: string;
+}
+
+function frontmatterFrom(markdown: string): FrontmatterResult {
+	const bomLength = markdown.startsWith('\uFEFF') ? 1 : 0;
+	const source = markdown.slice(bomLength);
+	const delimiter =
+		source.startsWith('---\n') || source.startsWith('---\r\n')
+			? '---'
+			: source.startsWith('+++\n') || source.startsWith('+++\r\n')
+				? '+++'
+				: undefined;
+	if (!delimiter) return { content: source, offset: bomLength };
+	const escaped = delimiter === '+++' ? '\\+\\+\\+' : '---';
+	const match = new RegExp(
+		`^${escaped}[ \\t]*\\r?\\n([\\s\\S]*?)\\r?\\n${escaped}[ \\t]*(?:\\r?\\n|$)`
+	).exec(source);
+	if (!match) return { content: source, offset: bomLength };
+	const raw = match[1].trim();
+	const titlePattern = delimiter === '---' ? /^title\s*:\s*(.+)$/im : /^title\s*=\s*(.+)$/im;
+	const title = titlePattern
+		.exec(raw)?.[1]
+		?.trim()
+		.replace(/^(['"])(.*)\1$/, '$2');
+	return {
+		content: source.slice(match[0].length),
+		offset: bomLength + match[0].length,
+		raw,
+		language: delimiter === '---' ? 'yaml' : 'toml',
+		title
+	};
+}
+
+function tableCell(node: AstNode): TableCell {
+	const inlines = normalizeRuns(inlineRuns(node));
+	return { text: inlines.map((run) => run.text).join(''), inlines };
+}
+
+function parseMarkdown(markdown: string): ParsedSource {
+	const frontmatter = frontmatterFrom(markdown);
+	const tree = unified().use(remarkParse).use(remarkGfm).parse(frontmatter.content) as AstNode;
+	const blocks: DocumentBlock[] = [];
+	const add = (
+		kind: BlockKind,
+		text: string,
+		extras: Partial<DocumentBlock> = {},
+		allowEmpty = false
+	) => {
+		if (text.trim() || allowEmpty) blocks.push(block(kind, text, blocks.length, extras));
+	};
+	const addInlineBlock = (
+		kind: BlockKind,
+		node: AstNode,
+		nodes: AstNode[] = [node],
+		extras: Partial<DocumentBlock> = {}
+	) => {
+		const inlines = runsForBlocks(nodes);
+		add(kind, inlines.map((run) => run.text).join(''), {
+			inlines,
+			anchor: anchorFor(node, frontmatter.offset),
+			...extras
+		});
+	};
+	const addList = (node: AstNode, depth: number) => {
+		const ordered = Boolean(node.ordered);
+		const start = ordered ? (node.start ?? 1) : undefined;
+		(node.children ?? []).forEach((item, index) => {
+			const directChildren = (item.children ?? []).filter((child) => child.type !== 'list');
+			addInlineBlock('list-item', item, directChildren, {
+				list: {
+					ordered,
+					depth,
+					index,
+					start,
+					checked: typeof item.checked === 'boolean' ? item.checked : undefined
+				}
+			});
+			for (const child of item.children ?? []) if (child.type === 'list') addList(child, depth + 1);
+		});
+	};
+
+	if (frontmatter.raw !== undefined) {
+		add('frontmatter', frontmatter.raw, {
+			codeLanguage: frontmatter.language,
+			anchor: { start: 0, end: frontmatter.offset },
+			speak: false
+		});
+	}
 
 	for (const node of tree.children ?? []) {
 		switch (node.type) {
 			case 'heading':
-				add('heading', textFromAst(node), { level: node.depth ?? 2 });
+				addInlineBlock('heading', node, [node], { level: node.depth ?? 2 });
 				break;
 			case 'paragraph':
-				add('paragraph', textFromAst(node));
+				addInlineBlock('paragraph', node);
 				break;
 			case 'blockquote':
-				add('quote', textFromAst(node));
+				addInlineBlock('quote', node, node.children ?? []);
 				break;
 			case 'code':
-				add('code', node.value ?? '');
+				add('code', node.value ?? '', {
+					codeLanguage: node.lang?.trim() || undefined,
+					anchor: anchorFor(node, frontmatter.offset)
+				});
 				break;
 			case 'list':
-				for (const item of node.children ?? []) add('list-item', textFromAst(item));
+				addList(node, 0);
+				break;
+			case 'table': {
+				const [header, ...rows] = (node.children ?? []).map((row) =>
+					(row.children ?? []).map(tableCell)
+				);
+				const table: DocumentTable = {
+					align: node.align ?? [],
+					header: header ?? [],
+					rows
+				};
+				const text = [table.header, ...table.rows]
+					.map((row) =>
+						row
+							.map((cell) => cell.text)
+							.filter(Boolean)
+							.join(', ')
+					)
+					.filter(Boolean)
+					.join('. ');
+				add('table', text, { table, anchor: anchorFor(node, frontmatter.offset) });
+				break;
+			}
+			case 'thematicBreak':
+				add('divider', '', { anchor: anchorFor(node, frontmatter.offset), speak: false }, true);
 				break;
 			case 'html':
-				add('code', node.value ?? '');
+				add('code', node.value ?? '', {
+					codeLanguage: 'html',
+					anchor: anchorFor(node, frontmatter.offset)
+				});
 				break;
 		}
 	}
-	return blocks;
+	return {
+		blocks,
+		title:
+			blocks.find((candidate) => candidate.kind === 'heading' && candidate.level === 1)?.text ||
+			frontmatter.title
+	};
 }
 
 function textBlocks(text: string): DocumentBlock[] {
@@ -325,14 +552,7 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 	else if (sourceKind === 'docx') parsed = await parseDocx(file);
 	else {
 		const text = await file.text();
-		const blocks = sourceKind === 'markdown' ? markdownBlocks(text) : textBlocks(text);
-		parsed = {
-			blocks,
-			title:
-				sourceKind === 'markdown'
-					? blocks.find((block) => block.kind === 'heading' && block.level === 1)?.text
-					: undefined
-		};
+		parsed = sourceKind === 'markdown' ? parseMarkdown(text) : { blocks: textBlocks(text) };
 	}
 
 	if (!parsed.blocks.length)
@@ -341,6 +561,7 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 	const id = crypto.randomUUID();
 	const blocks = parsed.blocks.map((candidate, index) => ({ ...candidate, id: `b${index}` }));
 	return {
+		normalizationVersion: DOCUMENT_NORMALIZATION_VERSION,
 		id,
 		fingerprint: await fingerprint(file),
 		title: parsed.title || titleFromName(file.name),
@@ -364,6 +585,7 @@ export function documentFromText(title: string, text: string): NormalizedDocumen
 	const blocks = textBlocks(text);
 	const id = crypto.randomUUID();
 	return {
+		normalizationVersion: DOCUMENT_NORMALIZATION_VERSION,
 		id,
 		fingerprint: `pasted-${id}`,
 		title: title.trim() || 'Pasted text',

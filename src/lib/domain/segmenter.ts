@@ -107,7 +107,11 @@ export function segmentBlocks(blocks: DocumentBlock[], includeCode = false): Spe
 					end: start + text.length,
 					words: wordsFor(text),
 					estimatedDuration: estimateDuration(text),
-					anchor: { ...block.anchor, start, end: start + text.length }
+					anchor: {
+						...block.anchor,
+						start: (block.anchor.start ?? 0) + start,
+						end: (block.anchor.start ?? 0) + start + text.length
+					}
 				});
 			}
 		}

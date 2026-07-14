@@ -22,10 +22,45 @@ test('reader workspace visual baseline', async ({ page }, testInfo) => {
 		name: 'quiet-machine.md',
 		mimeType: 'text/markdown',
 		buffer: Buffer.from(
-			'# The Quiet Machine\n\nA local reader should feel calm, immediate, and precise. Every control should earn its place.\n\n## A deliberate beginning\n\nThe page stays centered while the outline and player remain exactly where you expect them.\n\n## Listening without friction\n\nSpeech is prepared one passage at a time, with the next passages buffered quietly in the background.'
+			[
+				'---',
+				'title: The Quiet Machine',
+				'category: Private listening',
+				'---',
+				'',
+				'# The Quiet Machine',
+				'',
+				'A local reader should feel **calm**, *immediate*, and precise. Every control should earn its place, and every [private link](https://example.com) should remain safe.',
+				'',
+				'> The reading surface should feel like a beautifully typeset page, not another dashboard card.',
+				'',
+				'## A deliberate beginning',
+				'',
+				'- [x] Preserve document structure',
+				'- [ ] Keep the controls quiet',
+				'',
+				'### Structured details',
+				'',
+				'| Capability | Behavior |',
+				'| :--- | ---: |',
+				'| Storage | Local only |',
+				'| Speech | One passage at a time |',
+				'',
+				'```ts',
+				'const privateByDefault = true;',
+				'```'
+			].join('\n')
 		)
 	});
 	await expect(page.getByRole('heading', { name: 'The Quiet Machine', exact: true })).toBeVisible();
+	await expect(page.getByText('Document metadata')).toBeVisible();
+	await expect(page.getByRole('link', { name: 'private link' })).toHaveAttribute(
+		'href',
+		'https://example.com/'
+	);
+	await expect(page.getByRole('list')).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Document table' })).toBeAttached();
+	await expect(page.locator('figure.code-block')).toContainText('const privateByDefault = true;');
 	await expect(page).toHaveScreenshot(`reader-workspace-${testInfo.project.name}.png`, {
 		fullPage: true,
 		animations: 'disabled'

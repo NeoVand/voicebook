@@ -1,5 +1,44 @@
 export type DocumentKind = 'pdf' | 'docx' | 'markdown' | 'text';
-export type BlockKind = 'heading' | 'paragraph' | 'list-item' | 'quote' | 'code' | 'page-break';
+export type BlockKind =
+	| 'heading'
+	| 'paragraph'
+	| 'list-item'
+	| 'quote'
+	| 'code'
+	| 'frontmatter'
+	| 'table'
+	| 'divider'
+	| 'page-break';
+
+export type InlineMark = 'strong' | 'emphasis' | 'delete' | 'code';
+
+export interface InlineRun {
+	text: string;
+	marks?: InlineMark[];
+	href?: string;
+	title?: string;
+}
+
+export interface ListMetadata {
+	ordered: boolean;
+	depth: number;
+	index: number;
+	start?: number;
+	checked?: boolean;
+}
+
+export type TableAlignment = 'left' | 'center' | 'right' | null;
+
+export interface TableCell {
+	text: string;
+	inlines: InlineRun[];
+}
+
+export interface DocumentTable {
+	align: TableAlignment[];
+	header: TableCell[];
+	rows: TableCell[][];
+}
 
 export interface SourceAnchor {
 	page?: number;
@@ -19,6 +58,10 @@ export interface DocumentBlock {
 	kind: BlockKind;
 	text: string;
 	level?: number;
+	inlines?: InlineRun[];
+	list?: ListMetadata;
+	codeLanguage?: string;
+	table?: DocumentTable;
 	speak: boolean;
 	anchor: SourceAnchor;
 }
@@ -61,6 +104,7 @@ export interface Bookmark {
 }
 
 export interface NormalizedDocument {
+	normalizationVersion?: number;
 	id: string;
 	fingerprint: string;
 	title: string;
