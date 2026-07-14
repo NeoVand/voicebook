@@ -5,6 +5,7 @@
 	import cpp from 'highlight.js/lib/languages/cpp';
 	import csharp from 'highlight.js/lib/languages/csharp';
 	import css from 'highlight.js/lib/languages/css';
+	import diff from 'highlight.js/lib/languages/diff';
 	import go from 'highlight.js/lib/languages/go';
 	import java from 'highlight.js/lib/languages/java';
 	import javascript from 'highlight.js/lib/languages/javascript';
@@ -12,6 +13,7 @@
 	import markdown from 'highlight.js/lib/languages/markdown';
 	import python from 'highlight.js/lib/languages/python';
 	import rust from 'highlight.js/lib/languages/rust';
+	import ruby from 'highlight.js/lib/languages/ruby';
 	import sql from 'highlight.js/lib/languages/sql';
 	import typescript from 'highlight.js/lib/languages/typescript';
 	import xml from 'highlight.js/lib/languages/xml';
@@ -22,6 +24,7 @@
 	hljs.registerLanguage('cpp', cpp);
 	hljs.registerLanguage('csharp', csharp);
 	hljs.registerLanguage('css', css);
+	hljs.registerLanguage('diff', diff);
 	hljs.registerLanguage('go', go);
 	hljs.registerLanguage('java', java);
 	hljs.registerLanguage('javascript', javascript);
@@ -29,6 +32,7 @@
 	hljs.registerLanguage('markdown', markdown);
 	hljs.registerLanguage('python', python);
 	hljs.registerLanguage('rust', rust);
+	hljs.registerLanguage('ruby', ruby);
 	hljs.registerLanguage('sql', sql);
 	hljs.registerLanguage('typescript', typescript);
 	hljs.registerLanguage('xml', xml);
@@ -175,7 +179,7 @@
 
 	code :global(.hljs-comment),
 	code :global(.hljs-quote) {
-		color: var(--reader-quiet);
+		color: var(--code-comment, var(--reader-quiet));
 		font-style: italic;
 	}
 
@@ -185,10 +189,10 @@
 	code :global(.hljs-name),
 	code :global(.hljs-tag) {
 		color: var(--code-keyword, var(--primary));
+		font-weight: 620;
 	}
 
 	code :global(.hljs-string),
-	code :global(.hljs-title),
 	code :global(.hljs-section),
 	code :global(.hljs-attribute),
 	code :global(.hljs-literal),
@@ -196,6 +200,25 @@
 	code :global(.hljs-template-variable),
 	code :global(.hljs-type) {
 		color: var(--code-string, var(--bookmark));
+	}
+
+	code :global(.hljs-title),
+	code :global(.hljs-title.function_),
+	code :global(.hljs-title.class_),
+	code :global(.hljs-function) {
+		color: var(--code-function, var(--reader-link));
+		font-weight: 650;
+	}
+
+	code :global(.hljs-property),
+	code :global(.hljs-attr),
+	code :global(.hljs-params) {
+		color: var(--code-property, var(--reader-ink));
+	}
+
+	code :global(.hljs-operator),
+	code :global(.hljs-punctuation) {
+		color: var(--code-operator, var(--reader-quiet));
 	}
 
 	code :global(.hljs-number),
@@ -207,9 +230,17 @@
 		color: var(--code-number, var(--reader-link));
 	}
 
-	code :global(.hljs-meta),
-	code :global(.hljs-deletion),
-	code :global(.hljs-addition) {
+	code :global(.hljs-meta) {
 		color: var(--reader-link);
+	}
+
+	code :global(.hljs-addition) {
+		background: var(--code-addition-bg, rgba(73, 161, 111, 0.12));
+		color: var(--code-addition, #7ccf9c);
+	}
+
+	code :global(.hljs-deletion) {
+		background: var(--code-deletion-bg, rgba(206, 86, 86, 0.12));
+		color: var(--code-deletion, #ef9a9a);
 	}
 </style>

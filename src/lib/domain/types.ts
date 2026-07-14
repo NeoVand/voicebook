@@ -2,22 +2,43 @@ export type DocumentKind = 'pdf' | 'docx' | 'markdown' | 'text';
 export type BlockKind =
 	| 'heading'
 	| 'paragraph'
+	| 'list'
 	| 'list-item'
 	| 'quote'
+	| 'alert'
+	| 'details'
+	| 'definition-list'
+	| 'definition-term'
+	| 'definition-description'
 	| 'code'
 	| 'math'
 	| 'footnote'
+	| 'html'
 	| 'frontmatter'
 	| 'table'
 	| 'divider'
 	| 'page-break';
 
-export type InlineMark = 'strong' | 'emphasis' | 'delete' | 'code';
+export type InlineMark =
+	'strong' | 'emphasis' | 'delete' | 'code' | 'sub' | 'sup' | 'mark' | 'kbd' | 'abbr';
+
+export interface InlineImage {
+	src?: string;
+	alt: string;
+	title?: string;
+}
+
+export interface InlineProgress {
+	value: number;
+	max: number;
+}
 
 export interface InlineRun {
 	text: string;
 	marks?: InlineMark[];
 	math?: boolean;
+	image?: InlineImage;
+	progress?: InlineProgress;
 	href?: string;
 	title?: string;
 }
@@ -28,7 +49,42 @@ export interface ListMetadata {
 	index: number;
 	start?: number;
 	checked?: boolean;
+	spread?: boolean;
 }
+
+export type AlertKind = 'note' | 'tip' | 'important' | 'warning' | 'caution';
+
+export type SafeHtmlTag =
+	| 'p'
+	| 'div'
+	| 'span'
+	| 'strong'
+	| 'em'
+	| 'del'
+	| 'sub'
+	| 'sup'
+	| 'mark'
+	| 'kbd'
+	| 'abbr'
+	| 'a'
+	| 'img'
+	| 'br'
+	| 'table'
+	| 'thead'
+	| 'tbody'
+	| 'tr'
+	| 'th'
+	| 'td'
+	| 'progress';
+
+export type SafeHtmlNode =
+	| { type: 'text'; text: string }
+	| {
+			type: 'element';
+			tag: SafeHtmlTag;
+			attributes?: Record<string, string | number | boolean>;
+			children: SafeHtmlNode[];
+	  };
 
 export type TableAlignment = 'left' | 'center' | 'right' | null;
 
@@ -60,13 +116,18 @@ export interface DocumentBlock {
 	id: string;
 	kind: BlockKind;
 	text: string;
+	parentId?: string;
+	children?: string[];
 	level?: number;
 	inlines?: InlineRun[];
 	list?: ListMetadata;
+	alertKind?: AlertKind;
+	detailsSummary?: string;
 	codeLanguage?: string;
 	footnoteId?: string;
 	footnoteLabel?: string;
 	table?: DocumentTable;
+	html?: SafeHtmlNode[];
 	speak: boolean;
 	anchor: SourceAnchor;
 }
