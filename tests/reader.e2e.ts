@@ -1,0 +1,116 @@
+import AxeBuilder from '@axe-core/playwright';
+import { expect, test } from '@playwright/test';
+import { installFakeTts } from './helpers';
+
+test.beforeEach(async ({ page }) => {
+	await installFakeTts(page);
+});
+
+test('import → install → play → seek → bookmark → reload → offline reopen', async ({
+	page,
+	context
+}) => {
+	await page.goto('./');
+	await expect(page.getByRole('heading', { name: 'Library', exact: true })).toBeVisible();
+	const emptyA11y = await new AxeBuilder({ page }).analyze();
+	expect(
+		emptyA11y.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))
+	).toEqual([]);
+
+	await page.getByRole('link', { name: 'Voice', exact: true }).click();
+	await page.getByRole('checkbox', { name: 'I have reviewed the terms' }).check();
+	await page.getByRole('button', { name: 'Install locally' }).click();
+	await page.getByRole('link', { name: 'Library', exact: true }).click();
+	await page.getByRole('button', { name: 'Paste text' }).click();
+	await page.getByLabel('Title').fill('The Quiet Machine');
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill(
+			'Voicebook reads each sentence clearly. The next sentence creates a useful seek target. A final sentence makes resume behavior visible.'
+		);
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
+
+	await expect(page.getByRole('button', { name: 'Play' })).toBeEnabled();
+	await page.getByRole('button', { name: 'Reading options' }).click();
+	await expect(page.getByRole('menuitem', { name: /Prepare whole document/ })).toBeVisible();
+	await page.getByRole('button', { name: 'Reading options' }).click();
+	await page.getByRole('button', { name: 'Play' }).click();
+	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+	await page.getByLabel('Playback speed').selectOption('1.5');
+	await expect(page.getByLabel('Playback speed')).toHaveValue('1.5');
+	await page.getByRole('button', { name: 'Add bookmark' }).click();
+	await expect(page.getByRole('button', { name: 'Remove bookmark' })).toBeVisible();
+	await expect
+		.poll(() =>
+			page.evaluate(
+				() =>
+					new Promise<number>((resolve, reject) => {
+						const request = indexedDB.open('voicebook-v1');
+						request.onerror = () => reject(request.error);
+						request.onsuccess = () => {
+							const transaction = request.result.transaction('documents');
+							const documents = transaction.objectStore('documents').getAll();
+							documents.onerror = () => reject(documents.error);
+							documents.onsuccess = () => resolve(documents.result[0]?.bookmarks?.length ?? 0);
+						};
+					})
+			)
+		)
+		.toBe(1);
+	await page.getByRole('button', { name: 'Forward 10 seconds' }).click();
+
+	await page.reload();
+	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open bookmarks' }).click();
+	await expect(page.getByText('1 saved')).toBeVisible();
+	const readerA11y = await new AxeBuilder({ page }).analyze();
+	expect(
+		readerA11y.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))
+	).toEqual([]);
+
+	await page.evaluate(() => navigator.serviceWorker.ready);
+	await page.reload();
+	await context.setOffline(true);
+	await page.reload();
+	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
+	await context.setOffline(false);
+});
+
+test('detects duplicate file imports and keeps navigation under the Pages base path', async ({
+	page
+}) => {
+	await page.goto('./');
+	const input = page.locator('#document-upload');
+	await input.setInputFiles({
+		name: 'repeat.txt',
+		mimeType: 'text/plain',
+		buffer: Buffer.from('A repeatable local document.')
+	});
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+	await page.getByRole('link', { name: 'Back to library' }).click();
+	await input.setInputFiles({
+		name: 'repeat.txt',
+		mimeType: 'text/plain',
+		buffer: Buffer.from('A repeatable local document.')
+	});
+	await expect(page.getByRole('dialog', { name: 'Already in your library' })).toBeVisible();
+	await page.getByRole('button', { name: 'Keep copy' }).click();
+	await expect(page.getByText('repeat — Copy')).toBeVisible();
+	await page.getByRole('link', { name: 'Voice', exact: true }).click();
+	await expect(page).toHaveURL(/\/voicebook\/settings\/?$/);
+});
+
+test('keeps Supertonic license acceptance and its visible checkbox in sync', async ({ page }) => {
+	await page.goto('./');
+	await page.getByRole('link', { name: 'Voice', exact: true }).click();
+	await expect(page.getByRole('heading', { name: 'Supertonic 3' })).toBeVisible();
+	const acceptance = page.getByRole('checkbox', { name: 'I have reviewed the terms' });
+	const install = page.getByRole('button', { name: 'Install locally' });
+	await expect(acceptance).not.toBeChecked();
+	await expect(install).toBeDisabled();
+	await acceptance.check();
+	await expect(acceptance).toBeChecked();
+	await expect(install).toBeEnabled();
+});

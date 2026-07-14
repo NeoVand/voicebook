@@ -1,0 +1,10 @@
+{
+	"packages": {
+		".": {
+			"release-type": "node",
+			"package-name": "voicebook",
+			"include-component-in-tag": false,
+			"changelog-path": "CHANGELOG.md"
+		}
+	}
+}
