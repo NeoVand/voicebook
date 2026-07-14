@@ -55,12 +55,15 @@
 
 <style>
 	.spoken-word {
-		border-radius: 0.18em;
+		border-radius: 0.28em;
 	}
 
 	.active-word {
-		background: linear-gradient(transparent 70%, rgba(140, 122, 255, 0.68) 70%);
-		color: var(--reader-ink-strong, #f7f4ed);
+		box-decoration-break: clone;
+		background: var(--active-word-bg, rgba(168, 157, 246, 0.34));
+		box-shadow: 0 0 0 0.12em var(--active-word-bg, rgba(168, 157, 246, 0.34));
+		color: var(--active-word-ink, var(--reader-ink-strong, #f7f4ed));
+		-webkit-box-decoration-break: clone;
 	}
 
 	a {

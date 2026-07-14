@@ -36,6 +36,17 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await expect(
 		page.getByRole('banner', { name: 'Voicebook header' }).getByText('The Quiet Machine')
 	).toBeVisible();
+	const commandbarTitle = page.locator('.reader-commandbar-title');
+	await expect(commandbarTitle.locator('span')).toHaveCount(0);
+	const titleAlignment = await commandbarTitle.evaluate((title) => {
+		const header = title.closest<HTMLElement>('.app-header');
+		if (!header) throw new Error('Application header is unavailable');
+		const titleRect = title.getBoundingClientRect();
+		const headerRect = header.getBoundingClientRect();
+		return Math.abs(titleRect.x + titleRect.width / 2 - (headerRect.x + headerRect.width / 2));
+	});
+	expect(titleAlignment).toBeLessThan(1);
+	await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toBeVisible();
 
 	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
 	await expect(page.getByRole('button', { name: 'Prepare whole document audio' })).toBeVisible();
@@ -62,6 +73,14 @@ test('import → install → play → seek → bookmark → reload → offline r
 	expect(timelineDuringPreparation?.y).toBe(timelineBeforePlayback?.y);
 	expect(timelineDuringPreparation?.height).toBe(timelineBeforePlayback?.height);
 	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+	const activeWord = page.locator('.active-word').first();
+	await expect(activeWord).toBeVisible();
+	const activeWordStyle = await activeWord.evaluate((word) => {
+		const style = getComputedStyle(word);
+		return { backgroundColor: style.backgroundColor, backgroundImage: style.backgroundImage };
+	});
+	expect(activeWordStyle.backgroundImage).toBe('none');
+	expect(activeWordStyle.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
 	const speedSelect = page.getByRole('combobox', { name: 'Playback speed' });
 	await speedSelect.click();
 	const speedListbox = page.getByRole('listbox', { name: 'Playback speed' });
@@ -207,10 +226,26 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 	await page.getByRole('button', { name: 'Expand sidebar' }).click();
 	await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Switch to light theme' }).click();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+	const themeButton = page.getByRole('button', { name: /^Theme:/ });
+	await expect(themeButton).toHaveAccessibleName('Theme: Midnight. Switch to Sunny theme');
+	await themeButton.click();
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
+	await expect(themeButton).toHaveAccessibleName('Theme: Sunny. Switch to Cloudy theme');
+	await themeButton.click();
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'cloudy');
+	await themeButton.click();
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'rainy');
 	await page.reload();
-	await expect(page.getByRole('button', { name: 'Switch to dark theme' })).toBeVisible();
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'rainy');
+	await expect(page.getByRole('button', { name: /^Theme:/ })).toHaveAccessibleName(
+		'Theme: Rainy. Switch to Midnight theme'
+	);
+	if (await page.evaluate(() => document.fullscreenEnabled)) {
+		await page.getByRole('button', { name: 'Enter fullscreen' }).click();
+		await expect(page.getByRole('button', { name: 'Exit fullscreen' })).toBeVisible();
+		await page.getByRole('button', { name: 'Exit fullscreen' }).click();
+		await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toBeVisible();
+	}
 });
 
 test('starts narration from a chosen passage or selected word', async ({ page }) => {
@@ -404,8 +439,15 @@ test('table of contents moves the reading canvas and closes its compact drawer',
 	await expect
 		.poll(() => canvas.evaluate((element) => element.scrollHeight > element.clientHeight))
 		.toBe(true);
+	await expect(outline.getByText('Progress', { exact: true })).toHaveCount(0);
+	await expect(outline.getByRole('progressbar')).toHaveCount(0);
+	expect(await canvas.evaluate((element) => getComputedStyle(element).scrollbarGutter)).toBe(
+		'auto'
+	);
 
 	await farSection.click();
+	await expect(canvas).toHaveClass(/scrollbar-active/);
+	await expect(canvas).not.toHaveClass(/scrollbar-active/, { timeout: 2_000 });
 	await expect.poll(() => canvas.evaluate((element) => element.scrollTop)).toBeGreaterThan(200);
 	await expect(farSection).toHaveAttribute('aria-current', 'location');
 	await expect

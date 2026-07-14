@@ -4,16 +4,29 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
-		<meta name="theme-color" content="#09090f" />
+		<meta name="theme-color" content="#0b0c0f" />
 		<script>
 			try {
-				const theme = localStorage.getItem('voicebook:theme');
-				document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
-				document
-					.querySelector('meta[name="theme-color"]')
-					?.setAttribute('content', theme === 'light' ? '#f4f3ef' : '#0b0c0f');
+				const themes = ['sunny', 'cloudy', 'rainy', 'midnight'];
+				const stored = localStorage.getItem('voicebook:theme');
+				const theme =
+					stored === 'light'
+						? 'cloudy'
+						: stored === 'dark'
+							? 'midnight'
+							: themes.includes(stored)
+								? stored
+								: 'midnight';
+				const colors = {
+					sunny: '#f4efe6',
+					cloudy: '#edf1f3',
+					rainy: '#101820',
+					midnight: '#0b0c0f'
+				};
+				document.documentElement.dataset.theme = theme;
+				document.querySelector('meta[name="theme-color"]')?.setAttribute('content', colors[theme]);
 			} catch {
-				document.documentElement.dataset.theme = 'dark';
+				document.documentElement.dataset.theme = 'midnight';
 			}
 		</script>
 		<meta
