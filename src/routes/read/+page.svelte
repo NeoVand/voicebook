@@ -914,17 +914,19 @@
 				</label>
 				<label class="volume-control">
 					<span class="control-label"><Volume2 size={13} /> Volume</span>
-					<input
-						aria-label="Volume"
-						type="range"
-						min="0"
-						max="1"
-						step="0.05"
-						value={player.volume}
-						style:--volume-progress={`${Math.round(player.volume * 100)}%`}
-						oninput={(event) =>
-							player.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
-					/>
+					<span class="volume-field">
+						<input
+							aria-label="Volume"
+							type="range"
+							min="0"
+							max="1"
+							step="0.05"
+							value={player.volume}
+							style:--volume-progress={`${Math.round(player.volume * 100)}%`}
+							oninput={(event) =>
+								player.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
+						/>
+					</span>
 				</label>
 			</div>
 
@@ -1661,7 +1663,7 @@
 		min-width: 0;
 		grid-row: 3;
 		grid-column: 1 / -1;
-		grid-template-columns: minmax(190px, 0.7fr) minmax(390px, 1.5fr) minmax(300px, 0.9fr);
+		grid-template-columns: minmax(190px, 0.7fr) minmax(390px, 1.5fr) minmax(290px, 336px);
 		align-items: center;
 		gap: 24px;
 		padding: 12px 20px;
@@ -1879,16 +1881,20 @@
 
 	.player-options {
 		display: grid;
-		grid-template-columns: minmax(120px, 1fr) 82px 104px;
+		width: min(100%, 336px);
+		min-width: 0;
+		grid-template-columns: minmax(104px, 1fr) 74px minmax(96px, 104px);
 		align-items: end;
-		gap: 10px;
+		justify-self: end;
+		gap: 8px;
 	}
 
 	.compact-select,
 	.volume-control {
 		display: grid;
 		min-width: 0;
-		gap: 5px;
+		grid-template-rows: 14px 38px;
+		gap: 4px;
 		color: var(--faint);
 	}
 
@@ -1897,9 +1903,10 @@
 		min-width: 0;
 		align-items: center;
 		gap: 4px;
-		font-size: 9px;
+		font-size: 10px;
 		font-weight: 600;
 		letter-spacing: 0.02em;
+		line-height: 1;
 	}
 
 	.select-field {
@@ -1920,7 +1927,7 @@
 		appearance: none;
 		width: 100%;
 		min-width: 0;
-		height: 36px;
+		height: 38px;
 		padding: 0 28px 0 10px;
 		border: 1px solid var(--control-border);
 		border-radius: 7px;
@@ -1944,10 +1951,31 @@
 		width: 100%;
 	}
 
+	.volume-field {
+		display: flex;
+		min-width: 0;
+		height: 38px;
+		align-items: center;
+		padding: 0 10px;
+		border: 1px solid var(--control-border);
+		border-radius: 7px;
+		background: var(--control-strong);
+	}
+
+	.volume-field:hover {
+		border-color: var(--line-strong);
+		background: var(--control);
+	}
+
+	.volume-field:focus-within {
+		border-color: var(--primary);
+		box-shadow: 0 0 0 2px var(--primary-soft);
+	}
+
 	.volume-control input {
 		appearance: none;
 		width: 100%;
-		height: 36px;
+		height: 20px;
 		margin: 0;
 		background: transparent;
 	}
@@ -1993,12 +2021,22 @@
 		}
 
 		.player-bar {
-			grid-template-columns: minmax(380px, 1fr) 300px;
-			gap: 20px;
+			grid-template-columns: minmax(320px, 1fr) minmax(290px, 304px);
+			gap: 16px;
 		}
 
 		.now-playing {
 			display: none;
+		}
+	}
+
+	@media (max-width: 920px) {
+		.player-options {
+			display: none;
+		}
+
+		.player-bar {
+			grid-template-columns: minmax(0, 1fr);
 		}
 	}
 
@@ -2023,14 +2061,6 @@
 		.reader-stage,
 		.outline-closed .reader-stage {
 			grid-column: 1;
-		}
-
-		.player-options {
-			display: none;
-		}
-
-		.player-bar {
-			grid-template-columns: 1fr;
 		}
 
 		.reading-canvas {
