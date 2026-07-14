@@ -248,7 +248,7 @@
 		margin: 0 0 14px;
 		padding: 15px 17px;
 		border-radius: 5px;
-		background: color-mix(in srgb, var(--reader) 88%, #000);
+		background: color-mix(in srgb, var(--reader) 94%, var(--text));
 		color: var(--reader-ink);
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 0.64em;

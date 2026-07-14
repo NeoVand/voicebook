@@ -2,6 +2,7 @@
 // still contains the WASM execution provider, but avoids pulling the generic
 // browser bundle into this dedicated inference worker.
 import * as ort from 'onnxruntime-web-supertone/webgpu';
+import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
 import type { ModelDescriptor } from '$lib/domain/types';
 import { MODEL_ASSET_CACHE } from './model-asset-cache';
 
@@ -277,10 +278,11 @@ export class SupertonicAdapter {
 		language: string,
 		style: VoiceStyle,
 		progress?: (step: number, total: number) => void,
-		totalSteps = 8
+		totalSteps = DEFAULT_GENERATION_STEPS
 	): Promise<{ audio: Float32Array; duration: number }> {
 		if (!this.config || this.sessions.length !== 4)
 			throw new Error('Supertonic 3 is not loaded yet.');
+		totalSteps = normalizeGenerationSteps(totalSteps);
 		const [durationPredictor, textEncoder, vectorEstimator, vocoder] = this.sessions;
 		const { ids, mask } = this.textInputs(text, language);
 		const durationOutput = await durationPredictor.run({
@@ -325,7 +327,8 @@ export class SupertonicAdapter {
 		text: string,
 		voiceId: string,
 		language = 'en',
-		progress?: (step: number, total: number) => void
+		progress?: (step: number, total: number) => void,
+		totalSteps = DEFAULT_GENERATION_STEPS
 	): Promise<{ audio: Float32Array; sampleRate: number }> {
 		if (!this.config) throw new Error('Supertonic 3 is not loaded yet.');
 		const style = await this.style(voiceId);
@@ -334,7 +337,7 @@ export class SupertonicAdapter {
 		const parts: Float32Array[] = [];
 		let length = 0;
 		for (const [index, chunk] of chunks.entries()) {
-			const result = await this.infer(chunk, language, style, progress);
+			const result = await this.infer(chunk, language, style, progress, totalSteps);
 			if (index) {
 				parts.push(silence);
 				length += silence.length;

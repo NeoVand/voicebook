@@ -1,4 +1,5 @@
 import type { DeviceCapabilities, ModelDescriptor, TimingMap } from '$lib/domain/types';
+import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
 import type {
 	BackendPreference,
 	SynthesisMetrics,
@@ -106,7 +107,8 @@ export class TtsClient {
 		text: string,
 		voiceId: string,
 		signal?: AbortSignal,
-		progress?: (update: SynthesisProgress) => void
+		progress?: (update: SynthesisProgress) => void,
+		totalSteps = DEFAULT_GENERATION_STEPS
 	): Promise<SynthesisResult> {
 		if (signal?.aborted) throw new DOMException('Speech generation was canceled.', 'AbortError');
 		const requestId = crypto.randomUUID();
@@ -125,7 +127,13 @@ export class TtsClient {
 		}, 90_000);
 		try {
 			const response = await this.request(
-				{ type: 'synthesize', requestId, text, voiceId },
+				{
+					type: 'synthesize',
+					requestId,
+					text,
+					voiceId,
+					totalSteps: normalizeGenerationSteps(totalSteps)
+				},
 				(update) => progress?.({ status: update.status, progress: update.progress })
 			).catch((error) => {
 				if (timedOut)

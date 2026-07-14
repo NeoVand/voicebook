@@ -173,6 +173,7 @@ export interface AudioVariantMeta {
 	modelId: ModelDescriptor['id'];
 	modelRevision: string;
 	voiceId: string;
+	generationSteps: number;
 	backend: 'webgpu' | 'wasm';
 	dtype: string;
 	duration: number;

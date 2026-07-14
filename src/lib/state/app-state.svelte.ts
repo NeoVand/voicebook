@@ -6,6 +6,7 @@ import {
 	importFile
 } from '$lib/domain/importers';
 import { refreshDocumentSegments, segmentBlocks } from '$lib/domain/segmenter';
+import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
 import type {
 	DeviceCapabilities,
 	ModelDescriptor,
@@ -137,6 +138,7 @@ export class VoicebookState {
 	storage = $state<StorageSnapshot>(EMPTY_STORAGE);
 	selectedModelId = $state<ModelDescriptor['id']>('supertonic-3');
 	selectedVoiceId = $state('F1');
+	generationSteps = $state(DEFAULT_GENERATION_STEPS);
 	installedModels = $state<ModelDescriptor['id'][]>([]);
 	acceptedLicenses = $state<string[]>([]);
 	modelProgress = $state<Record<string, ModelProgress>>({
@@ -156,16 +158,25 @@ export class VoicebookState {
 	private async openLibrary(): Promise<void> {
 		try {
 			await clearLegacyModelAssets();
-			const [documents, modelId, voiceId, installed, accepted, capabilities, storage] =
-				await Promise.all([
-					listDocuments(),
-					getSetting<string>('selected-model', 'supertonic-3'),
-					getSetting('selected-voice', 'F1'),
-					getSetting<ModelDescriptor['id'][]>('installed-models', []),
-					getSetting<string[]>('accepted-licenses', []),
-					ttsClient.capabilities(),
-					storageSnapshot()
-				]);
+			const [
+				documents,
+				modelId,
+				voiceId,
+				generationSteps,
+				installed,
+				accepted,
+				capabilities,
+				storage
+			] = await Promise.all([
+				listDocuments(),
+				getSetting<string>('selected-model', 'supertonic-3'),
+				getSetting('selected-voice', 'F1'),
+				getSetting('generation-steps', DEFAULT_GENERATION_STEPS),
+				getSetting<ModelDescriptor['id'][]>('installed-models', []),
+				getSetting<string[]>('accepted-licenses', []),
+				ttsClient.capabilities(),
+				storageSnapshot()
+			]);
 			const normalizedDocuments = await Promise.all(documents.map(migrateDocumentNormalization));
 			const refreshedDocuments = normalizedDocuments.map(refreshDocumentSegments);
 			this.documents = refreshedDocuments;
@@ -181,6 +192,7 @@ export class VoicebookState {
 			this.selectedVoiceId = getModel(migratedModelId).voices.some((voice) => voice.id === voiceId)
 				? voiceId
 				: getModel(migratedModelId).defaultVoice;
+			this.generationSteps = normalizeGenerationSteps(generationSteps);
 			// Retired engine caches are legacy state. Only an explicit V3 installation
 			// is considered runnable by the current four-session engine.
 			this.installedModels = installed.filter((id) => (id as string) === 'supertonic-3');
@@ -189,10 +201,15 @@ export class VoicebookState {
 			this.storage = storage;
 			for (const id of this.installedModels)
 				this.modelProgress[id] = { status: 'ready', progress: 100 };
-			if (modelId !== migratedModelId || installed.length !== this.installedModels.length) {
+			if (
+				modelId !== migratedModelId ||
+				installed.length !== this.installedModels.length ||
+				generationSteps !== this.generationSteps
+			) {
 				await Promise.all([
 					setSetting('selected-model', migratedModelId),
 					setSetting('selected-voice', this.selectedVoiceId),
+					setSetting('generation-steps', this.generationSteps),
 					setSetting('installed-models', [...this.installedModels])
 				]);
 			}
@@ -303,6 +320,13 @@ export class VoicebookState {
 		if (!this.selectedModel.voices.some((voice) => voice.id === id)) return;
 		this.selectedVoiceId = id;
 		await setSetting('selected-voice', id);
+	}
+
+	async setGenerationSteps(value: number): Promise<void> {
+		const next = normalizeGenerationSteps(value);
+		if (next === this.generationSteps) return;
+		await setSetting('generation-steps', next);
+		this.generationSteps = next;
 	}
 
 	async setLicenseAcceptance(modelId: ModelDescriptor['id'], accepted: boolean): Promise<void> {

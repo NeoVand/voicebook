@@ -2,18 +2,12 @@
 	import { resolve } from '$app/paths';
 	import {
 		ArrowLeft,
+		AudioLines,
 		Bookmark,
 		BookOpenText,
 		Check,
-		ChevronDown,
 		ChevronLeft,
 		ChevronRight,
-		Code2,
-		Download,
-		Ellipsis,
-		Gauge,
-		List,
-		ListMusic,
 		LoaderCircle,
 		LocateFixed,
 		Pause,
@@ -27,10 +21,11 @@
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
+	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import CompactSelect from '$lib/components/CompactSelect.svelte';
 	import InlineText from '$lib/components/InlineText.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
-	import { segmentBlocks } from '$lib/domain/segmenter';
 	import type {
 		DocumentBlock,
 		InlineRun,
@@ -38,13 +33,12 @@
 		SpeechSegment,
 		TableCell
 	} from '$lib/domain/types';
+	import { GENERATION_STEP_OPTIONS } from '$lib/domain/synthesis';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
+	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 
 	let book = $state<NormalizedDocument | null>(null);
-	let outlineOpen = $state(true);
-	let bookmarksOpen = $state(false);
-	let readerMenuOpen = $state(false);
 	let installing = $state(false);
 	let activeOutlineBlockId = $state<string>();
 	let outlineAnnouncement = $state('');
@@ -52,6 +46,24 @@
 	let readerScrollFrame = 0;
 	let outlineNavigationBlockId: string | undefined;
 	const segmentElements = new SvelteMap<string, HTMLElement>();
+	interface NarrationStartAction {
+		segmentId: string;
+		wordIndex: number;
+		excerpt: string;
+		left: number;
+		top: number;
+		placement: 'above' | 'below';
+	}
+	let narrationStartAction = $state<NarrationStartAction>();
+	let narrationAnnouncement = $state('');
+	const playbackSpeedOptions = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((speed) => ({
+		value: String(speed),
+		label: `${speed}×`
+	}));
+	const generationQualityOptions = GENERATION_STEP_OPTIONS.map((steps) => ({
+		value: String(steps),
+		label: `${steps} steps`
+	}));
 
 	let segmentsByBlock = $derived.by(() => {
 		const map = new SvelteMap<string, SpeechSegment[]>();
@@ -63,17 +75,29 @@
 	let segmentIndexes = $derived.by(
 		() => new SvelteMap((book?.segments ?? []).map((segment, index) => [segment.id, index]))
 	);
-	let currentBookmarked = $derived(
-		Boolean(book?.bookmarks.some((bookmark) => bookmark.segmentId === player.currentSegment?.id))
+	let blockIndexes = $derived.by(
+		() => new SvelteMap((book?.blocks ?? []).map((block, index) => [block.id, index]))
 	);
+	let narrationOutlineBlockId = $derived.by(() => {
+		const currentBlockId = player.currentSegment?.blockId;
+		if (!currentBlockId || !book?.outline.length) return undefined;
+		const currentBlockIndex = blockIndexes.get(currentBlockId);
+		if (currentBlockIndex === undefined) return undefined;
+		let nearestOutlineBlockId: string | undefined;
+		for (const item of book.outline) {
+			const outlineBlockIndex = blockIndexes.get(item.blockId);
+			if (outlineBlockIndex === undefined || outlineBlockIndex > currentBlockIndex) continue;
+			nearestOutlineBlockId = item.blockId;
+		}
+		return nearestOutlineBlockId ?? book.outline[0]?.blockId;
+	});
 	let activeSegmentId = $derived(
 		player.isPlaying || player.position > 0 ? player.currentSegment?.id : undefined
 	);
 	let installed = $derived(appState.installedModels.includes('supertonic-3'));
 	let licenseAccepted = $derived(appState.acceptedLicenses.includes('supertonic-3'));
-	let selectedVoiceName = $derived(
-		appState.selectedModel.voices.find((voice) => voice.id === appState.selectedVoiceId)?.name ??
-			'Voice'
+	let voiceOptions = $derived(
+		appState.selectedModel.voices.map((voice) => ({ value: voice.id, label: voice.name }))
 	);
 	let titleBlock = $derived.by(() => {
 		return book?.blocks.find((block) => block.kind === 'heading' && block.level === 1);
@@ -150,8 +174,18 @@
 
 	const trackReadingCanvas: Attachment<HTMLElement> = (element) => {
 		readingCanvas = element;
+		const removeListeners = [
+			on(element, 'scroll', handleReaderScroll),
+			on(element, 'wheel', () => (player.autoFollow = false)),
+			on(element, 'touchmove', () => (player.autoFollow = false)),
+			on(element, 'pointerup', scheduleTextSelectionAction),
+			on(element, 'keyup', scheduleTextSelectionAction),
+			on(element, 'click', startClickedPassage),
+			on(element, 'keydown', handlePassageKeydown)
+		];
 		requestAnimationFrame(scheduleVisibleSectionUpdate);
 		return () => {
+			for (const removeListener of removeListeners) removeListener();
 			if (readingCanvas === element) readingCanvas = undefined;
 		};
 	};
@@ -284,7 +318,7 @@
 		activeOutlineBlockId = block.id;
 		outlineAnnouncement = `Moved to ${block.text}`;
 		scrollReaderTo(element, compactOutline);
-		if (compactOutline) outlineOpen = false;
+		if (compactOutline) readerChrome.outlineOpen = false;
 
 		const index = firstSegmentIndex(block);
 		if (index === undefined) {
@@ -300,6 +334,113 @@
 		const element = segmentElements.get(segment.id);
 		if (element) scrollReaderTo(element);
 		void player.goToSegment(segmentIndexes.get(segment.id) ?? 0);
+	}
+
+	async function startNarrationFrom(
+		segment: SpeechSegment,
+		wordIndex = 0,
+		clearSelection = false
+	): Promise<void> {
+		const index = segmentIndexes.get(segment.id);
+		if (index === undefined) return;
+		narrationStartAction = undefined;
+		if (clearSelection) window.getSelection()?.removeAllRanges();
+		player.autoFollow = true;
+		narrationAnnouncement = `Starting from ${segment.text.replace(/\s+/g, ' ').trim()}`;
+		await player.playFromSegment(index, wordIndex);
+	}
+
+	function segmentForElement(element: Element | null): SpeechSegment | undefined {
+		const segmentId = element?.closest<HTMLElement>('.speech-segment')?.dataset.segmentId;
+		return segmentId ? book?.segments.find((candidate) => candidate.id === segmentId) : undefined;
+	}
+
+	function positionedNarrationAction(
+		segment: SpeechSegment,
+		wordIndex: number,
+		excerpt: string,
+		rect: DOMRect
+	): NarrationStartAction | undefined {
+		if (!readingCanvas) return;
+		const canvasRect = readingCanvas.getBoundingClientRect();
+		const placement = rect.top - canvasRect.top >= 54 ? 'above' : 'below';
+		const unclampedLeft = readingCanvas.scrollLeft + rect.left + rect.width / 2 - canvasRect.left;
+		const left = Math.max(86, Math.min(readingCanvas.clientWidth - 86, unclampedLeft));
+		const top =
+			readingCanvas.scrollTop +
+			(placement === 'above' ? rect.top - canvasRect.top - 8 : rect.bottom - canvasRect.top + 8);
+		return { segmentId: segment.id, wordIndex, excerpt, left, top, placement };
+	}
+
+	function startClickedPassage(event: MouseEvent): void {
+		if (!(event.target instanceof Element)) return;
+		if (event.target.closest('a, button')) return;
+		const selection = window.getSelection();
+		if (selection && !selection.isCollapsed) return;
+		const segment = segmentForElement(event.target);
+		if (!segment) return;
+		void startNarrationFrom(segment);
+	}
+
+	function handlePassageKeydown(event: KeyboardEvent): void {
+		if (
+			!(event.target instanceof HTMLElement) ||
+			!event.target.matches('.speech-segment') ||
+			(event.key !== 'Enter' && event.key !== ' ')
+		)
+			return;
+		const segment = segmentForElement(event.target);
+		if (!segment) return;
+		event.preventDefault();
+		void startNarrationFrom(segment);
+	}
+
+	function updateTextSelectionAction(): void {
+		if (!readingCanvas || !book) return;
+		const selection = window.getSelection();
+		if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+			narrationStartAction = undefined;
+			return;
+		}
+
+		const range = selection.getRangeAt(0);
+		if (!readingCanvas.contains(range.commonAncestorContainer)) {
+			narrationStartAction = undefined;
+			return;
+		}
+		const startElement =
+			range.startContainer instanceof Element
+				? range.startContainer
+				: range.startContainer.parentElement;
+		const segmentElement = startElement?.closest<HTMLElement>('.speech-segment');
+		const segmentId = segmentElement?.dataset.segmentId;
+		const segment = segmentId
+			? book.segments.find((candidate) => candidate.id === segmentId)
+			: undefined;
+		if (!segmentElement || !segment || !readingCanvas.contains(segmentElement)) {
+			narrationStartAction = undefined;
+			return;
+		}
+
+		const wordElement = startElement?.closest<HTMLElement>('[data-word-index]');
+		const parsedWordIndex = Number(wordElement?.dataset.wordIndex ?? 0);
+		const wordIndex = Number.isFinite(parsedWordIndex) ? parsedWordIndex : 0;
+		const rangeRect = range.getBoundingClientRect();
+		narrationStartAction = positionedNarrationAction(
+			segment,
+			wordIndex,
+			selection.toString().replace(/\s+/g, ' ').trim(),
+			rangeRect
+		);
+	}
+
+	function scheduleTextSelectionAction(): void {
+		requestAnimationFrame(updateTextSelectionAction);
+	}
+
+	function handleReaderScroll(): void {
+		narrationStartAction = undefined;
+		scheduleVisibleSectionUpdate();
 	}
 
 	function updateVisibleSection(): void {
@@ -356,22 +497,18 @@
 		}
 	}
 
-	async function changeVoice(event: Event): Promise<void> {
-		await player.chooseVoice((event.currentTarget as HTMLSelectElement).value);
+	async function changeVoice(voiceId: string): Promise<void> {
+		await player.chooseVoice(voiceId);
 	}
 
-	async function toggleCodeSpeech(): Promise<void> {
-		if (!book) return;
-		book.includeCode = !book.includeCode;
-		book.segments = segmentBlocks(book.blocks, book.includeCode);
-		player.setDocument(book);
-		await appState.saveDocument(book);
+	async function changeGenerationQuality(value: string): Promise<void> {
+		await player.chooseGenerationSteps(Number(value));
 	}
 
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
 		const target = event.target as HTMLElement | null;
-		if (target?.matches('input,textarea,select,button')) return;
+		if (target?.matches('input,textarea,select,button,.speech-segment')) return;
 		if (event.code === 'Space') {
 			event.preventDefault();
 			if (player.isBuffering) player.cancelGeneration();
@@ -392,7 +529,16 @@
 
 {#snippet renderSegment(block: DocumentBlock, segment: SpeechSegment)}
 	{@const isActive = activeSegmentId === segment.id}
-	<span class="speech-segment" class:active={isActive} {@attach trackSegment(segment.id)}>
+	<span
+		class="speech-segment"
+		class:active={isActive}
+		role="button"
+		tabindex="0"
+		aria-label={segment.text}
+		title="Play narration from this passage"
+		data-segment-id={segment.id}
+		{@attach trackSegment(segment.id)}
+	>
 		{#each tokens(block, segment) as inline, inlineIndex (inlineIndex)}
 			<InlineText
 				run={inline.run}
@@ -424,117 +570,20 @@
 {:else}
 	<div
 		class="reader-shell"
-		class:outline-closed={!outlineOpen}
-		class:bookmarks-open={bookmarksOpen}
+		class:outline-closed={!readerChrome.outlineOpen}
+		class:bookmarks-open={readerChrome.bookmarksOpen}
 	>
-		<header class="reader-header">
-			<div class="header-left">
-				<a class="icon-button" href={resolve('/')} aria-label="Back to library">
-					<ArrowLeft size={18} />
-				</a>
-				<button
-					class="icon-button"
-					class:active={outlineOpen}
-					type="button"
-					aria-label={outlineOpen ? 'Close document outline' : 'Open document outline'}
-					aria-controls="document-outline"
-					aria-expanded={outlineOpen}
-					onclick={() => (outlineOpen = !outlineOpen)}
-				>
-					<List size={18} />
-				</button>
-			</div>
-
-			<div class="reader-title">
-				<strong>{book.title}</strong>
-				<span>{book.sourceKind.toUpperCase()} · {book.segments.length} passages</span>
-			</div>
-
-			<div class="header-actions">
-				<button
-					class="icon-button"
-					class:marked={currentBookmarked}
-					type="button"
-					aria-label={currentBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-					onclick={() => player.toggleBookmark()}
-				>
-					<Bookmark size={17} fill={currentBookmarked ? 'currentColor' : 'none'} />
-				</button>
-				<button
-					class="icon-button"
-					class:active={bookmarksOpen}
-					type="button"
-					aria-label={bookmarksOpen ? 'Close bookmarks' : 'Open bookmarks'}
-					onclick={() => (bookmarksOpen = !bookmarksOpen)}
-				>
-					<ListMusic size={17} />
-				</button>
-				<div class="reader-menu-wrap">
-					<button
-						class="icon-button"
-						class:active={readerMenuOpen}
-						type="button"
-						aria-label="Reading options"
-						aria-expanded={readerMenuOpen}
-						onclick={() => (readerMenuOpen = !readerMenuOpen)}
-					>
-						<Ellipsis size={18} />
-					</button>
-					{#if readerMenuOpen}
-						<div class="reader-menu" role="menu">
-							{#if book.blocks.some((block) => block.kind === 'code')}
-								<button
-									type="button"
-									role="menuitem"
-									onclick={() => {
-										void toggleCodeSpeech();
-										readerMenuOpen = false;
-									}}
-								>
-									<Code2 size={16} />
-									<span>
-										<strong>{book.includeCode ? 'Skip code' : 'Read code'}</strong>
-										<small>Code always remains visible.</small>
-									</span>
-								</button>
-							{/if}
-							<button
-								type="button"
-								role="menuitem"
-								disabled={!player.isGeneratingAll && !installed}
-								onclick={() => {
-									if (player.isGeneratingAll) player.cancelGeneration();
-									else void player.generateAll();
-									readerMenuOpen = false;
-								}}
-							>
-								{#if player.isGeneratingAll}
-									<Square size={15} fill="currentColor" />
-								{:else}
-									<Download size={16} />
-								{/if}
-								<span>
-									<strong
-										>{player.isGeneratingAll ? 'Stop preparing' : 'Prepare whole document'}</strong
-									>
-									<small>
-										{player.isGeneratingAll
-											? Math.round(player.generationProgress) + '% complete'
-											: 'Optional. Cache every passage for offline replay.'}
-									</small>
-								</span>
-							</button>
-						</div>
-					{/if}
-				</div>
-			</div>
-		</header>
-
-		{#if outlineOpen}
+		{#if readerChrome.outlineOpen}
 			<aside id="document-outline" class="outline-panel" aria-label="Document outline">
 				<header>
-					<strong>Contents</strong>
-					<span>{book.outline.length || book.segments.length} sections</span>
+					<div class="outline-heading">
+						<strong>Contents</strong>
+						<span>{book.outline.length || book.segments.length} sections</span>
+					</div>
+					<div class="outline-legend" aria-label="Contents indicators">
+						<span><i class="view-key"></i>View</span>
+						<span><i class="voice-key"></i>Voice</span>
+					</div>
 				</header>
 				<span class="sr-only" aria-live="polite">{outlineAnnouncement}</span>
 				<nav aria-label="Table of contents">
@@ -543,24 +592,43 @@
 							{@const outlineBlock = blockFor(item.blockId)}
 							<button
 								type="button"
-								class:active={activeOutlineBlockId === item.blockId}
+								class:scroll-current={activeOutlineBlockId === item.blockId}
+								class:narration-current={narrationOutlineBlockId === item.blockId}
 								aria-current={activeOutlineBlockId === item.blockId ? 'location' : undefined}
 								aria-label={item.title}
 								title={item.title}
+								data-narration-current={narrationOutlineBlockId === item.blockId
+									? 'true'
+									: undefined}
 								style={'--outline-level:' + Math.max(0, item.level - 1)}
 								onclick={() => outlineBlock && navigateToOutlineBlock(outlineBlock)}
 							>
-								<span>{compactOutlineTitle(item.title)}</span>
+								<span class="outline-label">{compactOutlineTitle(item.title)}</span>
+								<span class="outline-state" aria-hidden="true">
+									{#if narrationOutlineBlockId === item.blockId}
+										<span class="narration-indicator"><Volume2 size={12} strokeWidth={2.2} /></span>
+									{/if}
+								</span>
 							</button>
 						{/each}
 					{:else}
 						{#each book.segments.filter((_, index) => index % 8 === 0) as segment (segment.id)}
 							<button
 								type="button"
-								class:active={segment.id === player.currentSegment?.id}
+								class:narration-current={segment.id === player.currentSegment?.id}
+								data-narration-current={segment.id === player.currentSegment?.id
+									? 'true'
+									: undefined}
 								onclick={() => navigateToSegment(segment)}
 							>
-								{segment.text.slice(0, 54)}{segment.text.length > 54 ? '…' : ''}
+								<span class="outline-label"
+									>{segment.text.slice(0, 54)}{segment.text.length > 54 ? '…' : ''}</span
+								>
+								<span class="outline-state" aria-hidden="true">
+									{#if segment.id === player.currentSegment?.id}
+										<span class="narration-indicator"><Volume2 size={12} strokeWidth={2.2} /></span>
+									{/if}
+								</span>
 							</button>
 						{/each}
 					{/if}
@@ -603,14 +671,7 @@
 				</div>
 			{/if}
 
-			<article
-				class="reading-canvas"
-				aria-label={book.title}
-				{@attach trackReadingCanvas}
-				onscroll={scheduleVisibleSectionUpdate}
-				onwheel={() => (player.autoFollow = false)}
-				ontouchmove={() => (player.autoFollow = false)}
-			>
+			<article class="reading-canvas" aria-label={book.title} {@attach trackReadingCanvas}>
 				<header class="document-heading" id={titleBlock?.id} tabindex="-1">
 					<span>{book.sourceKind.toUpperCase()} · Local library</span>
 					<h1>
@@ -732,7 +793,30 @@
 						{/if}
 					{/each}
 				</div>
+
+				{#if narrationStartAction}
+					{@const selectedSegment = book.segments.find(
+						(segment) => segment.id === narrationStartAction?.segmentId
+					)}
+					{#if selectedSegment}
+						<button
+							class="selection-start"
+							class:below={narrationStartAction.placement === 'below'}
+							type="button"
+							style:left={`${narrationStartAction.left}px`}
+							style:top={`${narrationStartAction.top}px`}
+							aria-label={`Play from selected text: ${narrationStartAction.excerpt}`}
+							onpointerdown={(event) => event.preventDefault()}
+							onclick={() =>
+								void startNarrationFrom(selectedSegment, narrationStartAction?.wordIndex, true)}
+						>
+							<Play size={12} fill="currentColor" />
+							Play from here
+						</button>
+					{/if}
+				{/if}
 			</article>
+			<p class="sr-only" aria-live="polite">{narrationAnnouncement}</p>
 
 			{#if !player.autoFollow}
 				<button class="return-follow button" type="button" onclick={resumeNarrationFollow}>
@@ -741,7 +825,7 @@
 			{/if}
 		</section>
 
-		{#if bookmarksOpen}
+		{#if readerChrome.bookmarksOpen}
 			<aside class="bookmarks-panel" aria-label="Bookmarks">
 				<header>
 					<div><strong>Bookmarks</strong><span>{book.bookmarks.length} saved</span></div>
@@ -749,7 +833,7 @@
 						class="icon-button"
 						type="button"
 						aria-label="Close bookmarks"
-						onclick={() => (bookmarksOpen = false)}
+						onclick={() => (readerChrome.bookmarksOpen = false)}
 					>
 						<X size={17} />
 					</button>
@@ -776,17 +860,47 @@
 		{/if}
 
 		<footer class="player-bar" aria-label="Playback controls">
-			<div class="now-playing">
-				<BookOpenText size={18} />
-				<div>
-					<strong>
-						{player.currentSegment?.text.slice(0, 38) || book.title}{(player.currentSegment?.text
-							.length ?? 0) > 38
-							? '…'
-							: ''}
-					</strong>
-					<span title={player.runtimeDetail}>{selectedVoiceName} · {player.runtimeLabel}</span>
-				</div>
+			<div class="generation-options" role="group" aria-label="Speech generation settings">
+				<CompactSelect
+					label="Voice"
+					value={appState.selectedVoiceId}
+					options={voiceOptions}
+					onChange={changeVoice}
+					triggerWidth="106px"
+					menuWidth="148px"
+				/>
+				<CompactSelect
+					label="Generation quality"
+					value={String(appState.generationSteps)}
+					options={generationQualityOptions}
+					onChange={changeGenerationQuality}
+					triggerWidth="86px"
+					menuWidth="96px"
+				/>
+				<button
+					class="generate-all icon-button"
+					class:active={player.isGeneratingAll}
+					type="button"
+					disabled={!player.isGeneratingAll && !installed}
+					aria-busy={player.isGeneratingAll}
+					aria-label={player.isGeneratingAll
+						? `Stop preparing whole document, ${Math.round(player.generationProgress)} percent complete`
+						: 'Prepare whole document audio'}
+					title={player.isGeneratingAll
+						? `Stop preparing · ${Math.round(player.generationProgress)}%`
+						: 'Prepare whole document audio'}
+					style:--generation-progress={`${Math.round(player.generationProgress)}%`}
+					onclick={() => {
+						if (player.isGeneratingAll) player.cancelGeneration();
+						else void player.generateAll();
+					}}
+				>
+					{#if player.isGeneratingAll}
+						<Square size={13} fill="currentColor" />
+					{:else}
+						<AudioLines size={17} />
+					{/if}
+				</button>
 			</div>
 
 			<div class="transport">
@@ -810,7 +924,9 @@
 					</button>
 					<button
 						class="play-button"
+						class:loading={player.isBuffering}
 						type="button"
+						aria-busy={player.isBuffering}
 						aria-label={player.isBuffering
 							? 'Stop preparing speech'
 							: player.isPlaying
@@ -848,85 +964,53 @@
 					</button>
 				</div>
 
-				{#if player.isBuffering || player.isGeneratingAll}
-					<div class="generation-status" aria-live="polite">
-						<div>
-							<strong>
-								{player.isBuffering
-									? 'Passage ' + (player.currentSegmentIndex + 1) + ' of ' + book.segments.length
-									: 'Preparing document · ' + Math.round(player.generationProgress) + '%'}
-							</strong>
-							<span
-								>{player.isBuffering
-									? player.bufferingStage
-									: 'Caching audio for offline replay'}</span
-							>
-						</div>
-						<button type="button" onclick={() => player.cancelGeneration()}>Stop</button>
-					</div>
-				{:else}
-					<div class="timeline">
-						<span>{formatTime(player.progress * player.totalDuration)}</span>
-						<input
-							type="range"
-							min="0"
-							max="1000"
-							value={Math.round(player.progress * 1000)}
-							style:--timeline-progress={`${Math.round(player.progress * 100)}%`}
-							aria-label="Reading position"
-							onchange={(event) =>
-								player.seekToProgress(
-									Number((event.currentTarget as HTMLInputElement).value) / 1000
-								)}
-						/>
-						<span>{formatTime(player.totalDuration)}</span>
-					</div>
-				{/if}
+				<div class="timeline">
+					<span>{formatTime(player.progress * player.totalDuration)}</span>
+					<input
+						type="range"
+						min="0"
+						max="1000"
+						value={Math.round(player.progress * 1000)}
+						style:--timeline-progress={`${Math.round(player.progress * 100)}%`}
+						aria-label="Reading position"
+						onchange={(event) =>
+							player.seekToProgress(Number((event.currentTarget as HTMLInputElement).value) / 1000)}
+					/>
+					<span>{formatTime(player.totalDuration)}</span>
+				</div>
+				<span class="sr-only" aria-live="polite" aria-atomic="true">
+					{player.isBuffering
+						? 'Preparing this passage. Activate the stop button to cancel.'
+						: player.isGeneratingAll
+							? `Preparing the document. ${Math.round(player.generationProgress)} percent complete.`
+							: ''}
+				</span>
 			</div>
 
-			<div class="player-options">
-				<label class="compact-select">
-					<span class="control-label">Voice</span>
-					<span class="select-field">
-						<select aria-label="Voice" value={appState.selectedVoiceId} onchange={changeVoice}>
-							{#each appState.selectedModel.voices as voice (voice.id)}
-								<option value={voice.id}>{voice.name}</option>
-							{/each}
-						</select>
-						<span class="select-chevron" aria-hidden="true"><ChevronDown size={14} /></span>
-					</span>
-				</label>
-				<label class="compact-select speed">
-					<span class="control-label"><Gauge size={12} /> Speed</span>
-					<span class="select-field">
-						<select
-							aria-label="Playback speed"
-							value={player.rate}
-							onchange={(event) =>
-								player.setRate(Number((event.currentTarget as HTMLSelectElement).value))}
-						>
-							{#each [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as speed (speed)}
-								<option value={speed}>{speed}×</option>
-							{/each}
-						</select>
-						<span class="select-chevron" aria-hidden="true"><ChevronDown size={14} /></span>
-					</span>
-				</label>
-				<label class="volume-control">
-					<span class="control-label"><Volume2 size={13} /> Volume</span>
-					<span class="volume-field">
-						<input
-							aria-label="Volume"
-							type="range"
-							min="0"
-							max="1"
-							step="0.05"
-							value={player.volume}
-							style:--volume-progress={`${Math.round(player.volume * 100)}%`}
-							oninput={(event) =>
-								player.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
-						/>
-					</span>
+			<div class="player-options" role="group" aria-label="Playback settings">
+				<CompactSelect
+					label="Playback speed"
+					value={String(player.rate)}
+					options={playbackSpeedOptions}
+					onChange={(value) => player.setRate(Number(value))}
+					triggerWidth="58px"
+					menuWidth="86px"
+					align="end"
+				/>
+				<label class="player-volume">
+					<span class="sr-only">Volume</span>
+					<Volume2 size={16} aria-hidden="true" />
+					<input
+						aria-label="Volume"
+						type="range"
+						min="0"
+						max="1"
+						step="0.05"
+						value={player.volume}
+						style:--volume-progress={`${Math.round(player.volume * 100)}%`}
+						oninput={(event) =>
+							player.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
+					/>
 				</label>
 			</div>
 
@@ -965,12 +1049,12 @@
 	}
 
 	.reader-shell {
-		--player-height: 104px;
+		--player-height: 72px;
 		display: grid;
-		height: 100dvh;
+		height: 100%;
 		min-height: 0;
 		grid-template-columns: 252px minmax(0, 1fr);
-		grid-template-rows: 54px minmax(0, 1fr) var(--player-height);
+		grid-template-rows: minmax(0, 1fr) var(--player-height);
 		overflow: hidden;
 		background: var(--bg);
 	}
@@ -987,137 +1071,13 @@
 		grid-template-columns: minmax(0, 1fr) 264px;
 	}
 
-	.reader-header {
-		position: relative;
-		z-index: 30;
-		display: grid;
-		grid-row: 1;
-		grid-column: 1 / -1;
-		grid-template-columns: 1fr minmax(0, 1.5fr) 1fr;
-		align-items: center;
-		padding: 0 10px;
-		border-bottom: 1px solid var(--line);
-		background: #111216;
-	}
-
-	.header-left,
-	.header-actions {
-		display: flex;
-		align-items: center;
-		gap: 2px;
-	}
-
-	.header-actions {
-		justify-content: flex-end;
-	}
-
-	.reader-header .icon-button {
-		width: 36px;
-		height: 36px;
-		flex-basis: 36px;
-	}
-
-	.reader-header .icon-button.active {
-		background: rgba(255, 255, 255, 0.055);
-		color: var(--text);
-	}
-
-	.reader-header .icon-button.marked {
-		background: var(--bookmark-soft);
-		color: var(--bookmark);
-	}
-
-	.reader-title {
-		min-width: 0;
-		text-align: center;
-	}
-
-	.reader-title strong,
-	.reader-title span {
-		display: block;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.reader-title strong {
-		font-size: 11px;
-		font-weight: 640;
-	}
-
-	.reader-title span {
-		margin-top: 3px;
-		color: var(--faint);
-		font-size: 8px;
-		letter-spacing: 0.05em;
-	}
-
-	.reader-menu-wrap {
-		position: relative;
-	}
-
-	.reader-menu {
-		position: absolute;
-		top: calc(100% + 7px);
-		right: 0;
-		z-index: 50;
-		display: grid;
-		width: 286px;
-		padding: 5px;
-		border-radius: 7px;
-		background: #1b1d23;
-		box-shadow: 0 18px 54px rgba(0, 0, 0, 0.48);
-	}
-
-	.reader-menu button {
-		display: grid;
-		min-height: 58px;
-		grid-template-columns: 20px 1fr;
-		align-items: start;
-		gap: 10px;
-		padding: 10px;
-		border: 0;
-		border-radius: 5px;
-		background: transparent;
-		color: var(--muted);
-		text-align: left;
-	}
-
-	.reader-menu button:hover:not(:disabled) {
-		background: rgba(255, 255, 255, 0.055);
-		color: var(--text);
-	}
-
-	.reader-menu button:disabled {
-		cursor: not-allowed;
-		opacity: 0.4;
-	}
-
-	.reader-menu strong,
-	.reader-menu small {
-		display: block;
-	}
-
-	.reader-menu strong {
-		color: var(--text-soft);
-		font-size: 10px;
-		font-weight: 640;
-	}
-
-	.reader-menu small {
-		margin-top: 3px;
-		color: var(--faint);
-		font-size: 8px;
-		line-height: 1.4;
-	}
-
 	.outline-panel,
 	.bookmarks-panel {
 		display: flex;
 		min-width: 0;
 		min-height: 0;
-		grid-row: 2;
-		background: #101115;
+		grid-row: 1;
+		background: var(--sidebar);
 		flex-direction: column;
 	}
 
@@ -1138,32 +1098,64 @@
 	.outline-panel > header,
 	.bookmarks-panel > header {
 		display: flex;
-		min-height: 62px;
+		min-height: 68px;
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
-		padding: 0 15px;
+		padding: 0 14px;
 		border-bottom: 1px solid var(--line);
 	}
 
-	.outline-panel header strong,
-	.outline-panel header span,
+	.outline-heading strong,
+	.outline-heading > span,
 	.bookmarks-panel header strong,
 	.bookmarks-panel header span {
 		display: block;
 	}
 
-	.outline-panel header strong,
+	.outline-heading strong,
 	.bookmarks-panel header strong {
-		font-size: 12px;
+		font-size: 13px;
 		font-weight: 650;
 	}
 
-	.outline-panel header span,
+	.outline-heading > span,
 	.bookmarks-panel header span {
 		margin-top: 3px;
 		color: var(--faint);
-		font-size: 10px;
+		font-size: 9px;
+	}
+
+	.outline-legend {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: var(--faint);
+		font-size: 8px;
+	}
+
+	.outline-legend span {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		white-space: nowrap;
+	}
+
+	.outline-legend i {
+		display: block;
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+	}
+
+	.outline-legend .view-key {
+		border: 1px solid color-mix(in srgb, var(--text) 32%, transparent);
+		background: color-mix(in srgb, var(--text) 10%, transparent);
+	}
+
+	.outline-legend .voice-key {
+		background: var(--primary);
+		box-shadow: 0 0 0 2px rgba(168, 157, 246, 0.12);
 	}
 
 	.outline-panel nav {
@@ -1175,37 +1167,62 @@
 	}
 
 	.outline-panel nav button {
-		display: flex;
+		display: grid;
 		min-width: 0;
-		min-height: 42px;
+		min-height: 44px;
+		grid-template-columns: minmax(0, 1fr) 22px;
 		align-items: center;
-		padding: 8px 11px 8px calc(11px + var(--outline-level, 0) * 10px);
+		gap: 8px;
+		padding: 8px 8px 8px calc(11px + var(--outline-level, 0) * 11px);
 		border: 0;
 		border-radius: 6px;
 		background: transparent;
 		color: var(--muted);
-		font-size: 11px;
-		line-height: 1.25;
+		font-size: 12.5px;
+		line-height: 1.3;
 		text-align: left;
+		transition:
+			background 140ms var(--ease),
+			color 140ms var(--ease);
 	}
 
-	.outline-panel nav button span {
+	.outline-panel .outline-label {
 		display: block;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
-	.outline-panel nav button:hover,
-	.outline-panel nav button.active {
-		background: rgba(255, 255, 255, 0.04);
+	.outline-panel nav button:hover {
+		background: var(--hover);
 		color: var(--text-soft);
 	}
 
-	.outline-panel nav button.active {
-		background: var(--primary-soft);
+	.outline-panel nav button.scroll-current {
+		background: var(--hover-strong);
 		color: var(--text);
-		box-shadow: inset 2px 0 var(--primary);
+	}
+
+	.outline-panel nav button.narration-current .outline-label {
+		color: var(--primary);
+		font-weight: 610;
+	}
+
+	.outline-state {
+		display: grid;
+		width: 22px;
+		height: 22px;
+		place-items: center;
+	}
+
+	.narration-indicator {
+		display: grid;
+		width: 20px;
+		height: 20px;
+		place-items: center;
+		border-radius: 50%;
+		background: var(--primary-soft);
+		color: var(--primary);
 	}
 
 	.outline-panel > footer {
@@ -1233,11 +1250,11 @@
 		display: flex;
 		min-width: 0;
 		min-height: 0;
-		grid-row: 2;
+		grid-row: 1;
 		grid-column: 2;
 		overflow: hidden;
 		padding: 14px 18px 0;
-		background: #0c0d10;
+		background: var(--reader-stage);
 		flex-direction: column;
 	}
 
@@ -1255,7 +1272,7 @@
 		margin: 0 auto 10px;
 		padding: 6px 8px 6px 12px;
 		border-left: 2px solid var(--primary);
-		background: #15161b;
+		background: var(--notice);
 		flex: 0 0 auto;
 	}
 
@@ -1293,12 +1310,7 @@
 	}
 
 	.reading-canvas {
-		--reader-ink: #d8d6d0;
-		--reader-ink-strong: #f4f1e9;
-		--reader-quiet: #8f919b;
-		--reader-link: #aaa0f4;
-		--reader-rule: rgba(31, 32, 38, 0.14);
-		--reader-code-soft: rgba(31, 32, 38, 0.065);
+		position: relative;
 		width: min(900px, 100%);
 		min-height: 0;
 		margin: 0 auto;
@@ -1442,7 +1454,7 @@
 		margin: 0;
 		padding: 17px 19px;
 		border-radius: 5px;
-		background: color-mix(in srgb, var(--reader) 88%, #000);
+		background: color-mix(in srgb, var(--reader) 94%, var(--text));
 		color: var(--reader-ink);
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 0.66em;
@@ -1562,7 +1574,53 @@
 	}
 
 	.speech-segment {
+		position: relative;
 		border-radius: 2px;
+		transition:
+			background 150ms var(--ease),
+			box-shadow 150ms var(--ease);
+	}
+
+	.speech-segment:hover {
+		background: color-mix(in srgb, var(--primary) 5%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 5%, transparent);
+	}
+
+	.speech-segment:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 4px;
+		background: color-mix(in srgb, var(--primary) 7%, transparent);
+	}
+
+	.selection-start {
+		position: absolute;
+		z-index: 20;
+		display: inline-flex;
+		min-height: 34px;
+		align-items: center;
+		gap: 7px;
+		padding: 0 12px;
+		border: 1px solid color-mix(in srgb, var(--reader-ink-strong) 70%, transparent);
+		border-radius: 999px;
+		background: var(--reader-ink-strong);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.26);
+		color: var(--reader);
+		cursor: pointer;
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 10px;
+		font-weight: 680;
+		letter-spacing: 0.01em;
+		line-height: 1;
+		transform: translate(-50%, -100%);
+		white-space: nowrap;
+	}
+
+	.selection-start.below {
+		transform: translate(-50%, 0);
+	}
+
+	.selection-start:hover {
+		background: color-mix(in srgb, var(--reader-ink-strong) 88%, var(--primary));
 	}
 
 	.speech-segment + .speech-segment::before {
@@ -1570,9 +1628,9 @@
 	}
 
 	.speech-segment.active {
-		background: rgba(168, 157, 246, 0.08);
-		box-shadow: 0 0 0 3px rgba(168, 157, 246, 0.08);
-		color: #f3f1fb;
+		background: color-mix(in srgb, var(--primary) 9%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 9%, transparent);
+		color: var(--reader-ink-strong);
 	}
 
 	.sr-only {
@@ -1619,7 +1677,7 @@
 	}
 
 	.bookmark-list button:hover {
-		background: rgba(255, 255, 255, 0.035);
+		background: var(--hover);
 	}
 
 	.bookmark-list strong,
@@ -1661,49 +1719,55 @@
 		display: grid;
 		height: var(--player-height);
 		min-width: 0;
-		grid-row: 3;
+		grid-row: 2;
 		grid-column: 1 / -1;
-		grid-template-columns: minmax(190px, 0.7fr) minmax(390px, 1.5fr) minmax(290px, 336px);
+		grid-template-columns: 236px minmax(280px, 1fr) 168px;
 		align-items: center;
-		gap: 24px;
-		padding: 12px 20px;
+		gap: 10px;
+		padding: 8px 20px;
 		border-top: 1px solid var(--line);
 		background: color-mix(in srgb, var(--surface) 96%, black);
 		box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.18);
 	}
 
-	.now-playing {
-		display: grid;
+	.generation-options {
+		display: flex;
 		min-width: 0;
-		grid-template-columns: auto minmax(0, 1fr);
 		align-items: center;
-		gap: 12px;
+		gap: 4px;
+	}
+
+	.generate-all {
+		position: relative;
+		width: 36px;
+		height: 36px;
+		flex: 0 0 36px;
+		color: var(--muted);
+	}
+
+	.generate-all.active {
+		background: var(--primary-soft);
 		color: var(--primary);
 	}
 
-	.now-playing strong,
-	.now-playing span {
-		display: block;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.now-playing strong {
-		color: var(--text-soft);
-		font-size: 11px;
-		font-weight: 620;
-	}
-
-	.now-playing span {
-		margin-top: 5px;
-		color: var(--faint);
-		font-size: 9px;
+	.generate-all.active::before {
+		position: absolute;
+		inset: 2px;
+		border-radius: 50%;
+		background: conic-gradient(var(--primary) var(--generation-progress, 0%), var(--line-strong) 0);
+		content: '';
+		-webkit-mask: radial-gradient(circle, transparent 67%, black 69%);
+		mask: radial-gradient(circle, transparent 67%, black 69%);
+		pointer-events: none;
 	}
 
 	.transport {
 		display: grid;
-		gap: 8px;
+		min-width: 0;
+		grid-template-columns: auto minmax(100px, 1fr);
+		align-content: center;
+		align-items: center;
+		gap: 10px;
 	}
 
 	.transport-buttons {
@@ -1728,8 +1792,8 @@
 	}
 
 	.mini-button {
-		width: 38px;
-		height: 38px;
+		width: 32px;
+		height: 32px;
 		border-radius: 50%;
 	}
 
@@ -1739,8 +1803,8 @@
 
 	.seek-button {
 		position: relative;
-		width: 40px;
-		height: 40px;
+		width: 34px;
+		height: 34px;
 		border-radius: 50%;
 	}
 
@@ -1757,9 +1821,10 @@
 	}
 
 	.play-button {
-		width: 48px;
-		height: 48px;
-		margin: 0 6px;
+		position: relative;
+		width: 44px;
+		height: 44px;
+		margin: 0 4px;
 		border-radius: 50%;
 		background: var(--text);
 		color: var(--primary-ink);
@@ -1770,11 +1835,33 @@
 		transform: translateY(-1px);
 	}
 
+	.play-button.loading::before {
+		position: absolute;
+		inset: 5px;
+		border: 2px solid color-mix(in srgb, var(--primary-ink) 18%, transparent);
+		border-top-color: var(--primary-ink);
+		border-right-color: var(--primary-ink);
+		border-radius: 50%;
+		animation: play-progress-spin 850ms linear infinite;
+		content: '';
+		pointer-events: none;
+	}
+
+	.play-button.loading:hover {
+		transform: none;
+	}
+
+	@keyframes play-progress-spin {
+		to {
+			transform: rotate(1turn);
+		}
+	}
+
 	.timeline {
 		display: grid;
-		grid-template-columns: 42px 1fr 42px;
+		grid-template-columns: 34px minmax(60px, 1fr) 34px;
 		align-items: center;
-		gap: 10px;
+		gap: 6px;
 		color: var(--faint);
 		font-size: 9px;
 		font-variant-numeric: tabular-nums;
@@ -1793,7 +1880,7 @@
 	}
 
 	.timeline input::-webkit-slider-runnable-track,
-	.volume-control input::-webkit-slider-runnable-track {
+	.player-volume input::-webkit-slider-runnable-track {
 		height: 4px;
 		border-radius: 999px;
 		background: linear-gradient(
@@ -1804,7 +1891,7 @@
 	}
 
 	.timeline input::-webkit-slider-thumb,
-	.volume-control input::-webkit-slider-thumb {
+	.player-volume input::-webkit-slider-thumb {
 		appearance: none;
 		width: 12px;
 		height: 12px;
@@ -1816,7 +1903,7 @@
 	}
 
 	.timeline input::-moz-range-track,
-	.volume-control input::-moz-range-track {
+	.player-volume input::-moz-range-track {
 		height: 4px;
 		border: 0;
 		border-radius: 999px;
@@ -1824,14 +1911,14 @@
 	}
 
 	.timeline input::-moz-range-progress,
-	.volume-control input::-moz-range-progress {
+	.player-volume input::-moz-range-progress {
 		height: 4px;
 		border-radius: 999px;
 		background: var(--primary);
 	}
 
 	.timeline input::-moz-range-thumb,
-	.volume-control input::-moz-range-thumb {
+	.player-volume input::-moz-range-thumb {
 		width: 10px;
 		height: 10px;
 		border: 2px solid var(--surface);
@@ -1839,140 +1926,28 @@
 		background: var(--text);
 	}
 
-	.generation-status {
-		display: flex;
-		min-height: 27px;
-		align-items: center;
-		justify-content: center;
-		gap: 12px;
-	}
-
-	.generation-status strong,
-	.generation-status span {
-		display: block;
-	}
-
-	.generation-status strong {
-		color: var(--text-soft);
-		font-size: 10px;
-		font-weight: 650;
-	}
-
-	.generation-status span {
-		max-width: 330px;
-		overflow: hidden;
-		margin-top: 2px;
-		color: var(--faint);
-		font-size: 9px;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.generation-status button {
-		height: 32px;
-		padding: 0 12px;
-		border: 0;
-		border-radius: 5px;
-		background: var(--danger-soft);
-		color: var(--danger);
-		font-size: 10px;
-		font-weight: 650;
-	}
-
 	.player-options {
-		display: grid;
-		width: min(100%, 336px);
+		display: flex;
+		width: 168px;
 		min-width: 0;
-		grid-template-columns: minmax(104px, 1fr) 74px minmax(96px, 104px);
-		align-items: end;
+		align-items: center;
 		justify-self: end;
+		justify-content: flex-end;
+		gap: 4px;
+	}
+
+	.player-volume {
+		display: flex;
+		min-width: 0;
+		width: 106px;
+		height: 40px;
+		align-items: center;
 		gap: 8px;
+		padding: 0 4px;
+		color: var(--muted);
 	}
 
-	.compact-select,
-	.volume-control {
-		display: grid;
-		min-width: 0;
-		grid-template-rows: 14px 38px;
-		gap: 4px;
-		color: var(--faint);
-	}
-
-	.control-label {
-		display: flex;
-		min-width: 0;
-		align-items: center;
-		gap: 4px;
-		font-size: 10px;
-		font-weight: 600;
-		letter-spacing: 0.02em;
-		line-height: 1;
-	}
-
-	.select-field {
-		position: relative;
-		display: block;
-		min-width: 0;
-	}
-
-	.select-chevron {
-		position: absolute;
-		top: 50%;
-		right: 9px;
-		pointer-events: none;
-		transform: translateY(-50%);
-	}
-
-	.compact-select select {
-		appearance: none;
-		width: 100%;
-		min-width: 0;
-		height: 38px;
-		padding: 0 28px 0 10px;
-		border: 1px solid var(--control-border);
-		border-radius: 7px;
-		background: var(--control-strong);
-		color: var(--text-soft);
-		font-size: 10px;
-		color-scheme: inherit;
-	}
-
-	.compact-select select:hover {
-		border-color: var(--line-strong);
-		background: var(--control);
-	}
-
-	.compact-select select option {
-		background: var(--control-strong);
-		color: var(--text);
-	}
-
-	.compact-select.speed select {
-		width: 100%;
-	}
-
-	.volume-field {
-		display: flex;
-		min-width: 0;
-		height: 38px;
-		align-items: center;
-		padding: 0 10px;
-		border: 1px solid var(--control-border);
-		border-radius: 7px;
-		background: var(--control-strong);
-	}
-
-	.volume-field:hover {
-		border-color: var(--line-strong);
-		background: var(--control);
-	}
-
-	.volume-field:focus-within {
-		border-color: var(--primary);
-		box-shadow: 0 0 0 2px var(--primary-soft);
-	}
-
-	.volume-control input {
+	.player-volume input {
 		appearance: none;
 		width: 100%;
 		height: 20px;
@@ -1980,7 +1955,7 @@
 		background: transparent;
 	}
 
-	.volume-control input {
+	.player-volume input {
 		--timeline-progress: var(--volume-progress);
 	}
 
@@ -1992,9 +1967,16 @@
 		padding: 10px 12px;
 		border-left: 2px solid var(--danger);
 		border-radius: 5px;
-		background: #28191c;
-		color: #ffd0cf;
+		background: var(--danger-surface);
+		color: var(--danger-text);
 		font-size: 9px;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.play-button.loading::before {
+			animation: none;
+			transform: rotate(45deg);
+		}
 	}
 
 	@media (max-width: 1180px) {
@@ -2011,7 +1993,7 @@
 		.bookmarks-panel,
 		.outline-closed .bookmarks-panel {
 			position: absolute;
-			top: 54px;
+			top: 0;
 			right: 0;
 			bottom: var(--player-height);
 			z-index: 32;
@@ -2021,12 +2003,10 @@
 		}
 
 		.player-bar {
-			grid-template-columns: minmax(320px, 1fr) minmax(290px, 304px);
-			gap: 16px;
-		}
-
-		.now-playing {
-			display: none;
+			grid-template-columns: 236px minmax(270px, 1fr) 168px;
+			gap: 8px;
+			padding-right: 20px;
+			padding-left: 20px;
 		}
 	}
 
@@ -2036,7 +2016,7 @@
 		}
 
 		.player-bar {
-			grid-template-columns: minmax(0, 1fr);
+			grid-template-columns: 236px minmax(0, 1fr);
 		}
 	}
 
@@ -2050,7 +2030,7 @@
 
 		.outline-panel {
 			position: absolute;
-			top: 54px;
+			top: 0;
 			bottom: var(--player-height);
 			left: 0;
 			z-index: 32;
@@ -2067,13 +2047,13 @@
 			padding-right: 36px;
 			padding-left: 36px;
 		}
+
+		.mini-button {
+			display: none;
+		}
 	}
 
 	@media (max-width: 560px) {
-		.reader-title span {
-			display: none;
-		}
-
 		.reader-stage {
 			padding-right: 8px;
 			padding-left: 8px;

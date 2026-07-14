@@ -849,7 +849,7 @@
 		height: 23px;
 		place-items: center;
 		border-radius: 4px;
-		background: rgba(255, 255, 255, 0.06);
+		background: var(--hover-strong);
 		color: var(--text-soft);
 		font-size: 8px;
 		font-weight: 650;

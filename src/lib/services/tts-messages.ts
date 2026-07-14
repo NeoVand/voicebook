@@ -11,7 +11,13 @@ export interface SynthesisMetrics {
 export type TtsWorkerRequest =
 	| { type: 'capabilities'; requestId: string }
 	| { type: 'load'; requestId: string; modelId: ModelDescriptor['id']; backend: BackendPreference }
-	| { type: 'synthesize'; requestId: string; text: string; voiceId: string }
+	| {
+			type: 'synthesize';
+			requestId: string;
+			text: string;
+			voiceId: string;
+			totalSteps: number;
+	  }
 	| { type: 'cancel'; requestId: string }
 	| { type: 'dispose'; requestId: string };
 

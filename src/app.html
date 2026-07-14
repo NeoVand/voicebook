@@ -5,6 +5,17 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
 		<meta name="theme-color" content="#09090f" />
+		<script>
+			try {
+				const theme = localStorage.getItem('voicebook:theme');
+				document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+				document
+					.querySelector('meta[name="theme-color"]')
+					?.setAttribute('content', theme === 'light' ? '#f4f3ef' : '#0b0c0f');
+			} catch {
+				document.documentElement.dataset.theme = 'dark';
+			}
+		</script>
 		<meta
 			name="description"
 			content="Voicebook turns documents into private, on-device speech with browser AI."

@@ -4,13 +4,10 @@
 	import {
 		ArrowRight,
 		BookOpenText,
-		Check,
 		Clock3,
-		Cpu,
 		FileText,
 		FileUp,
 		Plus,
-		ShieldCheck,
 		Trash2,
 		X
 	} from '@lucide/svelte';
@@ -22,10 +19,6 @@
 	let pasteOpen = $state(false);
 	let pasteTitle = $state('');
 	let pasteText = $state('');
-
-	let engineProgress = $derived(appState.modelProgress['supertonic-3']);
-	let engineInstalled = $derived(appState.installedModels.includes('supertonic-3'));
-	let licenseAccepted = $derived(appState.acceptedLicenses.includes('supertonic-3'));
 
 	function captureFileInput(node: HTMLInputElement): () => void {
 		fileInput = node;
@@ -82,15 +75,6 @@
 		if (confirm('Remove “' + document.title + '” and its generated audio from this browser?'))
 			await appState.deleteDocument(document.id);
 	}
-
-	async function installEngine(): Promise<void> {
-		try {
-			await appState.installModel('supertonic-3');
-		} catch (error) {
-			appState.errorMessage =
-				error instanceof Error ? error.message : 'Supertonic 3 could not be installed.';
-		}
-	}
 </script>
 
 <svelte:head>
@@ -143,35 +127,6 @@
 		onchange={onFileChange}
 	/>
 
-	<section class="engine-line" aria-labelledby="engine-heading">
-		<div class="engine-copy">
-			<Cpu size={16} />
-			<div>
-				<strong id="engine-heading">Supertonic 3</strong>
-				<span>
-					{engineInstalled
-						? 'Ready for local speech'
-						: 'Required once · 31 languages · ten voices · 415 MB'}
-				</span>
-			</div>
-		</div>
-		{#if engineProgress.status === 'loading'}
-			<div class="engine-progress" aria-live="polite">
-				<span>{engineProgress.message}</span>
-				<progress max="100" value={engineProgress.progress}></progress>
-				<strong>{Math.round(engineProgress.progress)}%</strong>
-			</div>
-		{:else if engineInstalled}
-			<span class="ready"><Check size={14} /> Ready</span>
-		{:else if !licenseAccepted}
-			<a class="text-action" href={resolve('/settings')}>Review license <ArrowRight size={14} /></a>
-		{:else}
-			<button class="button" type="button" onclick={installEngine}>
-				{engineProgress.status === 'error' ? 'Retry install' : 'Install voice'}
-			</button>
-		{/if}
-	</section>
-
 	<div class="library-meta">
 		<div>
 			<h2>Documents</h2>
@@ -180,7 +135,6 @@
 				{appState.documents.length === 1 ? 'item' : 'items'}
 			</span>
 		</div>
-		<div class="privacy-note"><ShieldCheck size={14} /> No uploads or telemetry</div>
 	</div>
 
 	<section class="document-table" aria-label="Documents">
@@ -360,19 +314,18 @@
 		align-items: center;
 		gap: 14px;
 		min-height: 88px;
-		padding: 16px 18px;
-		border: 1px dashed var(--line-strong);
-		border-radius: 7px;
-		background: rgba(255, 255, 255, 0.015);
+		padding: 18px 4px;
+		border-top: 1px solid var(--line);
+		border-bottom: 1px solid var(--line);
+		background: transparent;
 		transition:
 			background 150ms var(--ease),
-			border-color 150ms var(--ease);
+			color 150ms var(--ease);
 	}
 
 	.import-strip:hover,
 	.import-strip.dragging {
-		border-color: rgba(168, 157, 246, 0.5);
-		background: var(--primary-soft);
+		background: var(--hover);
 	}
 
 	.import-strip.busy {
@@ -406,87 +359,12 @@
 		font-size: 9px;
 	}
 
-	.engine-line {
-		display: flex;
-		min-height: 58px;
-		align-items: center;
-		justify-content: space-between;
-		gap: 18px;
-		margin-top: 14px;
-		padding: 0 4px 0 2px;
-		border-bottom: 1px solid var(--line);
-	}
-
-	.engine-copy {
-		display: flex;
-		align-items: center;
-		gap: 11px;
-		color: var(--primary);
-	}
-
-	.engine-copy strong,
-	.engine-copy span {
-		display: block;
-	}
-
-	.engine-copy strong {
-		color: var(--text-soft);
-		font-size: 10px;
-		font-weight: 640;
-	}
-
-	.engine-copy span {
-		margin-top: 3px;
-		color: var(--faint);
-		font-size: 9px;
-	}
-
-	.ready,
-	.text-action,
-	.privacy-note {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 9px;
-		font-weight: 620;
-	}
-
-	.ready {
-		color: var(--success);
-	}
-
-	.text-action {
-		color: var(--primary);
-	}
-
-	.engine-progress {
-		display: grid;
-		width: min(390px, 46%);
-		grid-template-columns: minmax(0, 1fr) 100px 32px;
-		align-items: center;
-		gap: 10px;
-		color: var(--muted);
-		font-size: 9px;
-	}
-
-	.engine-progress span {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.engine-progress progress {
-		width: 100%;
-		height: 4px;
-		accent-color: var(--primary);
-	}
-
 	.library-meta {
 		display: flex;
 		align-items: flex-end;
 		justify-content: space-between;
 		gap: 16px;
-		margin-top: 34px;
+		margin-top: 42px;
 		padding-bottom: 12px;
 		border-bottom: 1px solid var(--line-strong);
 	}
@@ -503,14 +381,13 @@
 		font-weight: 650;
 	}
 
-	.library-meta span,
-	.privacy-note {
+	.library-meta span {
 		color: var(--faint);
 		font-size: 9px;
 	}
 
 	.document-table {
-		min-height: 300px;
+		min-height: 240px;
 	}
 
 	.document-row {
@@ -529,7 +406,7 @@
 	}
 
 	.document-link:hover {
-		background: rgba(255, 255, 255, 0.022);
+		background: var(--hover);
 	}
 
 	.file-kind {
@@ -594,7 +471,7 @@
 		display: block;
 		height: 2px;
 		overflow: hidden;
-		background: rgba(255, 255, 255, 0.05);
+		background: var(--line-strong);
 	}
 
 	.document-progress b {
@@ -627,7 +504,7 @@
 		grid-template-columns: auto 1fr auto;
 		align-items: center;
 		gap: 18px;
-		margin: 72px auto 0;
+		margin: 56px auto 0;
 		color: var(--primary);
 	}
 
@@ -652,7 +529,7 @@
 		display: grid;
 		place-items: center;
 		padding: 20px;
-		background: rgba(5, 6, 8, 0.78);
+		background: var(--modal-scrim);
 	}
 
 	.paste-dialog,
@@ -660,7 +537,7 @@
 		width: min(540px, 100%);
 		padding: 22px;
 		border-radius: 8px;
-		background: #15171c;
+		background: var(--modal-surface);
 		box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
 	}
 
@@ -735,8 +612,7 @@
 	}
 
 	@media (max-width: 680px) {
-		.page-heading,
-		.engine-line {
+		.page-heading {
 			align-items: flex-start;
 			flex-direction: column;
 		}
@@ -757,20 +633,11 @@
 			display: none;
 		}
 
-		.engine-line {
-			padding: 12px 2px;
-		}
-
-		.engine-progress {
-			width: 100%;
-		}
-
 		.document-link {
 			grid-template-columns: 40px minmax(0, 1fr) 24px;
 		}
 
-		.document-progress,
-		.privacy-note {
+		.document-progress {
 			display: none;
 		}
 

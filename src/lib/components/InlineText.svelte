@@ -19,7 +19,11 @@
 	{#if index >= wrappers.length}
 		{#each content as piece, pieceIndex (pieceIndex)}
 			{#if piece.wordIndex !== undefined}
-				<span class="spoken-word" class:active-word={activeWordIndex === piece.wordIndex}>
+				<span
+					class="spoken-word"
+					class:active-word={activeWordIndex === piece.wordIndex}
+					data-word-index={piece.wordIndex}
+				>
 					{piece.text}
 				</span>
 			{:else}
