@@ -232,6 +232,7 @@ export class VoicebookPlayer {
 			appState.selectedVoiceId,
 			ttsClient.backend,
 			ttsClient.dtype,
+			`generation-steps:${appState.generationSteps}`,
 			'generate-speed:1'
 		]);
 	}
@@ -270,7 +271,8 @@ export class VoicebookPlayer {
 				controller.signal,
 				(update) => {
 					this.bufferingStage = update.status;
-				}
+				},
+				appState.generationSteps
 			);
 			if (controller.signal.aborted)
 				throw new DOMException('Speech generation was canceled.', 'AbortError');
@@ -298,6 +300,7 @@ export class VoicebookPlayer {
 				modelId: model.id,
 				modelRevision: model.revision,
 				voiceId: appState.selectedVoiceId,
+				generationSteps: appState.generationSteps,
 				backend: ttsClient.backend,
 				dtype: ttsClient.dtype,
 				duration,
@@ -605,6 +608,22 @@ export class VoicebookPlayer {
 		this.reprioritize();
 		this.preparedBySegment.clear();
 		await appState.selectVoice(id);
+	}
+
+	async chooseGenerationSteps(value: number): Promise<void> {
+		if (value === appState.generationSteps) return;
+		this.stopPlayback(false);
+		const hadPendingSynthesis = this.isBuffering || this.isGeneratingAll || this.queue.size > 0;
+		this.cancellationVersion += 1;
+		this.reprioritize();
+		if (hadPendingSynthesis) ttsClient.cancelAll();
+		this.preparedBySegment.clear();
+		this.isBuffering = false;
+		this.isGeneratingAll = false;
+		this.generationProgress = 0;
+		this.bufferingStage = 'Preparing this passage…';
+		this.errorMessage = '';
+		await appState.setGenerationSteps(value);
 	}
 
 	async toggleBookmark(): Promise<void> {

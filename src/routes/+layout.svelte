@@ -8,24 +8,22 @@
 		ArrowLeft,
 		Bookmark,
 		BookOpenText,
-		Code2,
 		Cpu,
-		Download,
-		Ellipsis,
+		FileText,
 		HardDrive,
 		Library,
 		List,
 		ListMusic,
+		Moon,
 		PanelLeftClose,
 		PanelLeftOpen,
 		Settings2,
 		ShieldCheck,
-		Square,
+		Sun,
 		X
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
-	import { segmentBlocks } from '$lib/domain/segmenter';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
@@ -36,8 +34,12 @@
 	const homeHref = resolve('/');
 	const settingsHref = resolve('/settings');
 	const sidebarStorageKey = 'voicebook:sidebar-collapsed';
+	const themeStorageKey = 'voicebook:theme';
 	let sidebarCollapsed = $state(
 		browser && window.localStorage.getItem(sidebarStorageKey) === 'true'
+	);
+	let theme = $state<'dark' | 'light'>(
+		browser && document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'
 	);
 	let isReader = $derived(page.url.pathname.startsWith(resolve('/read')));
 	let settingsSection = $derived(page.url.searchParams.get('section') ?? 'models');
@@ -50,7 +52,6 @@
 			readerBook?.bookmarks.some((bookmark) => bookmark.segmentId === player.currentSegment?.id)
 		)
 	);
-	let readerEngineInstalled = $derived(appState.installedModels.includes('supertonic-3'));
 
 	onMount(() => {
 		void appState.initialize();
@@ -61,19 +62,13 @@
 		window.localStorage.setItem(sidebarStorageKey, String(sidebarCollapsed));
 	}
 
-	async function toggleReaderCodeSpeech(): Promise<void> {
-		if (!readerBook) return;
-		readerBook.includeCode = !readerBook.includeCode;
-		readerBook.segments = segmentBlocks(readerBook.blocks, readerBook.includeCode);
-		player.setDocument(readerBook);
-		await appState.saveDocument(readerBook);
-		readerChrome.menuOpen = false;
-	}
-
-	function toggleWholeDocumentGeneration(): void {
-		if (player.isGeneratingAll) player.cancelGeneration();
-		else void player.generateAll();
-		readerChrome.menuOpen = false;
+	function toggleTheme(): void {
+		theme = theme === 'dark' ? 'light' : 'dark';
+		document.documentElement.dataset.theme = theme;
+		window.localStorage.setItem(themeStorageKey, theme);
+		document
+			.querySelector('meta[name="theme-color"]')
+			?.setAttribute('content', theme === 'dark' ? '#0b0c0f' : '#f4f3ef');
 	}
 </script>
 
@@ -84,7 +79,7 @@
 
 <a class="skip-link" href="#main-content">Skip to content</a>
 
-<header class="app-header" aria-label="Voicebook header">
+<header class="app-header" class:sidebar-collapsed={sidebarCollapsed} aria-label="Voicebook header">
 	<div class="app-brand-slot">
 		<a
 			class="brand"
@@ -100,7 +95,12 @@
 
 	{#if isReader && readerBook}
 		<div class="reader-commandbar">
-			<div class="reader-commandbar-left">
+			<div class="reader-commandbar-title">
+				<strong>{readerBook.title}</strong>
+				<span>{readerBook.sourceKind.toUpperCase()} · {readerBook.segments.length} passages</span>
+			</div>
+
+			<div class="reader-commandbar-actions">
 				<a
 					class="icon-button"
 					href={homeHref}
@@ -122,14 +122,6 @@
 				>
 					<List size={17} />
 				</button>
-			</div>
-
-			<div class="reader-commandbar-title">
-				<strong>{readerBook.title}</strong>
-				<span>{readerBook.sourceKind.toUpperCase()} · {readerBook.segments.length} passages</span>
-			</div>
-
-			<div class="reader-commandbar-actions">
 				<button
 					class="icon-button"
 					class:marked={currentBookmarked}
@@ -150,55 +142,29 @@
 				>
 					<ListMusic size={16} />
 				</button>
-				<div class="reader-menu-wrap">
-					<button
-						class="icon-button"
-						class:active={readerChrome.menuOpen}
-						type="button"
-						aria-label="Reading options"
-						aria-expanded={readerChrome.menuOpen}
-						title="Reading options"
-						onclick={() => (readerChrome.menuOpen = !readerChrome.menuOpen)}
-					>
-						<Ellipsis size={18} />
-					</button>
-					{#if readerChrome.menuOpen}
-						<div class="reader-menu" role="menu">
-							{#if readerBook.blocks.some((block) => block.kind === 'code')}
-								<button type="button" role="menuitem" onclick={toggleReaderCodeSpeech}>
-									<Code2 size={16} />
-									<span>
-										<strong>{readerBook.includeCode ? 'Skip code' : 'Read code'}</strong>
-										<small>Code always remains visible.</small>
-									</span>
-								</button>
-							{/if}
-							<button
-								type="button"
-								role="menuitem"
-								disabled={!player.isGeneratingAll && !readerEngineInstalled}
-								onclick={toggleWholeDocumentGeneration}
-							>
-								{#if player.isGeneratingAll}
-									<Square size={15} fill="currentColor" />
-								{:else}
-									<Download size={16} />
-								{/if}
-								<span>
-									<strong
-										>{player.isGeneratingAll ? 'Stop preparing' : 'Prepare whole document'}</strong
-									>
-									<small>
-										{player.isGeneratingAll
-											? Math.round(player.generationProgress) + '% complete'
-											: 'Cache every passage for offline replay.'}
-									</small>
-								</span>
-							</button>
-						</div>
-					{/if}
-				</div>
+				<span class="commandbar-divider" aria-hidden="true"></span>
+				<button
+					class="icon-button"
+					type="button"
+					aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+					title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
+					onclick={toggleTheme}
+				>
+					{#if theme === 'dark'}<Sun size={16} />{:else}<Moon size={16} />{/if}
+				</button>
 			</div>
+		</div>
+	{:else}
+		<div class="global-commandbar">
+			<button
+				class="icon-button"
+				type="button"
+				aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+				title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
+				onclick={toggleTheme}
+			>
+				{#if theme === 'dark'}<Sun size={16} />{:else}<Moon size={16} />{/if}
+			</button>
 		</div>
 	{/if}
 </header>
@@ -223,52 +189,102 @@
 			</button>
 		</div>
 
-		<nav id="primary-navigation" class="primary-nav" aria-label="Primary navigation">
+		<div class="sidebar-main">
+			<div class="library-nav-group">
+				<nav id="primary-navigation" class="primary-nav" aria-label="Primary navigation">
+					<a
+						class="nav-link"
+						class:active={page.url.pathname === homeHref}
+						href={homeHref}
+						aria-label="Library"
+						aria-current={page.url.pathname === homeHref ? 'page' : undefined}
+						data-tooltip={appState.documents.length ? undefined : 'Library'}
+						onclick={() => readerChrome.closeTransientPanels()}
+					>
+						<Library size={17} />
+						<span>Library</span>
+					</a>
+				</nav>
+
+				{#if sidebarCollapsed && appState.documents.length}
+					<div class="library-flyout" aria-label="Recent documents">
+						<strong>Recent documents</strong>
+						{#each appState.documents.slice(0, 7) as document (document.id)}
+							<a
+								class:active={readerDocumentId === document.id}
+								href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
+								onclick={() => readerChrome.closeTransientPanels()}
+							>
+								<FileText size={14} />
+								<span>{document.title}</span>
+							</a>
+						{/each}
+					</div>
+				{/if}
+			</div>
+
+			{#if !sidebarCollapsed}
+				<div class="sidebar-documents">
+					<span class="sidebar-section-label">Recent</span>
+					{#if appState.documents.length}
+						<nav aria-label="Recent documents">
+							{#each appState.documents as document (document.id)}
+								<a
+									class:active={readerDocumentId === document.id}
+									href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
+									title={document.title}
+									onclick={() => readerChrome.closeTransientPanels()}
+								>
+									<FileText size={13} />
+									<span>{document.title}</span>
+								</a>
+							{/each}
+						</nav>
+					{:else}
+						<p>No documents yet</p>
+					{/if}
+				</div>
+			{/if}
+		</div>
+
+		<nav class="utility-nav" aria-label="Voicebook settings">
 			<a
-				class:active={page.url.pathname === homeHref}
-				href={homeHref}
-				aria-label="Library"
-				aria-current={page.url.pathname === homeHref ? 'page' : undefined}
-				title={sidebarCollapsed ? 'Library' : undefined}
-				onclick={() => readerChrome.closeTransientPanels()}
-			>
-				<Library size={17} />
-				<span>Library</span>
-			</a>
-			<a
+				class="nav-link"
 				class:active={page.url.pathname.startsWith(settingsHref) && settingsSection === 'models'}
 				href={settingsHref}
 				aria-label="Voice"
 				aria-current={page.url.pathname.startsWith(settingsHref) && settingsSection === 'models'
 					? 'page'
 					: undefined}
-				title={sidebarCollapsed ? 'Voice' : undefined}
+				data-tooltip="Voice"
 				onclick={() => readerChrome.closeTransientPanels()}
 			>
 				<Cpu size={17} />
 				<span>Voice</span>
 			</a>
 			<a
+				class="nav-link"
 				class:active={page.url.pathname.startsWith(settingsHref) && settingsSection === 'storage'}
 				href={resolve('/settings?section=storage')}
 				aria-label="Storage"
 				aria-current={page.url.pathname.startsWith(settingsHref) && settingsSection === 'storage'
 					? 'page'
 					: undefined}
-				title={sidebarCollapsed ? 'Storage' : undefined}
+				data-tooltip="Storage"
 				onclick={() => readerChrome.closeTransientPanels()}
 			>
 				<HardDrive size={17} />
 				<span>Storage</span>
 			</a>
 			<a
+				class="nav-link"
 				class:active={page.url.pathname.startsWith(settingsHref) && settingsSection === 'system'}
 				href={resolve('/settings?section=system')}
 				aria-label="System"
 				aria-current={page.url.pathname.startsWith(settingsHref) && settingsSection === 'system'
 					? 'page'
 					: undefined}
-				title={sidebarCollapsed ? 'System' : undefined}
+				data-tooltip="System"
 				onclick={() => readerChrome.closeTransientPanels()}
 			>
 				<Settings2 size={17} />

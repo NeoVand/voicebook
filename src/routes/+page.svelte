@@ -325,7 +325,7 @@
 
 	.import-strip:hover,
 	.import-strip.dragging {
-		background: rgba(255, 255, 255, 0.02);
+		background: var(--hover);
 	}
 
 	.import-strip.busy {
@@ -387,7 +387,7 @@
 	}
 
 	.document-table {
-		min-height: 300px;
+		min-height: 240px;
 	}
 
 	.document-row {
@@ -406,7 +406,7 @@
 	}
 
 	.document-link:hover {
-		background: rgba(255, 255, 255, 0.022);
+		background: var(--hover);
 	}
 
 	.file-kind {
@@ -471,7 +471,7 @@
 		display: block;
 		height: 2px;
 		overflow: hidden;
-		background: rgba(255, 255, 255, 0.05);
+		background: var(--line-strong);
 	}
 
 	.document-progress b {
@@ -504,7 +504,7 @@
 		grid-template-columns: auto 1fr auto;
 		align-items: center;
 		gap: 18px;
-		margin: 72px auto 0;
+		margin: 56px auto 0;
 		color: var(--primary);
 	}
 
@@ -529,7 +529,7 @@
 		display: grid;
 		place-items: center;
 		padding: 20px;
-		background: rgba(5, 6, 8, 0.78);
+		background: var(--modal-scrim);
 	}
 
 	.paste-dialog,
@@ -537,7 +537,7 @@
 		width: min(540px, 100%);
 		padding: 22px;
 		border-radius: 8px;
-		background: #15171c;
+		background: var(--modal-surface);
 		box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
 	}
 

@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import {
 		ArrowLeft,
+		AudioLines,
 		Bookmark,
 		BookOpenText,
 		Check,
@@ -32,6 +33,7 @@
 		SpeechSegment,
 		TableCell
 	} from '$lib/domain/types';
+	import { GENERATION_STEP_OPTIONS } from '$lib/domain/synthesis';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
@@ -57,6 +59,10 @@
 	const playbackSpeedOptions = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((speed) => ({
 		value: String(speed),
 		label: `${speed}×`
+	}));
+	const generationQualityOptions = GENERATION_STEP_OPTIONS.map((steps) => ({
+		value: String(steps),
+		label: `${steps} steps`
 	}));
 
 	let segmentsByBlock = $derived.by(() => {
@@ -90,10 +96,6 @@
 	);
 	let installed = $derived(appState.installedModels.includes('supertonic-3'));
 	let licenseAccepted = $derived(appState.acceptedLicenses.includes('supertonic-3'));
-	let selectedVoiceName = $derived(
-		appState.selectedModel.voices.find((voice) => voice.id === appState.selectedVoiceId)?.name ??
-			'Voice'
-	);
 	let voiceOptions = $derived(
 		appState.selectedModel.voices.map((voice) => ({ value: voice.id, label: voice.name }))
 	);
@@ -499,6 +501,10 @@
 		await player.chooseVoice(voiceId);
 	}
 
+	async function changeGenerationQuality(value: string): Promise<void> {
+		await player.chooseGenerationSteps(Number(value));
+	}
+
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
 		const target = event.target as HTMLElement | null;
@@ -854,17 +860,47 @@
 		{/if}
 
 		<footer class="player-bar" aria-label="Playback controls">
-			<div class="now-playing">
-				<BookOpenText size={18} />
-				<div>
-					<strong>
-						{player.currentSegment?.text.slice(0, 38) || book.title}{(player.currentSegment?.text
-							.length ?? 0) > 38
-							? '…'
-							: ''}
-					</strong>
-					<span title={player.runtimeDetail}>{selectedVoiceName} · {player.runtimeLabel}</span>
-				</div>
+			<div class="generation-options" role="group" aria-label="Speech generation settings">
+				<CompactSelect
+					label="Voice"
+					value={appState.selectedVoiceId}
+					options={voiceOptions}
+					onChange={changeVoice}
+					triggerWidth="106px"
+					menuWidth="148px"
+				/>
+				<CompactSelect
+					label="Generation quality"
+					value={String(appState.generationSteps)}
+					options={generationQualityOptions}
+					onChange={changeGenerationQuality}
+					triggerWidth="86px"
+					menuWidth="96px"
+				/>
+				<button
+					class="generate-all icon-button"
+					class:active={player.isGeneratingAll}
+					type="button"
+					disabled={!player.isGeneratingAll && !installed}
+					aria-busy={player.isGeneratingAll}
+					aria-label={player.isGeneratingAll
+						? `Stop preparing whole document, ${Math.round(player.generationProgress)} percent complete`
+						: 'Prepare whole document audio'}
+					title={player.isGeneratingAll
+						? `Stop preparing · ${Math.round(player.generationProgress)}%`
+						: 'Prepare whole document audio'}
+					style:--generation-progress={`${Math.round(player.generationProgress)}%`}
+					onclick={() => {
+						if (player.isGeneratingAll) player.cancelGeneration();
+						else void player.generateAll();
+					}}
+				>
+					{#if player.isGeneratingAll}
+						<Square size={13} fill="currentColor" />
+					{:else}
+						<AudioLines size={17} />
+					{/if}
+				</button>
 			</div>
 
 			<div class="transport">
@@ -953,14 +989,6 @@
 
 			<div class="player-options" role="group" aria-label="Playback settings">
 				<CompactSelect
-					label="Voice"
-					value={appState.selectedVoiceId}
-					options={voiceOptions}
-					onChange={changeVoice}
-					triggerWidth="112px"
-					menuWidth="148px"
-				/>
-				<CompactSelect
 					label="Playback speed"
 					value={String(player.rate)}
 					options={playbackSpeedOptions}
@@ -1021,7 +1049,7 @@
 	}
 
 	.reader-shell {
-		--player-height: 104px;
+		--player-height: 72px;
 		display: grid;
 		height: 100%;
 		min-height: 0;
@@ -1049,7 +1077,7 @@
 		min-width: 0;
 		min-height: 0;
 		grid-row: 1;
-		background: #101115;
+		background: var(--sidebar);
 		flex-direction: column;
 	}
 
@@ -1121,8 +1149,8 @@
 	}
 
 	.outline-legend .view-key {
-		border: 1px solid rgba(242, 243, 246, 0.32);
-		background: rgba(242, 243, 246, 0.1);
+		border: 1px solid color-mix(in srgb, var(--text) 32%, transparent);
+		background: color-mix(in srgb, var(--text) 10%, transparent);
 	}
 
 	.outline-legend .voice-key {
@@ -1166,17 +1194,17 @@
 	}
 
 	.outline-panel nav button:hover {
-		background: rgba(255, 255, 255, 0.04);
+		background: var(--hover);
 		color: var(--text-soft);
 	}
 
 	.outline-panel nav button.scroll-current {
-		background: rgba(242, 243, 246, 0.065);
+		background: var(--hover-strong);
 		color: var(--text);
 	}
 
 	.outline-panel nav button.narration-current .outline-label {
-		color: #e2deff;
+		color: var(--primary);
 		font-weight: 610;
 	}
 
@@ -1226,7 +1254,7 @@
 		grid-column: 2;
 		overflow: hidden;
 		padding: 14px 18px 0;
-		background: #0c0d10;
+		background: var(--reader-stage);
 		flex-direction: column;
 	}
 
@@ -1244,7 +1272,7 @@
 		margin: 0 auto 10px;
 		padding: 6px 8px 6px 12px;
 		border-left: 2px solid var(--primary);
-		background: #15161b;
+		background: var(--notice);
 		flex: 0 0 auto;
 	}
 
@@ -1282,12 +1310,6 @@
 	}
 
 	.reading-canvas {
-		--reader-ink: #d8d6d0;
-		--reader-ink-strong: #f4f1e9;
-		--reader-quiet: #8f919b;
-		--reader-link: #aaa0f4;
-		--reader-rule: rgba(31, 32, 38, 0.14);
-		--reader-code-soft: rgba(31, 32, 38, 0.065);
 		position: relative;
 		width: min(900px, 100%);
 		min-height: 0;
@@ -1432,7 +1454,7 @@
 		margin: 0;
 		padding: 17px 19px;
 		border-radius: 5px;
-		background: color-mix(in srgb, var(--reader) 88%, #000);
+		background: color-mix(in srgb, var(--reader) 94%, var(--text));
 		color: var(--reader-ink);
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 0.66em;
@@ -1560,14 +1582,14 @@
 	}
 
 	.speech-segment:hover {
-		background: rgba(168, 157, 246, 0.045);
-		box-shadow: 0 0 0 3px rgba(168, 157, 246, 0.045);
+		background: color-mix(in srgb, var(--primary) 5%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 5%, transparent);
 	}
 
 	.speech-segment:focus-visible {
 		outline: 2px solid var(--primary);
 		outline-offset: 4px;
-		background: rgba(168, 157, 246, 0.065);
+		background: color-mix(in srgb, var(--primary) 7%, transparent);
 	}
 
 	.selection-start {
@@ -1606,9 +1628,9 @@
 	}
 
 	.speech-segment.active {
-		background: rgba(168, 157, 246, 0.08);
-		box-shadow: 0 0 0 3px rgba(168, 157, 246, 0.08);
-		color: #f3f1fb;
+		background: color-mix(in srgb, var(--primary) 9%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 9%, transparent);
+		color: var(--reader-ink-strong);
 	}
 
 	.sr-only {
@@ -1655,7 +1677,7 @@
 	}
 
 	.bookmark-list button:hover {
-		background: rgba(255, 255, 255, 0.035);
+		background: var(--hover);
 	}
 
 	.bookmark-list strong,
@@ -1699,49 +1721,53 @@
 		min-width: 0;
 		grid-row: 2;
 		grid-column: 1 / -1;
-		grid-template-columns: minmax(190px, 0.7fr) minmax(390px, 1.5fr) minmax(290px, 336px);
+		grid-template-columns: 236px minmax(280px, 1fr) 168px;
 		align-items: center;
-		gap: 24px;
-		padding: 12px 20px;
+		gap: 10px;
+		padding: 8px 20px;
 		border-top: 1px solid var(--line);
 		background: color-mix(in srgb, var(--surface) 96%, black);
 		box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.18);
 	}
 
-	.now-playing {
-		display: grid;
+	.generation-options {
+		display: flex;
 		min-width: 0;
-		grid-template-columns: auto minmax(0, 1fr);
 		align-items: center;
-		gap: 12px;
+		gap: 4px;
+	}
+
+	.generate-all {
+		position: relative;
+		width: 36px;
+		height: 36px;
+		flex: 0 0 36px;
+		color: var(--muted);
+	}
+
+	.generate-all.active {
+		background: var(--primary-soft);
 		color: var(--primary);
 	}
 
-	.now-playing strong,
-	.now-playing span {
-		display: block;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.now-playing strong {
-		color: var(--text-soft);
-		font-size: 11px;
-		font-weight: 620;
-	}
-
-	.now-playing span {
-		margin-top: 5px;
-		color: var(--faint);
-		font-size: 9px;
+	.generate-all.active::before {
+		position: absolute;
+		inset: 2px;
+		border-radius: 50%;
+		background: conic-gradient(var(--primary) var(--generation-progress, 0%), var(--line-strong) 0);
+		content: '';
+		-webkit-mask: radial-gradient(circle, transparent 67%, black 69%);
+		mask: radial-gradient(circle, transparent 67%, black 69%);
+		pointer-events: none;
 	}
 
 	.transport {
 		display: grid;
-		grid-template-rows: 48px 20px;
+		min-width: 0;
+		grid-template-columns: auto minmax(100px, 1fr);
 		align-content: center;
-		gap: 8px;
+		align-items: center;
+		gap: 10px;
 	}
 
 	.transport-buttons {
@@ -1766,8 +1792,8 @@
 	}
 
 	.mini-button {
-		width: 38px;
-		height: 38px;
+		width: 32px;
+		height: 32px;
 		border-radius: 50%;
 	}
 
@@ -1777,8 +1803,8 @@
 
 	.seek-button {
 		position: relative;
-		width: 40px;
-		height: 40px;
+		width: 34px;
+		height: 34px;
 		border-radius: 50%;
 	}
 
@@ -1796,9 +1822,9 @@
 
 	.play-button {
 		position: relative;
-		width: 48px;
-		height: 48px;
-		margin: 0 6px;
+		width: 44px;
+		height: 44px;
+		margin: 0 4px;
 		border-radius: 50%;
 		background: var(--text);
 		color: var(--primary-ink);
@@ -1833,9 +1859,9 @@
 
 	.timeline {
 		display: grid;
-		grid-template-columns: 42px 1fr 42px;
+		grid-template-columns: 34px minmax(60px, 1fr) 34px;
 		align-items: center;
-		gap: 10px;
+		gap: 6px;
 		color: var(--faint);
 		font-size: 9px;
 		font-variant-numeric: tabular-nums;
@@ -1902,22 +1928,22 @@
 
 	.player-options {
 		display: flex;
-		width: min(100%, 304px);
+		width: 168px;
 		min-width: 0;
 		align-items: center;
 		justify-self: end;
 		justify-content: flex-end;
-		gap: 10px;
+		gap: 4px;
 	}
 
 	.player-volume {
 		display: flex;
 		min-width: 0;
-		width: 110px;
-		height: 44px;
+		width: 106px;
+		height: 40px;
 		align-items: center;
 		gap: 8px;
-		padding: 0 3px 0 5px;
+		padding: 0 4px;
 		color: var(--muted);
 	}
 
@@ -1941,8 +1967,8 @@
 		padding: 10px 12px;
 		border-left: 2px solid var(--danger);
 		border-radius: 5px;
-		background: #28191c;
-		color: #ffd0cf;
+		background: var(--danger-surface);
+		color: var(--danger-text);
 		font-size: 9px;
 	}
 
@@ -1977,12 +2003,10 @@
 		}
 
 		.player-bar {
-			grid-template-columns: minmax(320px, 1fr) minmax(290px, 304px);
-			gap: 16px;
-		}
-
-		.now-playing {
-			display: none;
+			grid-template-columns: 236px minmax(270px, 1fr) 168px;
+			gap: 8px;
+			padding-right: 20px;
+			padding-left: 20px;
 		}
 	}
 
@@ -1992,7 +2016,7 @@
 		}
 
 		.player-bar {
-			grid-template-columns: minmax(0, 1fr);
+			grid-template-columns: 236px minmax(0, 1fr);
 		}
 	}
 
@@ -2022,6 +2046,10 @@
 		.reading-canvas {
 			padding-right: 36px;
 			padding-left: 36px;
+		}
+
+		.mini-button {
+			display: none;
 		}
 	}
 

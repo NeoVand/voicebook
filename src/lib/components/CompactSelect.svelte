@@ -202,7 +202,7 @@
 
 	.select-trigger:hover,
 	.select-trigger.open {
-		background: rgba(255, 255, 255, 0.045);
+		background: var(--hover);
 		color: var(--text);
 	}
 
@@ -229,11 +229,14 @@
 		z-index: 60;
 		display: grid;
 		width: var(--menu-width);
+		max-height: min(336px, calc(100dvh - 96px));
+		overflow-y: auto;
+		overscroll-behavior: contain;
 		gap: 1px;
 		padding: 4px;
 		border: 1px solid var(--line-strong);
 		border-radius: 7px;
-		background: #111216;
+		background: var(--surface-overlay);
 		box-shadow: 0 14px 42px rgba(0, 0, 0, 0.48);
 	}
 
@@ -260,12 +263,12 @@
 	}
 
 	.select-option.active {
-		background: rgba(255, 255, 255, 0.055);
+		background: var(--hover);
 		color: var(--text);
 	}
 
 	.select-option.selected {
-		color: #e4e0ff;
+		color: var(--primary);
 	}
 
 	.option-check {

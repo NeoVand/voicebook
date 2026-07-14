@@ -92,6 +92,7 @@ function audioMeta(documentId: string, key = 'audio-key'): AudioVariantMeta {
 		modelId: 'supertonic-3',
 		modelRevision: 'revision',
 		voiceId: 'F1',
+		generationSteps: 10,
 		backend: 'wasm',
 		dtype: 'fp32',
 		duration: 1,

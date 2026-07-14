@@ -38,9 +38,10 @@ test('import → install → play → seek → bookmark → reload → offline r
 	).toBeVisible();
 
 	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
-	await page.getByRole('button', { name: 'Reading options' }).click();
-	await expect(page.getByRole('menuitem', { name: /Prepare whole document/ })).toBeVisible();
-	await page.getByRole('button', { name: 'Reading options' }).click();
+	await expect(page.getByRole('button', { name: 'Prepare whole document audio' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Generation quality' })).toContainText(
+		'10 steps'
+	);
 	await page.evaluate(() => {
 		(
 			window as unknown as {
@@ -65,9 +66,17 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await speedSelect.click();
 	const speedListbox = page.getByRole('listbox', { name: 'Playback speed' });
 	await expect(speedListbox).toBeVisible();
-	await expect(speedListbox).toHaveCSS('background-color', 'rgb(17, 18, 22)');
+	await expect(speedListbox).toHaveCSS('background-color', 'rgb(27, 29, 35)');
 	await page.getByRole('option', { name: '1.5×', exact: true }).click();
 	await expect(speedSelect).toContainText('1.5×');
+	const synthesisRequest = await page.evaluate(() =>
+		(
+			window as unknown as {
+				__voicebookTtsMessages: Array<{ type: string; totalSteps?: number }>;
+			}
+		).__voicebookTtsMessages.find((message) => message.type === 'synthesize')
+	);
+	expect(synthesisRequest?.totalSteps).toBe(10);
 	await page.getByRole('button', { name: 'Add bookmark' }).click();
 	await expect(page.getByRole('button', { name: 'Remove bookmark' })).toBeVisible();
 	await expect
@@ -121,26 +130,52 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		const geometry = await page.locator('.player-options').evaluate((options) => {
 			const player = options.closest<HTMLElement>('.player-bar');
 			const volume = options.querySelector<HTMLElement>('.player-volume');
-			if (!player || !volume) throw new Error('Player settings geometry is unavailable');
+			const generation = player?.querySelector<HTMLElement>('.generation-options');
+			const transport = player?.querySelector<HTMLElement>('.transport');
+			if (!player || !volume || !generation || !transport)
+				throw new Error('Player settings geometry is unavailable');
 
 			const playerRect = player.getBoundingClientRect();
 			const optionsRect = options.getBoundingClientRect();
 			const volumeRect = volume.getBoundingClientRect();
+			const generationRect = generation.getBoundingClientRect();
+			const transportRect = transport.getBoundingClientRect();
 
 			return {
 				documentOverflow:
 					document.documentElement.scrollWidth - document.documentElement.clientWidth,
 				optionsOverflow: Math.max(0, options.scrollWidth - options.clientWidth),
+				playerOverflow: Math.max(0, player.scrollWidth - player.clientWidth),
 				playerRightInset: playerRect.right - optionsRect.right,
-				volumeRightInset: playerRect.right - volumeRect.right
+				volumeRightInset: playerRect.right - volumeRect.right,
+				singleLine:
+					Math.abs(
+						generationRect.y +
+							generationRect.height / 2 -
+							(transportRect.y + transportRect.height / 2)
+					) < 1 &&
+					Math.abs(
+						transportRect.y + transportRect.height / 2 - (optionsRect.y + optionsRect.height / 2)
+					) < 1
 			};
 		});
 
 		expect(geometry.documentOverflow, `${width}px document overflow`).toBe(0);
 		expect(geometry.optionsOverflow, `${width}px settings overflow`).toBe(0);
+		expect(geometry.playerOverflow, `${width}px player overflow`).toBe(0);
 		expect(geometry.playerRightInset, `${width}px settings right inset`).toBeGreaterThanOrEqual(19);
 		expect(geometry.volumeRightInset, `${width}px volume right inset`).toBeGreaterThanOrEqual(19);
+		expect(geometry.singleLine, `${width}px player controls use one line`).toBe(true);
 	}
+
+	const qualitySelect = page.getByRole('combobox', { name: 'Generation quality' });
+	await qualitySelect.click();
+	await page.getByRole('option', { name: '14 steps', exact: true }).click();
+	await expect(qualitySelect).toContainText('14 steps');
+	await page.reload();
+	await expect(page.getByRole('combobox', { name: 'Generation quality' })).toContainText(
+		'14 steps'
+	);
 });
 
 test('collapses and remembers the desktop sidebar', async ({ page }) => {
@@ -168,9 +203,14 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 
 	await page.reload();
 	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
-	await expect(sidebar).toHaveCSS('width', '64px');
+	await expect(sidebar).toHaveCSS('width', '48px');
 	await page.getByRole('button', { name: 'Expand sidebar' }).click();
 	await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Switch to light theme' }).click();
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+	await page.reload();
+	await expect(page.getByRole('button', { name: 'Switch to dark theme' })).toBeVisible();
 });
 
 test('starts narration from a chosen passage or selected word', async ({ page }) => {
@@ -273,7 +313,7 @@ test('detects duplicate file imports and keeps navigation under the Pages base p
 	});
 	await expect(page.getByRole('dialog', { name: 'Already in your library' })).toBeVisible();
 	await page.getByRole('button', { name: 'Keep copy' }).click();
-	await expect(page.getByText('repeat — Copy')).toBeVisible();
+	await expect(page.getByRole('link', { name: 'Open repeat — Copy' })).toBeVisible();
 	await page.getByRole('link', { name: 'Voice', exact: true }).click();
 	await expect(page).toHaveURL(/\/voicebook\/settings\/?$/);
 });

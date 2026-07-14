@@ -143,13 +143,18 @@ async function synthesize(
 		status: 'Preparing text…',
 		progress: 5
 	});
-	const result = await supertonic!.synthesize(message.text, message.voiceId, 'en', (step, total) =>
-		send({
-			type: 'progress',
-			requestId: message.requestId,
-			status: `Generating speech · ${step} of ${total}`,
-			progress: (step / total) * 100
-		})
+	const result = await supertonic!.synthesize(
+		message.text,
+		message.voiceId,
+		'en',
+		(step, total) =>
+			send({
+				type: 'progress',
+				requestId: message.requestId,
+				status: `Generating speech · ${step} of ${total}`,
+				progress: (step / total) * 100
+			}),
+		message.totalSteps
 	);
 	const audio = result.audio;
 	const sampleRate = result.sampleRate;

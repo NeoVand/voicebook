@@ -104,9 +104,19 @@ describe('TTS worker client', () => {
 		const result = await client.synthesize('Hello', 'F1');
 		expect(result.audio).toEqual(new Float32Array([0, 0.5]));
 		expect(result.timing.confidence).toBe('native');
+		expect(FakeWorker.instances[0].messages[0]).toMatchObject({
+			type: 'synthesize',
+			totalSteps: 10
+		});
 		await client.dispose();
 		expect(FakeWorker.instances[0].terminated).toBe(true);
 		expect(client.modelId).toBeUndefined();
+	});
+
+	it('normalizes the requested generation quality before posting it to the worker', async () => {
+		const client = new TtsClient();
+		await client.synthesize('Hello', 'F1', undefined, undefined, 30);
+		expect(FakeWorker.instances[0].messages[0]).toMatchObject({ totalSteps: 16 });
 	});
 
 	it('rejects pre-aborted and in-flight canceled synthesis', async () => {
