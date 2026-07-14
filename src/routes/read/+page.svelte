@@ -23,6 +23,7 @@
 		X
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
+	import type { Attachment } from 'svelte/attachments';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import InlineText from '$lib/components/InlineText.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
@@ -42,6 +43,11 @@
 	let bookmarksOpen = $state(false);
 	let readerMenuOpen = $state(false);
 	let installing = $state(false);
+	let activeOutlineBlockId = $state<string>();
+	let outlineAnnouncement = $state('');
+	let readingCanvas = $state<HTMLElement>();
+	let readerScrollFrame = 0;
+	let outlineNavigationBlockId: string | undefined;
 	const segmentElements = new SvelteMap<string, HTMLElement>();
 
 	let segmentsByBlock = $derived.by(() => {
@@ -108,20 +114,26 @@
 
 	onMount(() => {
 		player.onSegmentChange = (segmentId) => {
-			if (!player.autoFollow) return;
-			requestAnimationFrame(() =>
-				segmentElements.get(segmentId)?.scrollIntoView({ behavior: 'auto', block: 'center' })
-			);
+			if (!player.autoFollow || outlineNavigationBlockId) return;
+			requestAnimationFrame(() => {
+				segmentElements.get(segmentId)?.scrollIntoView({ behavior: 'auto', block: 'center' });
+				scheduleVisibleSectionUpdate();
+			});
 		};
 		void appState.initialize().then(() => {
 			const id = new URL(window.location.href).searchParams.get('document');
 			book = appState.documents.find((document) => document.id === id) ?? null;
 			if (book) {
 				player.setDocument(book);
+				activeOutlineBlockId =
+					book.outline.find((item) => item.blockId === player.currentSegment?.blockId)?.blockId ??
+					book.outline[0]?.blockId;
 				void player.warmEngine();
+				requestAnimationFrame(scheduleVisibleSectionUpdate);
 			}
 		});
 		return () => {
+			cancelAnimationFrame(readerScrollFrame);
 			player.onSegmentChange = undefined;
 		};
 	});
@@ -132,6 +144,14 @@
 			return () => segmentElements.delete(id);
 		};
 	}
+
+	const trackReadingCanvas: Attachment<HTMLElement> = (element) => {
+		readingCanvas = element;
+		requestAnimationFrame(scheduleVisibleSectionUpdate);
+		return () => {
+			if (readingCanvas === element) readingCanvas = undefined;
+		};
+	};
 
 	interface RenderedRun {
 		run: InlineRun;
@@ -185,13 +205,95 @@
 		return `h${Math.max(2, Math.min(6, block.level ?? 2))}` as 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
 	}
 
-	function firstSegmentIndex(block: DocumentBlock): number {
+	function firstSegmentIndex(block: DocumentBlock): number | undefined {
 		const segment = segmentsByBlock.get(block.id)?.[0];
-		return segment ? (segmentIndexes.get(segment.id) ?? 0) : 0;
+		return segment ? segmentIndexes.get(segment.id) : undefined;
 	}
 
 	function blockFor(id: string): DocumentBlock | undefined {
 		return book?.blocks.find((block) => block.id === id);
+	}
+
+	function elementInReader(id: string): HTMLElement | undefined {
+		if (!readingCanvas) return;
+		const element = document.getElementById(id);
+		return element instanceof HTMLElement && readingCanvas.contains(element) ? element : undefined;
+	}
+
+	function scrollReaderTo(element: HTMLElement, focusDestination = false): void {
+		if (!readingCanvas) return;
+		const canvasRect = readingCanvas.getBoundingClientRect();
+		const elementRect = element.getBoundingClientRect();
+		const top = Math.max(0, readingCanvas.scrollTop + elementRect.top - canvasRect.top - 24);
+		const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		const longJump = Math.abs(top - readingCanvas.scrollTop) > readingCanvas.clientHeight * 1.5;
+		readingCanvas.scrollTo({ top, behavior: reducedMotion || longJump ? 'auto' : 'smooth' });
+		if (focusDestination) {
+			requestAnimationFrame(() => element.focus({ preventScroll: true }));
+		}
+		scheduleVisibleSectionUpdate();
+	}
+
+	function navigateToOutlineBlock(block: DocumentBlock): void {
+		const element = elementInReader(block.id);
+		if (!element) return;
+
+		const compactOutline = window.matchMedia('(max-width: 820px)').matches;
+		outlineNavigationBlockId = block.id;
+		activeOutlineBlockId = block.id;
+		outlineAnnouncement = `Moved to ${block.text}`;
+		scrollReaderTo(element, compactOutline);
+		if (compactOutline) outlineOpen = false;
+
+		const index = firstSegmentIndex(block);
+		if (index === undefined) {
+			outlineNavigationBlockId = undefined;
+			return;
+		}
+		void player.goToSegment(index).finally(() => {
+			if (outlineNavigationBlockId === block.id) outlineNavigationBlockId = undefined;
+		});
+	}
+
+	function navigateToSegment(segment: SpeechSegment): void {
+		const element = segmentElements.get(segment.id);
+		if (element) scrollReaderTo(element);
+		void player.goToSegment(segmentIndexes.get(segment.id) ?? 0);
+	}
+
+	function updateVisibleSection(): void {
+		readerScrollFrame = 0;
+		if (!readingCanvas || !book?.outline.length) return;
+		const canvasRect = readingCanvas.getBoundingClientRect();
+		const threshold = canvasRect.top + Math.min(160, readingCanvas.clientHeight * 0.22);
+		let lastBeforeThreshold: string | undefined;
+		let firstVisible: string | undefined;
+		for (const item of book.outline) {
+			const element = elementInReader(item.blockId);
+			if (!element) continue;
+			const elementRect = element.getBoundingClientRect();
+			if (elementRect.top <= threshold) lastBeforeThreshold = item.blockId;
+			if (
+				!firstVisible &&
+				elementRect.bottom >= canvasRect.top &&
+				elementRect.top <= canvasRect.bottom
+			)
+				firstVisible = item.blockId;
+		}
+
+		const previous = lastBeforeThreshold ? elementInReader(lastBeforeThreshold) : undefined;
+		const previousStillVisible = previous
+			? previous.getBoundingClientRect().bottom >= canvasRect.top
+			: false;
+		activeOutlineBlockId =
+			(previousStillVisible ? lastBeforeThreshold : firstVisible) ??
+			lastBeforeThreshold ??
+			book.outline[0]?.blockId;
+	}
+
+	function scheduleVisibleSectionUpdate(): void {
+		if (readerScrollFrame) return;
+		readerScrollFrame = requestAnimationFrame(updateVisibleSection);
 	}
 
 	function formatTime(seconds: number): string {
@@ -294,6 +396,8 @@
 					class:active={outlineOpen}
 					type="button"
 					aria-label={outlineOpen ? 'Close document outline' : 'Open document outline'}
+					aria-controls="document-outline"
+					aria-expanded={outlineOpen}
 					onclick={() => (outlineOpen = !outlineOpen)}
 				>
 					<List size={18} />
@@ -386,22 +490,22 @@
 		</header>
 
 		{#if outlineOpen}
-			<aside class="outline-panel" aria-label="Document outline">
+			<aside id="document-outline" class="outline-panel" aria-label="Document outline">
 				<header>
 					<strong>Contents</strong>
 					<span>{book.outline.length || book.segments.length} sections</span>
 				</header>
+				<span class="sr-only" aria-live="polite">{outlineAnnouncement}</span>
 				<nav aria-label="Table of contents">
 					{#if book.outline.length}
 						{#each book.outline as item (item.blockId)}
 							{@const outlineBlock = blockFor(item.blockId)}
 							<button
 								type="button"
-								class:active={(segmentsByBlock.get(item.blockId) ?? []).some(
-									(segment) => segment.id === player.currentSegment?.id
-								)}
+								class:active={activeOutlineBlockId === item.blockId}
+								aria-current={activeOutlineBlockId === item.blockId ? 'location' : undefined}
 								style={'--outline-level:' + Math.max(0, item.level - 1)}
-								onclick={() => outlineBlock && player.goToSegment(firstSegmentIndex(outlineBlock))}
+								onclick={() => outlineBlock && navigateToOutlineBlock(outlineBlock)}
 							>
 								{item.title}
 							</button>
@@ -411,7 +515,7 @@
 							<button
 								type="button"
 								class:active={segment.id === player.currentSegment?.id}
-								onclick={() => player.goToSegment(segmentIndexes.get(segment.id) ?? 0)}
+								onclick={() => navigateToSegment(segment)}
 							>
 								{segment.text.slice(0, 54)}{segment.text.length > 54 ? '…' : ''}
 							</button>
@@ -459,10 +563,12 @@
 			<article
 				class="reading-canvas"
 				aria-label={book.title}
+				{@attach trackReadingCanvas}
+				onscroll={scheduleVisibleSectionUpdate}
 				onwheel={() => (player.autoFollow = false)}
 				ontouchmove={() => (player.autoFollow = false)}
 			>
-				<header class="document-heading">
+				<header class="document-heading" id={titleBlock?.id} tabindex="-1">
 					<span>{book.sourceKind.toUpperCase()} · Local library</span>
 					<h1>
 						{#if titleBlock}
@@ -520,7 +626,7 @@
 							{@const blockSegments = segmentsByBlock.get(block.id) ?? []}
 							{@const pageLabel = block.anchor.page ? 'Page ' + block.anchor.page : ''}
 							{#if block.kind === 'heading'}
-								<section class="document-section" id={block.id}>
+								<section class="document-section" id={block.id} tabindex="-1">
 									{#if pageLabel}<span class="page-anchor">{pageLabel}</span>{/if}
 									<svelte:element this={headingTag(block)}>
 										{#each blockSegments as segment (segment.id)}
