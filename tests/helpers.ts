@@ -7,6 +7,7 @@ export async function installFakeTts(page: Page): Promise<void> {
 			requestId: string;
 			modelId?: string;
 			text?: string;
+			voiceId?: string;
 			totalSteps?: number;
 		}
 

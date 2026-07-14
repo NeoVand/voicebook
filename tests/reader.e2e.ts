@@ -366,6 +366,65 @@ test('keeps Supertonic license acceptance and its visible checkbox in sync', asy
 	await expect(install).toBeEnabled();
 });
 
+test('previews and selects built-in voices without loading another engine', async ({ page }) => {
+	await page.goto('./');
+	await page.getByRole('link', { name: 'Voice', exact: true }).click();
+	await page.getByRole('checkbox', { name: 'I have reviewed the terms' }).check();
+	await page.getByRole('button', { name: 'Install locally' }).click();
+
+	const studioTwo = page.getByRole('button', { name: 'Use Studio 2' });
+	await studioTwo.click();
+	await expect(studioTwo).toHaveAttribute('aria-pressed', 'true');
+	await expect
+		.poll(() =>
+			page.evaluate(
+				() =>
+					new Promise<string | undefined>((resolve, reject) => {
+						const request = indexedDB.open('voicebook-v1');
+						request.onerror = () => reject(request.error);
+						request.onsuccess = () => {
+							const transaction = request.result.transaction('settings');
+							const selectedVoice = transaction.objectStore('settings').get('selected-voice');
+							selectedVoice.onerror = () => reject(selectedVoice.error);
+							selectedVoice.onsuccess = () => resolve(selectedVoice.result?.value);
+						};
+					})
+			)
+		)
+		.toBe('F2');
+	await page.reload();
+	await expect(page.getByRole('button', { name: 'Use Studio 2' })).toHaveAttribute(
+		'aria-pressed',
+		'true'
+	);
+
+	await page.evaluate(() => {
+		(
+			window as unknown as {
+				__voicebookTtsDelayMs: number;
+			}
+		).__voicebookTtsDelayMs = 300;
+	});
+	await page.getByRole('button', { name: 'Preview Studio 2' }).click();
+	await expect(page.getByRole('button', { name: 'Stop preparing Studio 2 preview' })).toBeVisible();
+	await expect(page.getByText('Playing Studio 2', { exact: true })).toBeVisible();
+
+	const synthesisRequest = await page.evaluate(() =>
+		(
+			window as unknown as {
+				__voicebookTtsMessages: Array<{
+					type: string;
+					voiceId?: string;
+					totalSteps?: number;
+				}>;
+			}
+		).__voicebookTtsMessages.find((message) => message.type === 'synthesize')
+	);
+	expect(synthesisRequest).toMatchObject({ voiceId: 'F2', totalSteps: 10 });
+	await page.getByRole('button', { name: 'Stop Studio 2 preview' }).click();
+	await expect(page.getByRole('button', { name: 'Preview Studio 2' })).toBeVisible();
+});
+
 test('renders Mermaid fences as accessible diagrams with a source fallback', async ({ page }) => {
 	await page.goto('./');
 	await page.locator('#document-upload').setInputFiles({
