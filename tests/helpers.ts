@@ -34,7 +34,7 @@ export async function installFakeTts(page: Page): Promise<void> {
 			postMessage(message: LoggedWorkerMessage): void {
 				workerMessages.push(message);
 				if (message.type === 'cancel') return;
-				queueMicrotask(() => {
+				const respond = () => {
 					if (message.type === 'capabilities') {
 						this.emit({
 							type: 'capabilities',
@@ -83,7 +83,17 @@ export async function installFakeTts(page: Page): Promise<void> {
 					} else if (message.type === 'dispose') {
 						this.emit({ type: 'disposed', requestId: message.requestId });
 					}
-				});
+				};
+				const synthesisDelay = Number(
+					(
+						window as unknown as {
+							__voicebookTtsDelayMs?: number;
+						}
+					).__voicebookTtsDelayMs ?? 0
+				);
+				if (message.type === 'synthesize' && synthesisDelay > 0)
+					window.setTimeout(respond, synthesisDelay);
+				else queueMicrotask(respond);
 			}
 
 			private emit(data: unknown): void {

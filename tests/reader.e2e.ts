@@ -36,7 +36,25 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await page.getByRole('button', { name: 'Reading options' }).click();
 	await expect(page.getByRole('menuitem', { name: /Prepare whole document/ })).toBeVisible();
 	await page.getByRole('button', { name: 'Reading options' }).click();
+	await page.evaluate(() => {
+		(
+			window as unknown as {
+				__voicebookTtsDelayMs: number;
+			}
+		).__voicebookTtsDelayMs = 450;
+	});
+	const timeline = page.locator('.timeline');
+	const timelineBeforePlayback = await timeline.boundingBox();
 	await page.getByRole('button', { name: 'Play', exact: true }).click();
+	const preparingButton = page.getByRole('button', { name: 'Stop preparing speech' });
+	await expect(preparingButton).toHaveAttribute('aria-busy', 'true');
+	await expect(timeline).toBeVisible();
+	await expect(page.locator('.generation-status')).toHaveCount(0);
+	const timelineDuringPreparation = await timeline.boundingBox();
+	expect(timelineBeforePlayback).not.toBeNull();
+	expect(timelineDuringPreparation).not.toBeNull();
+	expect(timelineDuringPreparation?.y).toBe(timelineBeforePlayback?.y);
+	expect(timelineDuringPreparation?.height).toBe(timelineBeforePlayback?.height);
 	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
 	await page.getByLabel('Playback speed').selectOption('1.5');
 	await expect(page.getByLabel('Playback speed')).toHaveValue('1.5');

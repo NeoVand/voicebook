@@ -963,7 +963,9 @@
 					</button>
 					<button
 						class="play-button"
+						class:loading={player.isBuffering}
 						type="button"
+						aria-busy={player.isBuffering}
 						aria-label={player.isBuffering
 							? 'Stop preparing speech'
 							: player.isPlaying
@@ -1001,40 +1003,27 @@
 					</button>
 				</div>
 
-				{#if player.isBuffering || player.isGeneratingAll}
-					<div class="generation-status" aria-live="polite">
-						<div>
-							<strong>
-								{player.isBuffering
-									? 'Passage ' + (player.currentSegmentIndex + 1) + ' of ' + book.segments.length
-									: 'Preparing document · ' + Math.round(player.generationProgress) + '%'}
-							</strong>
-							<span
-								>{player.isBuffering
-									? player.bufferingStage
-									: 'Caching audio for offline replay'}</span
-							>
-						</div>
-						<button type="button" onclick={() => player.cancelGeneration()}>Stop</button>
-					</div>
-				{:else}
-					<div class="timeline">
-						<span>{formatTime(player.progress * player.totalDuration)}</span>
-						<input
-							type="range"
-							min="0"
-							max="1000"
-							value={Math.round(player.progress * 1000)}
-							style:--timeline-progress={`${Math.round(player.progress * 100)}%`}
-							aria-label="Reading position"
-							onchange={(event) =>
-								player.seekToProgress(
-									Number((event.currentTarget as HTMLInputElement).value) / 1000
-								)}
-						/>
-						<span>{formatTime(player.totalDuration)}</span>
-					</div>
-				{/if}
+				<div class="timeline">
+					<span>{formatTime(player.progress * player.totalDuration)}</span>
+					<input
+						type="range"
+						min="0"
+						max="1000"
+						value={Math.round(player.progress * 1000)}
+						style:--timeline-progress={`${Math.round(player.progress * 100)}%`}
+						aria-label="Reading position"
+						onchange={(event) =>
+							player.seekToProgress(Number((event.currentTarget as HTMLInputElement).value) / 1000)}
+					/>
+					<span>{formatTime(player.totalDuration)}</span>
+				</div>
+				<span class="sr-only" aria-live="polite" aria-atomic="true">
+					{player.isBuffering
+						? 'Preparing this passage. Activate the stop button to cancel.'
+						: player.isGeneratingAll
+							? `Preparing the document. ${Math.round(player.generationProgress)} percent complete.`
+							: ''}
+				</span>
 			</div>
 
 			<div class="player-options">
@@ -1957,6 +1946,7 @@
 	}
 
 	.play-button {
+		position: relative;
 		width: 48px;
 		height: 48px;
 		margin: 0 6px;
@@ -1968,6 +1958,28 @@
 	.play-button:hover {
 		background: var(--primary-hover);
 		transform: translateY(-1px);
+	}
+
+	.play-button.loading::before {
+		position: absolute;
+		inset: 5px;
+		border: 2px solid color-mix(in srgb, var(--primary-ink) 18%, transparent);
+		border-top-color: var(--primary-ink);
+		border-right-color: var(--primary-ink);
+		border-radius: 50%;
+		animation: play-progress-spin 850ms linear infinite;
+		content: '';
+		pointer-events: none;
+	}
+
+	.play-button.loading:hover {
+		transform: none;
+	}
+
+	@keyframes play-progress-spin {
+		to {
+			transform: rotate(1turn);
+		}
 	}
 
 	.timeline {
@@ -2037,46 +2049,6 @@
 		border: 2px solid var(--surface);
 		border-radius: 50%;
 		background: var(--text);
-	}
-
-	.generation-status {
-		display: flex;
-		min-height: 27px;
-		align-items: center;
-		justify-content: center;
-		gap: 12px;
-	}
-
-	.generation-status strong,
-	.generation-status span {
-		display: block;
-	}
-
-	.generation-status strong {
-		color: var(--text-soft);
-		font-size: 10px;
-		font-weight: 650;
-	}
-
-	.generation-status span {
-		max-width: 330px;
-		overflow: hidden;
-		margin-top: 2px;
-		color: var(--faint);
-		font-size: 9px;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.generation-status button {
-		height: 32px;
-		padding: 0 12px;
-		border: 0;
-		border-radius: 5px;
-		background: var(--danger-soft);
-		color: var(--danger);
-		font-size: 10px;
-		font-weight: 650;
 	}
 
 	.player-options {
@@ -2195,6 +2167,13 @@
 		background: #28191c;
 		color: #ffd0cf;
 		font-size: 9px;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.play-button.loading::before {
+			animation: none;
+			transform: rotate(45deg);
+		}
 	}
 
 	@media (max-width: 1180px) {
