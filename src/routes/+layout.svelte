@@ -8,12 +8,16 @@
 		ArrowLeft,
 		Bookmark,
 		BookOpenText,
+		CloudRain,
+		CloudSun,
 		Cpu,
 		FileText,
 		HardDrive,
 		Library,
 		List,
 		ListMusic,
+		Maximize2,
+		Minimize2,
 		Moon,
 		PanelLeftClose,
 		PanelLeftOpen,
@@ -35,12 +39,34 @@
 	const settingsHref = resolve('/settings');
 	const sidebarStorageKey = 'voicebook:sidebar-collapsed';
 	const themeStorageKey = 'voicebook:theme';
+	type ThemeId = 'sunny' | 'cloudy' | 'rainy' | 'midnight';
+	const themes: readonly ThemeId[] = ['sunny', 'cloudy', 'rainy', 'midnight'];
+	const themeLabels: Record<ThemeId, string> = {
+		sunny: 'Sunny',
+		cloudy: 'Cloudy',
+		rainy: 'Rainy',
+		midnight: 'Midnight'
+	};
+	const themeColors: Record<ThemeId, string> = {
+		sunny: '#f4efe6',
+		cloudy: '#edf1f3',
+		rainy: '#101820',
+		midnight: '#0b0c0f'
+	};
+	function normalizeTheme(value: string | undefined): ThemeId {
+		if (value === 'light') return 'cloudy';
+		if (value === 'dark') return 'midnight';
+		return themes.includes(value as ThemeId) ? (value as ThemeId) : 'midnight';
+	}
 	let sidebarCollapsed = $state(
 		browser && window.localStorage.getItem(sidebarStorageKey) === 'true'
 	);
-	let theme = $state<'dark' | 'light'>(
-		browser && document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'
+	let theme = $state<ThemeId>(
+		normalizeTheme(browser ? document.documentElement.dataset.theme : undefined)
 	);
+	let fullscreenElement = $state<Element | null>(null);
+	let isFullscreen = $derived(Boolean(fullscreenElement));
+	let nextTheme = $derived(themes[(themes.indexOf(theme) + 1) % themes.length]);
 	let isReader = $derived(page.url.pathname.startsWith(resolve('/read')));
 	let settingsSection = $derived(page.url.searchParams.get('section') ?? 'models');
 	let readerDocumentId = $derived(page.url.searchParams.get('document'));
@@ -63,14 +89,24 @@
 	}
 
 	function toggleTheme(): void {
-		theme = theme === 'dark' ? 'light' : 'dark';
+		theme = nextTheme;
 		document.documentElement.dataset.theme = theme;
 		window.localStorage.setItem(themeStorageKey, theme);
-		document
-			.querySelector('meta[name="theme-color"]')
-			?.setAttribute('content', theme === 'dark' ? '#0b0c0f' : '#f4f3ef');
+		document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeColors[theme]);
+	}
+
+	async function toggleFullscreen(): Promise<void> {
+		try {
+			if (document.fullscreenElement) await document.exitFullscreen();
+			else await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+		} catch (error) {
+			appState.errorMessage =
+				error instanceof Error ? error.message : 'Fullscreen mode is unavailable in this browser.';
+		}
 	}
 </script>
+
+<svelte:document bind:fullscreenElement />
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
@@ -97,7 +133,6 @@
 		<div class="reader-commandbar">
 			<div class="reader-commandbar-title">
 				<strong>{readerBook.title}</strong>
-				<span>{readerBook.sourceKind.toUpperCase()} · {readerBook.segments.length} passages</span>
 			</div>
 
 			<div class="reader-commandbar-actions">
@@ -146,11 +181,29 @@
 				<button
 					class="icon-button"
 					type="button"
-					aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-					title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
+					aria-label={`Theme: ${themeLabels[theme]}. Switch to ${themeLabels[nextTheme]} theme`}
+					title={`${themeLabels[theme]} · next ${themeLabels[nextTheme]}`}
 					onclick={toggleTheme}
 				>
-					{#if theme === 'dark'}<Sun size={16} />{:else}<Moon size={16} />{/if}
+					{#if theme === 'sunny'}
+						<Sun size={16} />
+					{:else if theme === 'cloudy'}
+						<CloudSun size={16} />
+					{:else if theme === 'rainy'}
+						<CloudRain size={16} />
+					{:else}
+						<Moon size={16} />
+					{/if}
+				</button>
+				<button
+					class="icon-button"
+					class:active={isFullscreen}
+					type="button"
+					aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+					title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+					onclick={() => void toggleFullscreen()}
+				>
+					{#if isFullscreen}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
 				</button>
 			</div>
 		</div>
@@ -159,11 +212,29 @@
 			<button
 				class="icon-button"
 				type="button"
-				aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-				title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
+				aria-label={`Theme: ${themeLabels[theme]}. Switch to ${themeLabels[nextTheme]} theme`}
+				title={`${themeLabels[theme]} · next ${themeLabels[nextTheme]}`}
 				onclick={toggleTheme}
 			>
-				{#if theme === 'dark'}<Sun size={16} />{:else}<Moon size={16} />{/if}
+				{#if theme === 'sunny'}
+					<Sun size={16} />
+				{:else if theme === 'cloudy'}
+					<CloudSun size={16} />
+				{:else if theme === 'rainy'}
+					<CloudRain size={16} />
+				{:else}
+					<Moon size={16} />
+				{/if}
+			</button>
+			<button
+				class="icon-button"
+				class:active={isFullscreen}
+				type="button"
+				aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+				title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+				onclick={() => void toggleFullscreen()}
+			>
+				{#if isFullscreen}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
 			</button>
 		</div>
 	{/if}

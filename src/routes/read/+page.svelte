@@ -43,6 +43,8 @@
 	let activeOutlineBlockId = $state<string>();
 	let outlineAnnouncement = $state('');
 	let readingCanvas = $state<HTMLElement>();
+	let scrollbarActive = $state(false);
+	let scrollbarTimer: ReturnType<typeof setTimeout> | undefined;
 	let readerScrollFrame = 0;
 	let outlineNavigationBlockId: string | undefined;
 	const segmentElements = new SvelteMap<string, HTMLElement>();
@@ -161,6 +163,7 @@
 		});
 		return () => {
 			cancelAnimationFrame(readerScrollFrame);
+			if (scrollbarTimer) clearTimeout(scrollbarTimer);
 			player.onSegmentChange = undefined;
 		};
 	});
@@ -440,6 +443,11 @@
 
 	function handleReaderScroll(): void {
 		narrationStartAction = undefined;
+		scrollbarActive = true;
+		if (scrollbarTimer) clearTimeout(scrollbarTimer);
+		scrollbarTimer = setTimeout(() => {
+			scrollbarActive = false;
+		}, 700);
 		scheduleVisibleSectionUpdate();
 	}
 
@@ -633,10 +641,6 @@
 						{/each}
 					{/if}
 				</nav>
-				<footer>
-					<div><span>Progress</span><strong>{Math.round(player.progress * 100)}%</strong></div>
-					<progress max="100" value={player.progress * 100}></progress>
-				</footer>
 			</aside>
 		{/if}
 
@@ -671,7 +675,12 @@
 				</div>
 			{/if}
 
-			<article class="reading-canvas" aria-label={book.title} {@attach trackReadingCanvas}>
+			<article
+				class="reading-canvas"
+				class:scrollbar-active={scrollbarActive}
+				aria-label={book.title}
+				{@attach trackReadingCanvas}
+			>
 				<header class="document-heading" id={titleBlock?.id} tabindex="-1">
 					<span>{book.sourceKind.toUpperCase()} · Local library</span>
 					<h1>
@@ -1160,10 +1169,12 @@
 
 	.outline-panel nav {
 		display: grid;
+		min-height: 0;
 		align-content: start;
 		overflow-y: auto;
 		overscroll-behavior: contain;
 		padding: 8px;
+		flex: 1;
 	}
 
 	.outline-panel nav button {
@@ -1223,26 +1234,6 @@
 		border-radius: 50%;
 		background: var(--primary-soft);
 		color: var(--primary);
-	}
-
-	.outline-panel > footer {
-		margin-top: auto;
-		padding: 14px 15px;
-		border-top: 1px solid var(--line);
-	}
-
-	.outline-panel > footer div {
-		display: flex;
-		justify-content: space-between;
-		margin-bottom: 7px;
-		color: var(--faint);
-		font-size: 8px;
-	}
-
-	.outline-panel progress {
-		width: 100%;
-		height: 3px;
-		accent-color: var(--primary);
 	}
 
 	.reader-stage {
@@ -1317,7 +1308,8 @@
 		overflow-y: auto;
 		overflow-x: hidden;
 		overscroll-behavior: contain;
-		scrollbar-gutter: stable;
+		scrollbar-width: thin;
+		scrollbar-color: transparent transparent;
 		padding: 58px clamp(48px, 7vw, 92px) 92px;
 		border-radius: 7px 7px 0 0;
 		background: var(--reader);
@@ -1327,6 +1319,30 @@
 		font-variation-settings: 'opsz' 20;
 		line-height: 1.72;
 		flex: 1 1 auto;
+	}
+
+	.reading-canvas::-webkit-scrollbar {
+		width: 8px;
+	}
+
+	.reading-canvas::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	.reading-canvas::-webkit-scrollbar-thumb {
+		border: 2px solid transparent;
+		border-radius: 999px;
+		background: transparent;
+		background-clip: padding-box;
+	}
+
+	.reading-canvas.scrollbar-active {
+		scrollbar-color: var(--reader-scroll-thumb) transparent;
+	}
+
+	.reading-canvas.scrollbar-active::-webkit-scrollbar-thumb {
+		background: var(--reader-scroll-thumb);
+		background-clip: padding-box;
 	}
 
 	.document-heading {
