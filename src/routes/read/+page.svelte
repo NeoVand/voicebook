@@ -1112,11 +1112,12 @@
 
 	.reader-shell {
 		--player-height: 72px;
+		position: relative;
 		display: grid;
 		height: 100%;
 		min-height: 0;
 		grid-template-columns: 252px minmax(0, 1fr);
-		grid-template-rows: minmax(0, 1fr) var(--player-height);
+		grid-template-rows: minmax(0, 1fr);
 		overflow: hidden;
 		background: var(--bg);
 	}
@@ -1227,7 +1228,8 @@
 		align-content: start;
 		overflow-y: auto;
 		overscroll-behavior: contain;
-		padding: 8px;
+		padding: 8px 8px calc(var(--player-height) + 16px);
+		scroll-padding-bottom: calc(var(--player-height) + 16px);
 		flex: 1;
 	}
 
@@ -1381,7 +1383,9 @@
 		overscroll-behavior: contain;
 		scrollbar-width: thin;
 		scrollbar-color: transparent transparent;
-		padding: calc(var(--app-header-height) + 58px) clamp(48px, 7vw, 92px) 92px;
+		padding: calc(var(--app-header-height) + 58px) clamp(48px, 7vw, 92px)
+			calc(var(--player-height) + 40px);
+		scroll-padding-block: calc(var(--app-header-height) + 70px) calc(var(--player-height) + 32px);
 		border-radius: 7px 7px 0 0;
 		background: var(--reader);
 		color: var(--reader-ink);
@@ -1844,7 +1848,7 @@
 	.return-follow {
 		position: absolute;
 		right: 28px;
-		bottom: 20px;
+		bottom: calc(var(--player-height) + 16px);
 		z-index: 15;
 		min-height: 38px;
 		border-color: color-mix(in srgb, var(--primary) 42%, transparent);
@@ -1858,7 +1862,8 @@
 		display: grid;
 		align-content: start;
 		overflow-y: auto;
-		padding: 8px;
+		padding: 8px 8px calc(var(--player-height) + 16px);
+		scroll-padding-bottom: calc(var(--player-height) + 16px);
 	}
 
 	.bookmark-list button {
@@ -1912,20 +1917,24 @@
 	}
 
 	.player-bar {
-		position: relative;
+		position: absolute;
+		right: 0;
+		bottom: 0;
+		left: 0;
 		z-index: 35;
 		display: grid;
 		height: var(--player-height);
 		min-width: 0;
-		grid-row: 2;
-		grid-column: 1 / -1;
 		grid-template-columns: 236px minmax(280px, 1fr) 168px;
 		align-items: center;
 		gap: 10px;
 		padding: 8px 20px;
 		border-top: 1px solid var(--line);
-		background: color-mix(in srgb, var(--surface) 96%, black);
-		box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.18);
+		background: color-mix(in srgb, var(--bg) 68%, transparent);
+		box-shadow: none;
+		-webkit-backdrop-filter: blur(22px) saturate(1.35);
+		backdrop-filter: blur(22px) saturate(1.35);
+		isolation: isolate;
 	}
 
 	.generation-options {
@@ -2193,7 +2202,7 @@
 			position: absolute;
 			top: 0;
 			right: 0;
-			bottom: var(--player-height);
+			bottom: 0;
 			z-index: 32;
 			width: 264px;
 			border-left: 1px solid var(--line);
@@ -2229,7 +2238,7 @@
 		.outline-panel {
 			position: absolute;
 			top: 0;
-			bottom: var(--player-height);
+			bottom: 0;
 			left: 0;
 			z-index: 32;
 			width: 250px;
@@ -2258,7 +2267,7 @@
 		}
 
 		.reading-canvas {
-			padding: calc(var(--app-header-height) + 38px) 24px 60px;
+			padding: calc(var(--app-header-height) + 38px) 24px calc(var(--player-height) + 36px);
 		}
 
 		.document-heading h1 {

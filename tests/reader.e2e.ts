@@ -148,17 +148,24 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		await page.setViewportSize({ width, height: 800 });
 		const geometry = await page.locator('.player-options').evaluate((options) => {
 			const player = options.closest<HTMLElement>('.player-bar');
+			const shell = player?.closest<HTMLElement>('.reader-shell');
+			const stage = shell?.querySelector<HTMLElement>('.reader-stage');
+			const outline = shell?.querySelector<HTMLElement>('.outline-panel');
 			const volume = options.querySelector<HTMLElement>('.player-volume');
 			const generation = player?.querySelector<HTMLElement>('.generation-options');
 			const transport = player?.querySelector<HTMLElement>('.transport');
-			if (!player || !volume || !generation || !transport)
+			if (!player || !shell || !stage || !outline || !volume || !generation || !transport)
 				throw new Error('Player settings geometry is unavailable');
 
 			const playerRect = player.getBoundingClientRect();
+			const shellRect = shell.getBoundingClientRect();
+			const stageRect = stage.getBoundingClientRect();
+			const outlineRect = outline.getBoundingClientRect();
 			const optionsRect = options.getBoundingClientRect();
 			const volumeRect = volume.getBoundingClientRect();
 			const generationRect = generation.getBoundingClientRect();
 			const transportRect = transport.getBoundingClientRect();
+			const playerStyle = getComputedStyle(player);
 
 			return {
 				documentOverflow:
@@ -167,6 +174,19 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 				playerOverflow: Math.max(0, player.scrollWidth - player.clientWidth),
 				playerRightInset: playerRect.right - optionsRect.right,
 				volumeRightInset: playerRect.right - volumeRect.right,
+				flushBottom: Math.abs(playerRect.bottom - shellRect.bottom) < 1,
+				fullWidth:
+					Math.abs(playerRect.left - shellRect.left) < 1 &&
+					Math.abs(playerRect.right - shellRect.right) < 1,
+				contentUnderlay:
+					Math.abs(stageRect.bottom - shellRect.bottom) < 1 &&
+					Math.abs(outlineRect.bottom - shellRect.bottom) < 1,
+				position: playerStyle.position,
+				backdropFilter:
+					playerStyle.backdropFilter !== 'none'
+						? playerStyle.backdropFilter
+						: playerStyle.getPropertyValue('-webkit-backdrop-filter'),
+				boxShadow: playerStyle.boxShadow,
 				singleLine:
 					Math.abs(
 						generationRect.y +
@@ -184,6 +204,14 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		expect(geometry.playerOverflow, `${width}px player overflow`).toBe(0);
 		expect(geometry.playerRightInset, `${width}px settings right inset`).toBeGreaterThanOrEqual(19);
 		expect(geometry.volumeRightInset, `${width}px volume right inset`).toBeGreaterThanOrEqual(19);
+		expect(geometry.flushBottom, `${width}px player is flush with the shell bottom`).toBe(true);
+		expect(geometry.fullWidth, `${width}px player spans the reader shell`).toBe(true);
+		expect(geometry.contentUnderlay, `${width}px reader content continues below the player`).toBe(
+			true
+		);
+		expect(geometry.position, `${width}px player overlays the reader`).toBe('absolute');
+		expect(geometry.backdropFilter, `${width}px player uses frosted glass`).toContain('blur(22px)');
+		expect(geometry.boxShadow, `${width}px player has no drop shadow`).toBe('none');
 		expect(geometry.singleLine, `${width}px player controls use one line`).toBe(true);
 	}
 
@@ -710,6 +738,19 @@ test('table of contents moves the reading canvas and closes its compact drawer',
 				const canvasRect = canvasElement.getBoundingClientRect();
 				const headingRect = heading.getBoundingClientRect();
 				return headingRect.top >= canvasRect.top && headingRect.bottom <= canvasRect.bottom;
+			})
+		)
+		.toBe(true);
+
+	await canvas.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+	await expect
+		.poll(() =>
+			page.getByText('The document ends here.', { exact: true }).evaluate((closingParagraph) => {
+				const playerBar = document.querySelector<HTMLElement>('.player-bar');
+				if (!playerBar) return false;
+				return (
+					closingParagraph.getBoundingClientRect().bottom <= playerBar.getBoundingClientRect().top
+				);
 			})
 		)
 		.toBe(true);
