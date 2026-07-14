@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { onDestroy } from 'svelte';
 	import {
 		AlertTriangle,
 		ArrowUpRight,
@@ -10,8 +11,10 @@
 		Gauge,
 		HardDrive,
 		Keyboard,
+		LoaderCircle,
 		LockKeyhole,
 		Mic2,
+		Play,
 		RefreshCw,
 		ShieldCheck,
 		Square,
@@ -19,14 +22,29 @@
 		Wifi
 	} from '@lucide/svelte';
 	import { getModel } from '$lib/domain/model-catalog';
+	import type { VoiceDescriptor } from '$lib/domain/types';
+	import { ttsClient } from '$lib/services/tts-client';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { requestPersistentStorage } from '$lib/services/repository';
 
 	type SettingsSection = 'models' | 'storage' | 'system';
+	type PreviewState = 'idle' | 'loading' | 'playing' | 'error';
 
 	const model = getModel('supertonic-3');
+	const previewText = 'A calm voice can make every page feel closer.';
 	let busy = $state(false);
 	let storageBusy = $state(false);
+	let previewState = $state<PreviewState>('idle');
+	let previewVoiceId = $state<string>();
+	let previewProgress = $state(0);
+	let previewError = $state('');
+	let previewAnnouncement = $state('');
+	let previewContext: AudioContext | undefined;
+	let previewGain: GainNode | undefined;
+	let previewSource: AudioBufferSourceNode | undefined;
+	let previewAbort: AbortController | undefined;
+	let previewEngineLoad: Promise<void> | undefined;
+	let previewSequence = 0;
 	let activeSection = $derived.by<SettingsSection>(() => {
 		const section = page.url.searchParams.get('section');
 		return section === 'storage' || section === 'system' ? section : 'models';
@@ -48,6 +66,122 @@
 			return 'The engine did not fit in available memory. Close other GPU-heavy tabs or use compatibility mode.';
 		return message;
 	}
+
+	function stopPreview(announce = true): void {
+		previewSequence += 1;
+		previewAbort?.abort();
+		previewAbort = undefined;
+		if (previewSource) {
+			previewSource.onended = null;
+			try {
+				previewSource.stop();
+			} catch {
+				// A source that has already ended cannot be stopped twice.
+			}
+			previewSource.disconnect();
+			previewSource = undefined;
+		}
+		const voice = model.voices.find((candidate) => candidate.id === previewVoiceId);
+		previewState = 'idle';
+		previewVoiceId = undefined;
+		previewProgress = 0;
+		previewError = '';
+		if (announce && voice) previewAnnouncement = `Stopped ${voice.name} preview.`;
+	}
+
+	function previewButtonLabel(voice: VoiceDescriptor): string {
+		if (voice.id !== previewVoiceId) return `Preview ${voice.name}`;
+		if (previewState === 'loading') return `Stop preparing ${voice.name} preview`;
+		if (previewState === 'playing') return `Stop ${voice.name} preview`;
+		return `Preview ${voice.name}`;
+	}
+
+	async function ensurePreviewEngine(): Promise<void> {
+		if (ttsClient.modelId === model.id) return;
+		previewEngineLoad ??= ttsClient
+			.load(model.id, 'auto', (update) => {
+				if (previewState === 'loading') previewProgress = update.progress;
+			})
+			.finally(() => {
+				previewEngineLoad = undefined;
+			});
+		await previewEngineLoad;
+	}
+
+	async function previewVoice(voice: VoiceDescriptor): Promise<void> {
+		if (!installed || busy) return;
+		if (voice.id === previewVoiceId && (previewState === 'loading' || previewState === 'playing')) {
+			stopPreview();
+			return;
+		}
+
+		stopPreview(false);
+		const sequence = previewSequence;
+		const controller = new AbortController();
+		previewAbort = controller;
+		previewVoiceId = voice.id;
+		previewState = 'loading';
+		previewProgress = 0;
+		previewError = '';
+		previewAnnouncement = `Preparing ${voice.name} preview.`;
+
+		try {
+			previewContext ??= new AudioContext({ latencyHint: 'interactive' });
+			previewGain ??= previewContext.createGain();
+			previewGain.gain.value = 0.85;
+			previewGain.connect(previewContext.destination);
+			const resumeAudio =
+				previewContext.state === 'suspended' ? previewContext.resume() : Promise.resolve();
+
+			await ensurePreviewEngine();
+			const result = await ttsClient.synthesize(
+				previewText,
+				voice.id,
+				controller.signal,
+				(update) => {
+					if (sequence === previewSequence) previewProgress = update.progress;
+				},
+				appState.generationSteps
+			);
+			await resumeAudio;
+			if (sequence !== previewSequence || controller.signal.aborted) return;
+
+			const buffer = previewContext.createBuffer(1, result.audio.length, result.sampleRate);
+			buffer.getChannelData(0).set(result.audio);
+			const source = previewContext.createBufferSource();
+			source.buffer = buffer;
+			source.connect(previewGain);
+			previewSource = source;
+			previewState = 'playing';
+			previewProgress = 100;
+			previewAnnouncement = `Playing ${voice.name} preview.`;
+			source.onended = () => {
+				if (sequence !== previewSequence) return;
+				source.disconnect();
+				previewSource = undefined;
+				previewAbort = undefined;
+				previewState = 'idle';
+				previewVoiceId = undefined;
+				previewProgress = 0;
+				previewAnnouncement = `Finished ${voice.name} preview.`;
+			};
+			source.start();
+		} catch (error) {
+			if (sequence !== previewSequence || controller.signal.aborted) return;
+			previewAbort = undefined;
+			previewState = 'error';
+			previewError = friendlyError(
+				error instanceof Error ? error.message : 'This voice preview could not be played.'
+			);
+			previewAnnouncement = `${voice.name} preview failed. ${previewError}`;
+		}
+	}
+
+	onDestroy(() => {
+		stopPreview(false);
+		previewGain?.disconnect();
+		void previewContext?.close();
+	});
 
 	async function install(): Promise<void> {
 		busy = true;
@@ -242,19 +376,66 @@
 			<header class="section-title">
 				<div>
 					<h2 id="voices-title">Built-in voices</h2>
-					<p>Choose a voice from the reader. Switching voices keeps your reading position.</p>
+					<p>Listen here, then choose the voice you want to use in the reader.</p>
 				</div>
-				<span>{model.voices.length} voices</span>
+				<span class="voice-status">
+					{#if previewState === 'loading' && previewVoiceId}
+						Preparing {model.voices.find((voice) => voice.id === previewVoiceId)?.name} · {Math.round(
+							previewProgress
+						)}%
+					{:else if previewState === 'playing' && previewVoiceId}
+						Playing {model.voices.find((voice) => voice.id === previewVoiceId)?.name}
+					{:else}
+						{model.voices.length} voices
+					{/if}
+				</span>
 			</header>
-			<div class="voice-list">
+			<p class="sr-only" aria-live="polite">{previewAnnouncement}</p>
+			<ul class="voice-list" aria-label="Available voices">
 				{#each model.voices as voice (voice.id)}
-					<div>
-						<span class="voice-initial">{voice.name.charAt(0)}</span>
-						<strong>{voice.name}</strong>
-						<small>{voice.gender ?? 'Voice'} · multilingual</small>
-					</div>
+					<li class="voice-row" class:selected={appState.selectedVoiceId === voice.id}>
+						<button
+							class="voice-choice"
+							type="button"
+							aria-label={`Use ${voice.name}`}
+							aria-pressed={appState.selectedVoiceId === voice.id}
+							onclick={() => void appState.selectVoice(voice.id)}
+						>
+							<span class="voice-initial">{voice.name.charAt(0)}</span>
+							<span class="voice-copy">
+								<strong>{voice.name}</strong>
+								<small>{voice.gender ?? 'Voice'} · multilingual</small>
+							</span>
+							<span class="voice-check" aria-hidden="true"><Check size={13} /></span>
+						</button>
+						<button
+							class="preview-button"
+							class:active={voice.id === previewVoiceId}
+							type="button"
+							disabled={!installed || busy}
+							aria-label={previewButtonLabel(voice)}
+							title={installed
+								? previewButtonLabel(voice)
+								: 'Install Supertonic 3 to preview voices'}
+							onclick={() => void previewVoice(voice)}
+						>
+							{#if voice.id === previewVoiceId && previewState === 'loading'}
+								<LoaderCircle class="spin" size={15} />
+							{:else if voice.id === previewVoiceId && previewState === 'playing'}
+								<Square size={12} fill="currentColor" />
+							{:else}
+								<Play size={15} fill="currentColor" />
+							{/if}
+						</button>
+					</li>
 				{/each}
-			</div>
+			</ul>
+			{#if previewError}
+				<div class="inline-error preview-error" role="alert">
+					<AlertTriangle size={15} />
+					<span>{previewError}</span>
+				</div>
+			{/if}
 		</section>
 	{:else if activeSection === 'storage'}
 		<section class="settings-section" aria-labelledby="storage-title">
@@ -687,39 +868,149 @@
 
 	.voice-list {
 		display: grid;
-		grid-template-columns: repeat(5, minmax(0, 1fr));
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		padding: 0;
+		margin: 0;
+		list-style: none;
 	}
 
-	.voice-list > div {
+	.voice-row {
 		display: grid;
-		min-height: 78px;
-		grid-template-columns: auto 1fr;
-		align-content: center;
-		column-gap: 9px;
+		min-width: 0;
+		grid-template-columns: minmax(0, 1fr) 44px;
+		align-items: center;
 		border-bottom: 1px solid var(--line);
+	}
+
+	.voice-row:nth-child(odd) {
+		padding-right: 18px;
+	}
+
+	.voice-row:nth-child(even) {
+		padding-left: 18px;
+	}
+
+	.voice-choice,
+	.preview-button {
+		border: 0;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+	}
+
+	.voice-choice {
+		display: grid;
+		min-width: 0;
+		min-height: 68px;
+		grid-template-columns: auto minmax(0, 1fr) 22px;
+		align-items: center;
+		gap: 10px;
+		padding: 0 6px 0 0;
+		text-align: left;
+		transition: color 160ms var(--ease);
+	}
+
+	.voice-choice:hover {
+		color: var(--text);
 	}
 
 	.voice-initial {
 		display: grid;
-		width: 28px;
-		height: 28px;
-		grid-row: 1 / 3;
+		width: 30px;
+		height: 30px;
 		place-items: center;
 		border-radius: 50%;
-		background: var(--primary-soft);
-		color: var(--primary);
+		background: var(--hover-strong);
+		color: var(--muted);
 		font-size: 10px;
 		font-weight: 700;
+		transition:
+			background 160ms var(--ease),
+			color 160ms var(--ease);
 	}
 
-	.voice-list strong {
+	.voice-copy {
+		display: block;
+		min-width: 0;
+	}
+
+	.voice-copy strong,
+	.voice-copy small {
+		display: block;
+	}
+
+	.voice-copy strong {
+		color: var(--text-soft);
 		font-size: 9px;
 		font-weight: 630;
 	}
 
-	.voice-list small {
+	.voice-copy small {
+		margin-top: 3px;
 		color: var(--faint);
 		font-size: 8px;
+	}
+
+	.voice-check {
+		display: grid;
+		width: 20px;
+		height: 20px;
+		place-items: center;
+		border-radius: 50%;
+		color: transparent;
+		transition:
+			background 160ms var(--ease),
+			color 160ms var(--ease);
+	}
+
+	.voice-row.selected .voice-initial,
+	.voice-row.selected .voice-check {
+		background: var(--primary-soft);
+		color: var(--primary);
+	}
+
+	.preview-button {
+		display: grid;
+		width: 44px;
+		height: 44px;
+		place-items: center;
+		border-radius: 50%;
+		color: var(--muted);
+		transition:
+			background 160ms var(--ease),
+			color 160ms var(--ease);
+	}
+
+	.preview-button:hover:not(:disabled),
+	.preview-button.active {
+		background: var(--hover-strong);
+		color: var(--primary);
+	}
+
+	.preview-button:disabled {
+		cursor: not-allowed;
+		opacity: 0.38;
+	}
+
+	.voice-status {
+		min-width: 120px;
+		text-align: right;
+	}
+
+	.preview-error {
+		padding-inline: 2px;
+	}
+
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
 	}
 
 	.storage-total {
@@ -864,10 +1155,6 @@
 		.engine-facts {
 			justify-content: space-between;
 		}
-
-		.voice-list {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
 	}
 
 	@media (max-width: 680px) {
@@ -898,6 +1185,19 @@
 
 		.storage-total {
 			padding: 24px 0;
+		}
+
+		.voice-list {
+			grid-template-columns: 1fr;
+		}
+
+		.voice-row:nth-child(odd),
+		.voice-row:nth-child(even) {
+			padding: 0;
+		}
+
+		.voice-status {
+			display: none;
 		}
 	}
 </style>
