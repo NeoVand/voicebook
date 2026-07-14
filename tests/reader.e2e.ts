@@ -31,6 +31,11 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await page.getByRole('button', { name: 'Add to library' }).click();
 	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
 	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
+	await expect(page.getByRole('banner', { name: 'Voicebook header' })).toHaveCount(1);
+	await expect(page.locator('.reader-header')).toHaveCount(0);
+	await expect(
+		page.getByRole('banner', { name: 'Voicebook header' }).getByText('The Quiet Machine')
+	).toBeVisible();
 
 	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
 	await page.getByRole('button', { name: 'Reading options' }).click();
@@ -56,8 +61,13 @@ test('import → install → play → seek → bookmark → reload → offline r
 	expect(timelineDuringPreparation?.y).toBe(timelineBeforePlayback?.y);
 	expect(timelineDuringPreparation?.height).toBe(timelineBeforePlayback?.height);
 	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
-	await page.getByLabel('Playback speed').selectOption('1.5');
-	await expect(page.getByLabel('Playback speed')).toHaveValue('1.5');
+	const speedSelect = page.getByRole('combobox', { name: 'Playback speed' });
+	await speedSelect.click();
+	const speedListbox = page.getByRole('listbox', { name: 'Playback speed' });
+	await expect(speedListbox).toBeVisible();
+	await expect(speedListbox).toHaveCSS('background-color', 'rgb(17, 18, 22)');
+	await page.getByRole('option', { name: '1.5×', exact: true }).click();
+	await expect(speedSelect).toContainText('1.5×');
 	await page.getByRole('button', { name: 'Add bookmark' }).click();
 	await expect(page.getByRole('button', { name: 'Remove bookmark' })).toBeVisible();
 	await expect
@@ -138,16 +148,27 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 	await page.goto('./');
 	await expect(page.getByText('Supertonic 3', { exact: true })).toHaveCount(0);
 
+	const header = page.getByRole('banner', { name: 'Voicebook header' });
+	await expect(header.getByRole('link', { name: 'Voicebook library' })).toBeVisible();
 	const sidebar = page.getByRole('complementary', { name: 'Voicebook navigation' });
+	const headerBox = await header.boundingBox();
+	const sidebarBox = await sidebar.boundingBox();
+	const collapseBox = await page.getByRole('button', { name: 'Collapse sidebar' }).boundingBox();
+	expect(headerBox).not.toBeNull();
+	expect(sidebarBox).not.toBeNull();
+	expect(collapseBox).not.toBeNull();
+	expect(sidebarBox?.y).toBeGreaterThanOrEqual((headerBox?.y ?? 0) + (headerBox?.height ?? 0) - 1);
+	expect(collapseBox?.y).toBeLessThan((sidebarBox?.y ?? 0) + 52);
 	const expandedWidth = (await sidebar.boundingBox())?.width ?? 0;
 	await page.getByRole('button', { name: 'Collapse sidebar' }).click();
 	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
+	await expect(header.getByRole('link', { name: 'Voicebook library' })).toBeVisible();
 	const collapsedWidth = (await sidebar.boundingBox())?.width ?? 0;
 	expect(collapsedWidth).toBeLessThan(expandedWidth);
 
 	await page.reload();
 	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
-	await expect(sidebar).toHaveCSS('width', '68px');
+	await expect(sidebar).toHaveCSS('width', '64px');
 	await page.getByRole('button', { name: 'Expand sidebar' }).click();
 	await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
 });
@@ -335,6 +356,10 @@ test('table of contents moves the reading canvas and closes its compact drawer',
 	const canvas = page.locator('.reading-canvas');
 	const outline = page.getByRole('complementary', { name: 'Document outline' });
 	const tableOfContents = page.getByRole('navigation', { name: 'Table of contents' });
+	const openingSection = tableOfContents.getByRole('button', {
+		name: 'Opening section',
+		exact: true
+	});
 	const farSection = tableOfContents.getByRole('button', { name: 'Far section', exact: true });
 	await expect
 		.poll(() => canvas.evaluate((element) => element.scrollHeight > element.clientHeight))
@@ -359,6 +384,9 @@ test('table of contents moves the reading canvas and closes its compact drawer',
 		element.scrollTop = 0;
 		element.dispatchEvent(new WheelEvent('wheel', { bubbles: true }));
 	});
+	await expect(farSection).toHaveAttribute('data-narration-current', 'true');
+	await expect(farSection).not.toHaveAttribute('aria-current', 'location');
+	await expect(tableOfContents.locator('[aria-current="location"]')).toHaveCount(1);
 	const followNarration = page.getByRole('button', { name: 'Follow narration' });
 	await expect(followNarration).toBeVisible();
 	await followNarration.click();
@@ -376,7 +404,7 @@ test('table of contents moves the reading canvas and closes its compact drawer',
 		.toBe(true);
 
 	await page.setViewportSize({ width: 800, height: 760 });
-	await tableOfContents.getByRole('button', { name: 'Opening section', exact: true }).click();
+	await openingSection.click();
 	await expect(outline).toBeHidden();
 	await expect(
 		page.getByRole('heading', { name: 'Opening section', exact: true }).locator('..')

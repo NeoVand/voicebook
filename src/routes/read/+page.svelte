@@ -5,14 +5,8 @@
 		Bookmark,
 		BookOpenText,
 		Check,
-		ChevronDown,
 		ChevronLeft,
 		ChevronRight,
-		Code2,
-		Download,
-		Ellipsis,
-		List,
-		ListMusic,
 		LoaderCircle,
 		LocateFixed,
 		Pause,
@@ -28,9 +22,9 @@
 	import type { Attachment } from 'svelte/attachments';
 	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import CompactSelect from '$lib/components/CompactSelect.svelte';
 	import InlineText from '$lib/components/InlineText.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
-	import { segmentBlocks } from '$lib/domain/segmenter';
 	import type {
 		DocumentBlock,
 		InlineRun,
@@ -40,11 +34,9 @@
 	} from '$lib/domain/types';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
+	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 
 	let book = $state<NormalizedDocument | null>(null);
-	let outlineOpen = $state(true);
-	let bookmarksOpen = $state(false);
-	let readerMenuOpen = $state(false);
 	let installing = $state(false);
 	let activeOutlineBlockId = $state<string>();
 	let outlineAnnouncement = $state('');
@@ -62,6 +54,10 @@
 	}
 	let narrationStartAction = $state<NarrationStartAction>();
 	let narrationAnnouncement = $state('');
+	const playbackSpeedOptions = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((speed) => ({
+		value: String(speed),
+		label: `${speed}×`
+	}));
 
 	let segmentsByBlock = $derived.by(() => {
 		const map = new SvelteMap<string, SpeechSegment[]>();
@@ -73,9 +69,22 @@
 	let segmentIndexes = $derived.by(
 		() => new SvelteMap((book?.segments ?? []).map((segment, index) => [segment.id, index]))
 	);
-	let currentBookmarked = $derived(
-		Boolean(book?.bookmarks.some((bookmark) => bookmark.segmentId === player.currentSegment?.id))
+	let blockIndexes = $derived.by(
+		() => new SvelteMap((book?.blocks ?? []).map((block, index) => [block.id, index]))
 	);
+	let narrationOutlineBlockId = $derived.by(() => {
+		const currentBlockId = player.currentSegment?.blockId;
+		if (!currentBlockId || !book?.outline.length) return undefined;
+		const currentBlockIndex = blockIndexes.get(currentBlockId);
+		if (currentBlockIndex === undefined) return undefined;
+		let nearestOutlineBlockId: string | undefined;
+		for (const item of book.outline) {
+			const outlineBlockIndex = blockIndexes.get(item.blockId);
+			if (outlineBlockIndex === undefined || outlineBlockIndex > currentBlockIndex) continue;
+			nearestOutlineBlockId = item.blockId;
+		}
+		return nearestOutlineBlockId ?? book.outline[0]?.blockId;
+	});
 	let activeSegmentId = $derived(
 		player.isPlaying || player.position > 0 ? player.currentSegment?.id : undefined
 	);
@@ -84,6 +93,9 @@
 	let selectedVoiceName = $derived(
 		appState.selectedModel.voices.find((voice) => voice.id === appState.selectedVoiceId)?.name ??
 			'Voice'
+	);
+	let voiceOptions = $derived(
+		appState.selectedModel.voices.map((voice) => ({ value: voice.id, label: voice.name }))
 	);
 	let titleBlock = $derived.by(() => {
 		return book?.blocks.find((block) => block.kind === 'heading' && block.level === 1);
@@ -304,7 +316,7 @@
 		activeOutlineBlockId = block.id;
 		outlineAnnouncement = `Moved to ${block.text}`;
 		scrollReaderTo(element, compactOutline);
-		if (compactOutline) outlineOpen = false;
+		if (compactOutline) readerChrome.outlineOpen = false;
 
 		const index = firstSegmentIndex(block);
 		if (index === undefined) {
@@ -483,16 +495,8 @@
 		}
 	}
 
-	async function changeVoice(event: Event): Promise<void> {
-		await player.chooseVoice((event.currentTarget as HTMLSelectElement).value);
-	}
-
-	async function toggleCodeSpeech(): Promise<void> {
-		if (!book) return;
-		book.includeCode = !book.includeCode;
-		book.segments = segmentBlocks(book.blocks, book.includeCode);
-		player.setDocument(book);
-		await appState.saveDocument(book);
+	async function changeVoice(voiceId: string): Promise<void> {
+		await player.chooseVoice(voiceId);
 	}
 
 	function handleKeydown(event: KeyboardEvent): void {
@@ -560,117 +564,20 @@
 {:else}
 	<div
 		class="reader-shell"
-		class:outline-closed={!outlineOpen}
-		class:bookmarks-open={bookmarksOpen}
+		class:outline-closed={!readerChrome.outlineOpen}
+		class:bookmarks-open={readerChrome.bookmarksOpen}
 	>
-		<header class="reader-header">
-			<div class="header-left">
-				<a class="icon-button" href={resolve('/')} aria-label="Back to library">
-					<ArrowLeft size={18} />
-				</a>
-				<button
-					class="icon-button"
-					class:active={outlineOpen}
-					type="button"
-					aria-label={outlineOpen ? 'Close document outline' : 'Open document outline'}
-					aria-controls="document-outline"
-					aria-expanded={outlineOpen}
-					onclick={() => (outlineOpen = !outlineOpen)}
-				>
-					<List size={18} />
-				</button>
-			</div>
-
-			<div class="reader-title">
-				<strong>{book.title}</strong>
-				<span>{book.sourceKind.toUpperCase()} · {book.segments.length} passages</span>
-			</div>
-
-			<div class="header-actions">
-				<button
-					class="icon-button"
-					class:marked={currentBookmarked}
-					type="button"
-					aria-label={currentBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-					onclick={() => player.toggleBookmark()}
-				>
-					<Bookmark size={17} fill={currentBookmarked ? 'currentColor' : 'none'} />
-				</button>
-				<button
-					class="icon-button"
-					class:active={bookmarksOpen}
-					type="button"
-					aria-label={bookmarksOpen ? 'Close bookmarks' : 'Open bookmarks'}
-					onclick={() => (bookmarksOpen = !bookmarksOpen)}
-				>
-					<ListMusic size={17} />
-				</button>
-				<div class="reader-menu-wrap">
-					<button
-						class="icon-button"
-						class:active={readerMenuOpen}
-						type="button"
-						aria-label="Reading options"
-						aria-expanded={readerMenuOpen}
-						onclick={() => (readerMenuOpen = !readerMenuOpen)}
-					>
-						<Ellipsis size={18} />
-					</button>
-					{#if readerMenuOpen}
-						<div class="reader-menu" role="menu">
-							{#if book.blocks.some((block) => block.kind === 'code')}
-								<button
-									type="button"
-									role="menuitem"
-									onclick={() => {
-										void toggleCodeSpeech();
-										readerMenuOpen = false;
-									}}
-								>
-									<Code2 size={16} />
-									<span>
-										<strong>{book.includeCode ? 'Skip code' : 'Read code'}</strong>
-										<small>Code always remains visible.</small>
-									</span>
-								</button>
-							{/if}
-							<button
-								type="button"
-								role="menuitem"
-								disabled={!player.isGeneratingAll && !installed}
-								onclick={() => {
-									if (player.isGeneratingAll) player.cancelGeneration();
-									else void player.generateAll();
-									readerMenuOpen = false;
-								}}
-							>
-								{#if player.isGeneratingAll}
-									<Square size={15} fill="currentColor" />
-								{:else}
-									<Download size={16} />
-								{/if}
-								<span>
-									<strong
-										>{player.isGeneratingAll ? 'Stop preparing' : 'Prepare whole document'}</strong
-									>
-									<small>
-										{player.isGeneratingAll
-											? Math.round(player.generationProgress) + '% complete'
-											: 'Optional. Cache every passage for offline replay.'}
-									</small>
-								</span>
-							</button>
-						</div>
-					{/if}
-				</div>
-			</div>
-		</header>
-
-		{#if outlineOpen}
+		{#if readerChrome.outlineOpen}
 			<aside id="document-outline" class="outline-panel" aria-label="Document outline">
 				<header>
-					<strong>Contents</strong>
-					<span>{book.outline.length || book.segments.length} sections</span>
+					<div class="outline-heading">
+						<strong>Contents</strong>
+						<span>{book.outline.length || book.segments.length} sections</span>
+					</div>
+					<div class="outline-legend" aria-label="Contents indicators">
+						<span><i class="view-key"></i>View</span>
+						<span><i class="voice-key"></i>Voice</span>
+					</div>
 				</header>
 				<span class="sr-only" aria-live="polite">{outlineAnnouncement}</span>
 				<nav aria-label="Table of contents">
@@ -679,24 +586,43 @@
 							{@const outlineBlock = blockFor(item.blockId)}
 							<button
 								type="button"
-								class:active={activeOutlineBlockId === item.blockId}
+								class:scroll-current={activeOutlineBlockId === item.blockId}
+								class:narration-current={narrationOutlineBlockId === item.blockId}
 								aria-current={activeOutlineBlockId === item.blockId ? 'location' : undefined}
 								aria-label={item.title}
 								title={item.title}
+								data-narration-current={narrationOutlineBlockId === item.blockId
+									? 'true'
+									: undefined}
 								style={'--outline-level:' + Math.max(0, item.level - 1)}
 								onclick={() => outlineBlock && navigateToOutlineBlock(outlineBlock)}
 							>
-								<span>{compactOutlineTitle(item.title)}</span>
+								<span class="outline-label">{compactOutlineTitle(item.title)}</span>
+								<span class="outline-state" aria-hidden="true">
+									{#if narrationOutlineBlockId === item.blockId}
+										<span class="narration-indicator"><Volume2 size={12} strokeWidth={2.2} /></span>
+									{/if}
+								</span>
 							</button>
 						{/each}
 					{:else}
 						{#each book.segments.filter((_, index) => index % 8 === 0) as segment (segment.id)}
 							<button
 								type="button"
-								class:active={segment.id === player.currentSegment?.id}
+								class:narration-current={segment.id === player.currentSegment?.id}
+								data-narration-current={segment.id === player.currentSegment?.id
+									? 'true'
+									: undefined}
 								onclick={() => navigateToSegment(segment)}
 							>
-								{segment.text.slice(0, 54)}{segment.text.length > 54 ? '…' : ''}
+								<span class="outline-label"
+									>{segment.text.slice(0, 54)}{segment.text.length > 54 ? '…' : ''}</span
+								>
+								<span class="outline-state" aria-hidden="true">
+									{#if segment.id === player.currentSegment?.id}
+										<span class="narration-indicator"><Volume2 size={12} strokeWidth={2.2} /></span>
+									{/if}
+								</span>
 							</button>
 						{/each}
 					{/if}
@@ -893,7 +819,7 @@
 			{/if}
 		</section>
 
-		{#if bookmarksOpen}
+		{#if readerChrome.bookmarksOpen}
 			<aside class="bookmarks-panel" aria-label="Bookmarks">
 				<header>
 					<div><strong>Bookmarks</strong><span>{book.bookmarks.length} saved</span></div>
@@ -901,7 +827,7 @@
 						class="icon-button"
 						type="button"
 						aria-label="Close bookmarks"
-						onclick={() => (bookmarksOpen = false)}
+						onclick={() => (readerChrome.bookmarksOpen = false)}
 					>
 						<X size={17} />
 					</button>
@@ -1026,29 +952,23 @@
 			</div>
 
 			<div class="player-options" role="group" aria-label="Playback settings">
-				<label class="player-select voice-select">
-					<span class="sr-only">Voice</span>
-					<select aria-label="Voice" value={appState.selectedVoiceId} onchange={changeVoice}>
-						{#each appState.selectedModel.voices as voice (voice.id)}
-							<option value={voice.id}>{voice.name}</option>
-						{/each}
-					</select>
-					<span class="select-chevron" aria-hidden="true"><ChevronDown size={13} /></span>
-				</label>
-				<label class="player-select speed-select">
-					<span class="sr-only">Playback speed</span>
-					<select
-						aria-label="Playback speed"
-						value={player.rate}
-						onchange={(event) =>
-							player.setRate(Number((event.currentTarget as HTMLSelectElement).value))}
-					>
-						{#each [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as speed (speed)}
-							<option value={speed}>{speed}×</option>
-						{/each}
-					</select>
-					<span class="select-chevron" aria-hidden="true"><ChevronDown size={13} /></span>
-				</label>
+				<CompactSelect
+					label="Voice"
+					value={appState.selectedVoiceId}
+					options={voiceOptions}
+					onChange={changeVoice}
+					triggerWidth="112px"
+					menuWidth="148px"
+				/>
+				<CompactSelect
+					label="Playback speed"
+					value={String(player.rate)}
+					options={playbackSpeedOptions}
+					onChange={(value) => player.setRate(Number(value))}
+					triggerWidth="58px"
+					menuWidth="86px"
+					align="end"
+				/>
 				<label class="player-volume">
 					<span class="sr-only">Volume</span>
 					<Volume2 size={16} aria-hidden="true" />
@@ -1103,10 +1023,10 @@
 	.reader-shell {
 		--player-height: 104px;
 		display: grid;
-		height: 100dvh;
+		height: 100%;
 		min-height: 0;
 		grid-template-columns: 252px minmax(0, 1fr);
-		grid-template-rows: 54px minmax(0, 1fr) var(--player-height);
+		grid-template-rows: minmax(0, 1fr) var(--player-height);
 		overflow: hidden;
 		background: var(--bg);
 	}
@@ -1123,136 +1043,12 @@
 		grid-template-columns: minmax(0, 1fr) 264px;
 	}
 
-	.reader-header {
-		position: relative;
-		z-index: 30;
-		display: grid;
-		grid-row: 1;
-		grid-column: 1 / -1;
-		grid-template-columns: 1fr minmax(0, 1.5fr) 1fr;
-		align-items: center;
-		padding: 0 10px;
-		border-bottom: 1px solid var(--line);
-		background: #111216;
-	}
-
-	.header-left,
-	.header-actions {
-		display: flex;
-		align-items: center;
-		gap: 2px;
-	}
-
-	.header-actions {
-		justify-content: flex-end;
-	}
-
-	.reader-header .icon-button {
-		width: 36px;
-		height: 36px;
-		flex-basis: 36px;
-	}
-
-	.reader-header .icon-button.active {
-		background: rgba(255, 255, 255, 0.055);
-		color: var(--text);
-	}
-
-	.reader-header .icon-button.marked {
-		background: var(--bookmark-soft);
-		color: var(--bookmark);
-	}
-
-	.reader-title {
-		min-width: 0;
-		text-align: center;
-	}
-
-	.reader-title strong,
-	.reader-title span {
-		display: block;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.reader-title strong {
-		font-size: 11px;
-		font-weight: 640;
-	}
-
-	.reader-title span {
-		margin-top: 3px;
-		color: var(--faint);
-		font-size: 8px;
-		letter-spacing: 0.05em;
-	}
-
-	.reader-menu-wrap {
-		position: relative;
-	}
-
-	.reader-menu {
-		position: absolute;
-		top: calc(100% + 7px);
-		right: 0;
-		z-index: 50;
-		display: grid;
-		width: 286px;
-		padding: 5px;
-		border-radius: 7px;
-		background: #1b1d23;
-		box-shadow: 0 18px 54px rgba(0, 0, 0, 0.48);
-	}
-
-	.reader-menu button {
-		display: grid;
-		min-height: 58px;
-		grid-template-columns: 20px 1fr;
-		align-items: start;
-		gap: 10px;
-		padding: 10px;
-		border: 0;
-		border-radius: 5px;
-		background: transparent;
-		color: var(--muted);
-		text-align: left;
-	}
-
-	.reader-menu button:hover:not(:disabled) {
-		background: rgba(255, 255, 255, 0.055);
-		color: var(--text);
-	}
-
-	.reader-menu button:disabled {
-		cursor: not-allowed;
-		opacity: 0.4;
-	}
-
-	.reader-menu strong,
-	.reader-menu small {
-		display: block;
-	}
-
-	.reader-menu strong {
-		color: var(--text-soft);
-		font-size: 10px;
-		font-weight: 640;
-	}
-
-	.reader-menu small {
-		margin-top: 3px;
-		color: var(--faint);
-		font-size: 8px;
-		line-height: 1.4;
-	}
-
 	.outline-panel,
 	.bookmarks-panel {
 		display: flex;
 		min-width: 0;
 		min-height: 0;
-		grid-row: 2;
+		grid-row: 1;
 		background: #101115;
 		flex-direction: column;
 	}
@@ -1274,32 +1070,64 @@
 	.outline-panel > header,
 	.bookmarks-panel > header {
 		display: flex;
-		min-height: 62px;
+		min-height: 68px;
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
-		padding: 0 15px;
+		padding: 0 14px;
 		border-bottom: 1px solid var(--line);
 	}
 
-	.outline-panel header strong,
-	.outline-panel header span,
+	.outline-heading strong,
+	.outline-heading > span,
 	.bookmarks-panel header strong,
 	.bookmarks-panel header span {
 		display: block;
 	}
 
-	.outline-panel header strong,
+	.outline-heading strong,
 	.bookmarks-panel header strong {
-		font-size: 12px;
+		font-size: 13px;
 		font-weight: 650;
 	}
 
-	.outline-panel header span,
+	.outline-heading > span,
 	.bookmarks-panel header span {
 		margin-top: 3px;
 		color: var(--faint);
-		font-size: 10px;
+		font-size: 9px;
+	}
+
+	.outline-legend {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: var(--faint);
+		font-size: 8px;
+	}
+
+	.outline-legend span {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		white-space: nowrap;
+	}
+
+	.outline-legend i {
+		display: block;
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+	}
+
+	.outline-legend .view-key {
+		border: 1px solid rgba(242, 243, 246, 0.32);
+		background: rgba(242, 243, 246, 0.1);
+	}
+
+	.outline-legend .voice-key {
+		background: var(--primary);
+		box-shadow: 0 0 0 2px rgba(168, 157, 246, 0.12);
 	}
 
 	.outline-panel nav {
@@ -1311,37 +1139,62 @@
 	}
 
 	.outline-panel nav button {
-		display: flex;
+		display: grid;
 		min-width: 0;
-		min-height: 42px;
+		min-height: 44px;
+		grid-template-columns: minmax(0, 1fr) 22px;
 		align-items: center;
-		padding: 8px 11px 8px calc(11px + var(--outline-level, 0) * 10px);
+		gap: 8px;
+		padding: 8px 8px 8px calc(11px + var(--outline-level, 0) * 11px);
 		border: 0;
 		border-radius: 6px;
 		background: transparent;
 		color: var(--muted);
-		font-size: 11px;
-		line-height: 1.25;
+		font-size: 12.5px;
+		line-height: 1.3;
 		text-align: left;
+		transition:
+			background 140ms var(--ease),
+			color 140ms var(--ease);
 	}
 
-	.outline-panel nav button span {
+	.outline-panel .outline-label {
 		display: block;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
-	.outline-panel nav button:hover,
-	.outline-panel nav button.active {
+	.outline-panel nav button:hover {
 		background: rgba(255, 255, 255, 0.04);
 		color: var(--text-soft);
 	}
 
-	.outline-panel nav button.active {
-		background: var(--primary-soft);
+	.outline-panel nav button.scroll-current {
+		background: rgba(242, 243, 246, 0.065);
 		color: var(--text);
-		box-shadow: inset 2px 0 var(--primary);
+	}
+
+	.outline-panel nav button.narration-current .outline-label {
+		color: #e2deff;
+		font-weight: 610;
+	}
+
+	.outline-state {
+		display: grid;
+		width: 22px;
+		height: 22px;
+		place-items: center;
+	}
+
+	.narration-indicator {
+		display: grid;
+		width: 20px;
+		height: 20px;
+		place-items: center;
+		border-radius: 50%;
+		background: var(--primary-soft);
+		color: var(--primary);
 	}
 
 	.outline-panel > footer {
@@ -1369,7 +1222,7 @@
 		display: flex;
 		min-width: 0;
 		min-height: 0;
-		grid-row: 2;
+		grid-row: 1;
 		grid-column: 2;
 		overflow: hidden;
 		padding: 14px 18px 0;
@@ -1844,7 +1697,7 @@
 		display: grid;
 		height: var(--player-height);
 		min-width: 0;
-		grid-row: 3;
+		grid-row: 2;
 		grid-column: 1 / -1;
 		grid-template-columns: minmax(190px, 0.7fr) minmax(390px, 1.5fr) minmax(290px, 336px);
 		align-items: center;
@@ -1886,6 +1739,8 @@
 
 	.transport {
 		display: grid;
+		grid-template-rows: 48px 20px;
+		align-content: center;
 		gap: 8px;
 	}
 
@@ -2055,55 +1910,6 @@
 		gap: 10px;
 	}
 
-	.player-select {
-		position: relative;
-		display: flex;
-		height: 44px;
-		min-width: 0;
-		align-items: center;
-	}
-
-	.voice-select {
-		width: 112px;
-	}
-
-	.speed-select {
-		width: 62px;
-	}
-
-	.select-chevron {
-		position: absolute;
-		top: 50%;
-		right: 6px;
-		pointer-events: none;
-		transform: translateY(-50%);
-	}
-
-	.player-select select {
-		appearance: none;
-		width: 100%;
-		min-width: 0;
-		height: 44px;
-		padding: 0 24px 0 7px;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--text-soft);
-		font-size: 11px;
-		font-weight: 580;
-		color-scheme: inherit;
-	}
-
-	.player-select select:hover {
-		background: rgba(255, 255, 255, 0.04);
-		color: var(--text);
-	}
-
-	.player-select select option {
-		background: var(--control-strong);
-		color: var(--text);
-	}
-
 	.player-volume {
 		display: flex;
 		min-width: 0;
@@ -2161,7 +1967,7 @@
 		.bookmarks-panel,
 		.outline-closed .bookmarks-panel {
 			position: absolute;
-			top: 54px;
+			top: 0;
 			right: 0;
 			bottom: var(--player-height);
 			z-index: 32;
@@ -2200,7 +2006,7 @@
 
 		.outline-panel {
 			position: absolute;
-			top: 54px;
+			top: 0;
 			bottom: var(--player-height);
 			left: 0;
 			z-index: 32;
@@ -2220,10 +2026,6 @@
 	}
 
 	@media (max-width: 560px) {
-		.reader-title span {
-			display: none;
-		}
-
 		.reader-stage {
 			padding-right: 8px;
 			padding-left: 8px;
