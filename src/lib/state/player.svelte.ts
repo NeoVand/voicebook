@@ -60,6 +60,7 @@ export class VoicebookPlayer {
 	private frame = 0;
 	private lastUiFrameAt = 0;
 	private lastMediaUpdateAt = 0;
+	private requestedWordIndex?: number;
 	private audioCache = new SvelteMap<string, PreparedAudio>();
 	private preparedBySegment = new SvelteMap<number, PreparedAudio>();
 	private queue = new SvelteMap<number, Promise<PreparedAudio>>();
@@ -95,6 +96,7 @@ export class VoicebookPlayer {
 	setDocument(document: NormalizedDocument): void {
 		this.pause();
 		this.preparedBySegment.clear();
+		this.requestedWordIndex = undefined;
 		this.book = document;
 		const savedIndex = document.playback
 			? document.segments.findIndex((segment) => segment.id === document.playback?.segmentId)
@@ -310,7 +312,7 @@ export class VoicebookPlayer {
 			);
 			return prepared;
 		} finally {
-			this.abortControllers.delete(index);
+			if (this.abortControllers.get(index) === controller) this.abortControllers.delete(index);
 		}
 	}
 
@@ -333,7 +335,9 @@ export class VoicebookPlayer {
 	private queuedAudio(index: number): Promise<PreparedAudio> {
 		const existing = this.queue.get(index);
 		if (existing) return existing;
-		const request = this.prepareAudio(index).finally(() => this.queue.delete(index));
+		const request = this.prepareAudio(index).finally(() => {
+			if (this.queue.get(index) === request) this.queue.delete(index);
+		});
 		this.queue.set(index, request);
 		return request;
 	}
@@ -367,7 +371,24 @@ export class VoicebookPlayer {
 			this.bufferingStage = 'Starting audio output…';
 			await this.requireAudioOutput(context);
 			this.currentDuration = prepared.buffer.duration;
-			this.position = Math.min(this.position, Math.max(0, prepared.buffer.duration - 0.02));
+			if (this.requestedWordIndex !== undefined) {
+				const requestedWordIndex = Math.max(
+					0,
+					Math.min(this.requestedWordIndex, Math.max(0, this.currentSegment.words.length - 1))
+				);
+				const timedWord = prepared.timing.words[requestedWordIndex];
+				const estimatedOffset =
+					(prepared.buffer.duration * requestedWordIndex) /
+					Math.max(1, this.currentSegment.words.length);
+				this.position = Math.min(
+					timedWord?.start ?? estimatedOffset,
+					Math.max(0, prepared.buffer.duration - 0.02)
+				);
+				this.currentWordIndex = requestedWordIndex;
+				this.requestedWordIndex = undefined;
+			} else {
+				this.position = Math.min(this.position, Math.max(0, prepared.buffer.duration - 0.02));
+			}
 			this.manualStop = false;
 			const source = context.createBufferSource();
 			source.buffer = prepared.buffer;
@@ -382,7 +403,7 @@ export class VoicebookPlayer {
 				source.connect(this.gain!);
 			}
 			source.onended = () => {
-				if (!this.manualStop) void this.advanceAfterEnd();
+				if (this.source === source && !this.manualStop) void this.advanceAfterEnd();
 			};
 			this.source = source;
 			this.sourceStartedAt = context.currentTime;
@@ -433,8 +454,8 @@ export class VoicebookPlayer {
 		await this.play();
 	}
 
-	pause(): void {
-		if (this.isPlaying) this.updateClock();
+	private stopPlayback(persistPosition: boolean): void {
+		if (this.isPlaying && persistPosition) this.updateClock();
 		this.manualStop = true;
 		try {
 			this.source?.stop();
@@ -445,8 +466,12 @@ export class VoicebookPlayer {
 		this.source = undefined;
 		this.isPlaying = false;
 		cancelAnimationFrame(this.frame);
-		void this.persistPosition(true);
+		if (persistPosition) void this.persistPosition(true);
 		if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+	}
+
+	pause(): void {
+		this.stopPlayback(true);
 	}
 
 	async toggle(): Promise<void> {
@@ -511,6 +536,7 @@ export class VoicebookPlayer {
 		this.currentSegmentIndex = target.index;
 		this.position = target.offset;
 		this.currentWordIndex = 0;
+		this.requestedWordIndex = undefined;
 		this.notifySegmentChange();
 		if (wasPlaying) await this.play();
 		else await this.persistPosition(true);
@@ -522,6 +548,31 @@ export class VoicebookPlayer {
 		await this.seekBy(target - current);
 	}
 
+	async playFromSegment(index: number, wordIndex = 0): Promise<void> {
+		if (!this.book) return;
+		this.stopPlayback(false);
+		this.cancellationVersion += 1;
+		this.reprioritize();
+		ttsClient.cancelAll();
+		this.isBuffering = false;
+		this.isGeneratingAll = false;
+		this.generationProgress = 0;
+		this.bufferingStage = 'Preparing this passage…';
+		this.errorMessage = '';
+
+		this.currentSegmentIndex = Math.max(0, Math.min(index, this.book.segments.length - 1));
+		const segment = this.currentSegment;
+		this.currentWordIndex = Math.max(
+			0,
+			Math.min(wordIndex, Math.max(0, (segment?.words.length ?? 1) - 1))
+		);
+		this.requestedWordIndex = this.currentWordIndex;
+		this.position = 0;
+		this.notifySegmentChange();
+		await this.persistPosition(true);
+		await this.play();
+	}
+
 	async goToSegment(index: number, offset = 0): Promise<void> {
 		if (!this.book) return;
 		const wasPlaying = this.isPlaying;
@@ -530,6 +581,7 @@ export class VoicebookPlayer {
 		this.currentSegmentIndex = Math.max(0, Math.min(index, this.book.segments.length - 1));
 		this.position = offset;
 		this.currentWordIndex = 0;
+		this.requestedWordIndex = undefined;
 		this.notifySegmentChange();
 		if (wasPlaying) await this.play();
 		else await this.persistPosition(true);

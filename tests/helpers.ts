@@ -2,6 +2,19 @@ import type { Page } from '@playwright/test';
 
 export async function installFakeTts(page: Page): Promise<void> {
 	await page.addInitScript(() => {
+		interface LoggedWorkerMessage {
+			type: string;
+			requestId: string;
+			modelId?: string;
+			text?: string;
+		}
+
+		const workerMessages: LoggedWorkerMessage[] = [];
+		Object.defineProperty(window, '__voicebookTtsMessages', {
+			value: workerMessages,
+			configurable: true
+		});
+
 		class FakeSpeechWorker {
 			private listeners: Record<
 				string,
@@ -18,7 +31,8 @@ export async function installFakeTts(page: Page): Promise<void> {
 				this.listeners[type]?.push(listener);
 			}
 
-			postMessage(message: { type: string; requestId: string; modelId?: string }): void {
+			postMessage(message: LoggedWorkerMessage): void {
+				workerMessages.push(message);
 				if (message.type === 'cancel') return;
 				queueMicrotask(() => {
 					if (message.type === 'capabilities') {

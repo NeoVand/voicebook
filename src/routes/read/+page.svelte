@@ -27,6 +27,7 @@
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
+	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import InlineText from '$lib/components/InlineText.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
@@ -52,6 +53,16 @@
 	let readerScrollFrame = 0;
 	let outlineNavigationBlockId: string | undefined;
 	const segmentElements = new SvelteMap<string, HTMLElement>();
+	interface NarrationStartAction {
+		segmentId: string;
+		wordIndex: number;
+		excerpt: string;
+		left: number;
+		top: number;
+		placement: 'above' | 'below';
+	}
+	let narrationStartAction = $state<NarrationStartAction>();
+	let narrationAnnouncement = $state('');
 
 	let segmentsByBlock = $derived.by(() => {
 		const map = new SvelteMap<string, SpeechSegment[]>();
@@ -150,8 +161,18 @@
 
 	const trackReadingCanvas: Attachment<HTMLElement> = (element) => {
 		readingCanvas = element;
+		const removeListeners = [
+			on(element, 'scroll', handleReaderScroll),
+			on(element, 'wheel', () => (player.autoFollow = false)),
+			on(element, 'touchmove', () => (player.autoFollow = false)),
+			on(element, 'pointerup', scheduleTextSelectionAction),
+			on(element, 'keyup', scheduleTextSelectionAction),
+			on(element, 'click', startClickedPassage),
+			on(element, 'keydown', handlePassageKeydown)
+		];
 		requestAnimationFrame(scheduleVisibleSectionUpdate);
 		return () => {
+			for (const removeListener of removeListeners) removeListener();
 			if (readingCanvas === element) readingCanvas = undefined;
 		};
 	};
@@ -302,6 +323,113 @@
 		void player.goToSegment(segmentIndexes.get(segment.id) ?? 0);
 	}
 
+	async function startNarrationFrom(
+		segment: SpeechSegment,
+		wordIndex = 0,
+		clearSelection = false
+	): Promise<void> {
+		const index = segmentIndexes.get(segment.id);
+		if (index === undefined) return;
+		narrationStartAction = undefined;
+		if (clearSelection) window.getSelection()?.removeAllRanges();
+		player.autoFollow = true;
+		narrationAnnouncement = `Starting from ${segment.text.replace(/\s+/g, ' ').trim()}`;
+		await player.playFromSegment(index, wordIndex);
+	}
+
+	function segmentForElement(element: Element | null): SpeechSegment | undefined {
+		const segmentId = element?.closest<HTMLElement>('.speech-segment')?.dataset.segmentId;
+		return segmentId ? book?.segments.find((candidate) => candidate.id === segmentId) : undefined;
+	}
+
+	function positionedNarrationAction(
+		segment: SpeechSegment,
+		wordIndex: number,
+		excerpt: string,
+		rect: DOMRect
+	): NarrationStartAction | undefined {
+		if (!readingCanvas) return;
+		const canvasRect = readingCanvas.getBoundingClientRect();
+		const placement = rect.top - canvasRect.top >= 54 ? 'above' : 'below';
+		const unclampedLeft = readingCanvas.scrollLeft + rect.left + rect.width / 2 - canvasRect.left;
+		const left = Math.max(86, Math.min(readingCanvas.clientWidth - 86, unclampedLeft));
+		const top =
+			readingCanvas.scrollTop +
+			(placement === 'above' ? rect.top - canvasRect.top - 8 : rect.bottom - canvasRect.top + 8);
+		return { segmentId: segment.id, wordIndex, excerpt, left, top, placement };
+	}
+
+	function startClickedPassage(event: MouseEvent): void {
+		if (!(event.target instanceof Element)) return;
+		if (event.target.closest('a, button')) return;
+		const selection = window.getSelection();
+		if (selection && !selection.isCollapsed) return;
+		const segment = segmentForElement(event.target);
+		if (!segment) return;
+		void startNarrationFrom(segment);
+	}
+
+	function handlePassageKeydown(event: KeyboardEvent): void {
+		if (
+			!(event.target instanceof HTMLElement) ||
+			!event.target.matches('.speech-segment') ||
+			(event.key !== 'Enter' && event.key !== ' ')
+		)
+			return;
+		const segment = segmentForElement(event.target);
+		if (!segment) return;
+		event.preventDefault();
+		void startNarrationFrom(segment);
+	}
+
+	function updateTextSelectionAction(): void {
+		if (!readingCanvas || !book) return;
+		const selection = window.getSelection();
+		if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+			narrationStartAction = undefined;
+			return;
+		}
+
+		const range = selection.getRangeAt(0);
+		if (!readingCanvas.contains(range.commonAncestorContainer)) {
+			narrationStartAction = undefined;
+			return;
+		}
+		const startElement =
+			range.startContainer instanceof Element
+				? range.startContainer
+				: range.startContainer.parentElement;
+		const segmentElement = startElement?.closest<HTMLElement>('.speech-segment');
+		const segmentId = segmentElement?.dataset.segmentId;
+		const segment = segmentId
+			? book.segments.find((candidate) => candidate.id === segmentId)
+			: undefined;
+		if (!segmentElement || !segment || !readingCanvas.contains(segmentElement)) {
+			narrationStartAction = undefined;
+			return;
+		}
+
+		const wordElement = startElement?.closest<HTMLElement>('[data-word-index]');
+		const parsedWordIndex = Number(wordElement?.dataset.wordIndex ?? 0);
+		const wordIndex = Number.isFinite(parsedWordIndex) ? parsedWordIndex : 0;
+		const rangeRect = range.getBoundingClientRect();
+		narrationStartAction = positionedNarrationAction(
+			segment,
+			wordIndex,
+			selection.toString().replace(/\s+/g, ' ').trim(),
+			rangeRect
+		);
+	}
+
+	function scheduleTextSelectionAction(): void {
+		requestAnimationFrame(updateTextSelectionAction);
+	}
+
+	function handleReaderScroll(): void {
+		narrationStartAction = undefined;
+		scheduleVisibleSectionUpdate();
+	}
+
 	function updateVisibleSection(): void {
 		readerScrollFrame = 0;
 		if (!readingCanvas || !book?.outline.length) return;
@@ -371,7 +499,7 @@
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
 		const target = event.target as HTMLElement | null;
-		if (target?.matches('input,textarea,select,button')) return;
+		if (target?.matches('input,textarea,select,button,.speech-segment')) return;
 		if (event.code === 'Space') {
 			event.preventDefault();
 			if (player.isBuffering) player.cancelGeneration();
@@ -392,7 +520,16 @@
 
 {#snippet renderSegment(block: DocumentBlock, segment: SpeechSegment)}
 	{@const isActive = activeSegmentId === segment.id}
-	<span class="speech-segment" class:active={isActive} {@attach trackSegment(segment.id)}>
+	<span
+		class="speech-segment"
+		class:active={isActive}
+		role="button"
+		tabindex="0"
+		aria-label={segment.text}
+		title="Play narration from this passage"
+		data-segment-id={segment.id}
+		{@attach trackSegment(segment.id)}
+	>
 		{#each tokens(block, segment) as inline, inlineIndex (inlineIndex)}
 			<InlineText
 				run={inline.run}
@@ -603,14 +740,7 @@
 				</div>
 			{/if}
 
-			<article
-				class="reading-canvas"
-				aria-label={book.title}
-				{@attach trackReadingCanvas}
-				onscroll={scheduleVisibleSectionUpdate}
-				onwheel={() => (player.autoFollow = false)}
-				ontouchmove={() => (player.autoFollow = false)}
-			>
+			<article class="reading-canvas" aria-label={book.title} {@attach trackReadingCanvas}>
 				<header class="document-heading" id={titleBlock?.id} tabindex="-1">
 					<span>{book.sourceKind.toUpperCase()} · Local library</span>
 					<h1>
@@ -732,7 +862,30 @@
 						{/if}
 					{/each}
 				</div>
+
+				{#if narrationStartAction}
+					{@const selectedSegment = book.segments.find(
+						(segment) => segment.id === narrationStartAction?.segmentId
+					)}
+					{#if selectedSegment}
+						<button
+							class="selection-start"
+							class:below={narrationStartAction.placement === 'below'}
+							type="button"
+							style:left={`${narrationStartAction.left}px`}
+							style:top={`${narrationStartAction.top}px`}
+							aria-label={`Play from selected text: ${narrationStartAction.excerpt}`}
+							onpointerdown={(event) => event.preventDefault()}
+							onclick={() =>
+								void startNarrationFrom(selectedSegment, narrationStartAction?.wordIndex, true)}
+						>
+							<Play size={12} fill="currentColor" />
+							Play from here
+						</button>
+					{/if}
+				{/if}
 			</article>
+			<p class="sr-only" aria-live="polite">{narrationAnnouncement}</p>
 
 			{#if !player.autoFollow}
 				<button class="return-follow button" type="button" onclick={resumeNarrationFollow}>
@@ -1299,6 +1452,7 @@
 		--reader-link: #aaa0f4;
 		--reader-rule: rgba(31, 32, 38, 0.14);
 		--reader-code-soft: rgba(31, 32, 38, 0.065);
+		position: relative;
 		width: min(900px, 100%);
 		min-height: 0;
 		margin: 0 auto;
@@ -1562,7 +1716,53 @@
 	}
 
 	.speech-segment {
+		position: relative;
 		border-radius: 2px;
+		transition:
+			background 150ms var(--ease),
+			box-shadow 150ms var(--ease);
+	}
+
+	.speech-segment:hover {
+		background: rgba(168, 157, 246, 0.045);
+		box-shadow: 0 0 0 3px rgba(168, 157, 246, 0.045);
+	}
+
+	.speech-segment:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 4px;
+		background: rgba(168, 157, 246, 0.065);
+	}
+
+	.selection-start {
+		position: absolute;
+		z-index: 20;
+		display: inline-flex;
+		min-height: 34px;
+		align-items: center;
+		gap: 7px;
+		padding: 0 12px;
+		border: 1px solid color-mix(in srgb, var(--reader-ink-strong) 70%, transparent);
+		border-radius: 999px;
+		background: var(--reader-ink-strong);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.26);
+		color: var(--reader);
+		cursor: pointer;
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 10px;
+		font-weight: 680;
+		letter-spacing: 0.01em;
+		line-height: 1;
+		transform: translate(-50%, -100%);
+		white-space: nowrap;
+	}
+
+	.selection-start.below {
+		transform: translate(-50%, 0);
+	}
+
+	.selection-start:hover {
+		background: color-mix(in srgb, var(--reader-ink-strong) 88%, var(--primary));
 	}
 
 	.speech-segment + .speech-segment::before {

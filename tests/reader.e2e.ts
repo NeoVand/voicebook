@@ -32,11 +32,11 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
 	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
 
-	await expect(page.getByRole('button', { name: 'Play' })).toBeEnabled();
+	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
 	await page.getByRole('button', { name: 'Reading options' }).click();
 	await expect(page.getByRole('menuitem', { name: /Prepare whole document/ })).toBeVisible();
 	await page.getByRole('button', { name: 'Reading options' }).click();
-	await page.getByRole('button', { name: 'Play' }).click();
+	await page.getByRole('button', { name: 'Play', exact: true }).click();
 	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
 	await page.getByLabel('Playback speed').selectOption('1.5');
 	await expect(page.getByLabel('Playback speed')).toHaveValue('1.5');
@@ -113,6 +113,87 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		expect(geometry.playerRightInset, `${width}px settings right inset`).toBeGreaterThanOrEqual(19);
 		expect(geometry.volumeRightInset, `${width}px volume right inset`).toBeGreaterThanOrEqual(19);
 	}
+});
+
+test('starts narration from a chosen passage or selected word', async ({ page }) => {
+	await page.goto('./');
+	await page.getByRole('link', { name: 'Voice', exact: true }).click();
+	await page.getByRole('checkbox', { name: 'I have reviewed the terms' }).check();
+	await page.getByRole('button', { name: 'Install locally' }).click();
+	await page.getByRole('link', { name: 'Library', exact: true }).click();
+	await page.getByRole('button', { name: 'Paste text' }).click();
+	await page.getByLabel('Title').fill('Choose a passage');
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill(
+			'The opening passage should remain untouched. The second passage begins gently. The third passage is the chosen starting point.'
+		);
+	await page.getByRole('button', { name: 'Add to library' }).click();
+
+	const thirdPassage = page.locator('.speech-segment').filter({
+		hasText: 'The third passage is the chosen starting point.'
+	});
+	await thirdPassage.click();
+	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+	await expect(page.locator('.speech-segment.active')).toContainText(
+		'The third passage is the chosen starting point.'
+	);
+
+	const firstSynthesis = await page.evaluate(() => {
+		const messages = (
+			window as unknown as {
+				__voicebookTtsMessages: Array<{ type: string; text?: string }>;
+			}
+		).__voicebookTtsMessages;
+		return messages.find((message) => message.type === 'synthesize')?.text;
+	});
+	expect(firstSynthesis).toBe('The third passage is the chosen starting point.');
+	await page.getByRole('button', { name: 'Pause' }).click();
+
+	const openingPassage = page.locator('.speech-segment').filter({
+		hasText: 'The opening passage should remain untouched.'
+	});
+	await openingPassage.focus();
+	await page.keyboard.press('Enter');
+	await expect(page.locator('.speech-segment.active')).toContainText(
+		'The opening passage should remain untouched.'
+	);
+	await page.getByRole('button', { name: 'Pause' }).click();
+
+	const selectedWord = page.locator('.spoken-word').filter({ hasText: /^begins$/ });
+	await selectedWord.evaluate((element) => {
+		const range = document.createRange();
+		range.selectNodeContents(element);
+		const selection = window.getSelection();
+		selection?.removeAllRanges();
+		selection?.addRange(range);
+		element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+	});
+	await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe('begins');
+	const playSelection = page.getByRole('button', {
+		name: 'Play from selected text: begins'
+	});
+	await expect(playSelection).toBeVisible();
+	await playSelection.click();
+	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+	await expect(page.locator('.speech-segment.active')).toContainText(
+		'The second passage begins gently.'
+	);
+
+	const synthesisOrder = await page.evaluate(() =>
+		(
+			window as unknown as {
+				__voicebookTtsMessages: Array<{ type: string; text?: string }>;
+			}
+		).__voicebookTtsMessages
+			.filter((message) => message.type === 'synthesize')
+			.map((message) => message.text)
+	);
+	expect(synthesisOrder.slice(0, 3)).toEqual([
+		'The third passage is the chosen starting point.',
+		'The opening passage should remain untouched.',
+		'The second passage begins gently.'
+	]);
 });
 
 test('detects duplicate file imports and keeps navigation under the Pages base path', async ({
