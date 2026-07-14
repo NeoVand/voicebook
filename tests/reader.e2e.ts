@@ -390,12 +390,111 @@ test('renders Mermaid fences as accessible diagrams with a source fallback', asy
 	await expect(page.getByText('View diagram source')).toBeVisible();
 	await expect(page.locator('figure.mermaid-diagram')).toHaveAttribute('data-status', 'ready');
 	await expect(page.getByText('Diagram unavailable')).toBeHidden();
+	const diagramSvg = page.locator('.mermaid-diagram .diagram-output svg');
+	await expect(diagramSvg.locator('style').last()).toContainText('var(--diagram-node)');
+	const diagramThemeToken = () =>
+		diagramSvg.evaluate((svg) => getComputedStyle(svg).getPropertyValue('--diagram-node').trim());
+	const midnightToken = await diagramThemeToken();
+	await page.getByRole('button', { name: 'Theme: Midnight. Switch to Sunny theme' }).click();
+	await expect
+		.poll(diagramThemeToken, {
+			message: 'Mermaid should recolor for the active reader theme'
+		})
+		.not.toBe(midnightToken);
 	const sizeToggle = page.getByRole('button', { name: 'Full size' });
 	await sizeToggle.click();
 	await expect(page.getByRole('button', { name: 'Fit width' })).toHaveAttribute(
 		'aria-pressed',
 		'true'
 	);
+});
+
+test('renders technical Markdown and zooms only the document beneath the navbar', async ({
+	page
+}) => {
+	await page.goto('./');
+	await page.locator('#document-upload').setInputFiles({
+		name: 'technical-reader.md',
+		mimeType: 'text/markdown',
+		buffer: Buffer.from(
+			[
+				'# Technical reader',
+				'',
+				'The identity $e^{i\\pi} + 1 = 0$ stays inline.',
+				'',
+				'$$',
+				'\\int_0^1 x^2 \\, dx = \\frac{1}{3}',
+				'$$',
+				'',
+				'```typescript',
+				'const answer: number = 42;',
+				'```',
+				'',
+				'The implementation stays local.[^privacy]',
+				'',
+				'[^privacy]: Nothing is uploaded.'
+			].join('\n')
+		)
+	});
+
+	await expect(page.locator('.math-inline .katex')).toBeVisible();
+	await expect(
+		page.getByRole('figure', { name: 'Mathematical equation' }).locator('.katex-display')
+	).toBeVisible();
+	const code = page.locator('figure.code-block code.hljs');
+	await expect(code).toContainText('const answer: number = 42;');
+	await expect(code.locator('.hljs-keyword')).toHaveText('const');
+	await expect(page.getByRole('button', { name: 'Copy code' })).toBeVisible();
+	await expect(page.getByRole('complementary', { name: 'Footnote privacy' })).toContainText(
+		'Nothing is uploaded.'
+	);
+	await expect(page.locator('a[href="#footnote-privacy"]')).toHaveText('[privacy]');
+
+	const header = page.getByRole('banner', { name: 'Voicebook header' });
+	const canvas = page.locator('.reading-canvas');
+	const geometry = await page.evaluate(() => {
+		const headerElement = document.querySelector<HTMLElement>('.app-header');
+		const canvasElement = document.querySelector<HTMLElement>('.reading-canvas');
+		if (!headerElement || !canvasElement) throw new Error('Reader geometry is unavailable');
+		const headerStyle = getComputedStyle(headerElement);
+		return {
+			headerBottom: headerElement.getBoundingClientRect().bottom,
+			canvasTop: canvasElement.getBoundingClientRect().top,
+			headerBackground: headerStyle.backgroundColor,
+			rootBackground: getComputedStyle(document.documentElement).backgroundColor,
+			headerFontSize: Number.parseFloat(headerStyle.fontSize)
+		};
+	});
+	expect(geometry.canvasTop).toBeLessThan(geometry.headerBottom);
+	expect(geometry.headerBackground).not.toBe(geometry.rootBackground);
+
+	await page.getByRole('button', { name: 'Close document outline' }).click();
+	await expect(page.getByRole('complementary', { name: 'Document outline' })).toHaveCount(0);
+	await page.getByRole('button', { name: 'Open document outline' }).click();
+	await expect(page.getByRole('complementary', { name: 'Document outline' })).toBeVisible();
+
+	const beforeZoom = await canvas.evaluate((element) =>
+		Number.parseFloat(getComputedStyle(element).fontSize)
+	);
+	await page.getByRole('button', { name: 'Zoom document in' }).click();
+	await expect(
+		page.getByRole('button', { name: 'Reset document zoom, currently 110%' })
+	).toBeVisible();
+	const afterZoom = await canvas.evaluate((element) =>
+		Number.parseFloat(getComputedStyle(element).fontSize)
+	);
+	expect(afterZoom).toBeGreaterThan(beforeZoom);
+	expect(
+		await header.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))
+	).toBe(geometry.headerFontSize);
+	await page.reload();
+	await expect(
+		page.getByRole('button', { name: 'Reset document zoom, currently 110%' })
+	).toBeVisible();
+	await page.getByRole('button', { name: 'Reset document zoom, currently 110%' }).click();
+	await expect(
+		page.getByRole('button', { name: 'Reset document zoom, currently 100%' })
+	).toBeVisible();
 });
 
 test('table of contents moves the reading canvas and closes its compact drawer', async ({

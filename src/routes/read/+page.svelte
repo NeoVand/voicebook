@@ -24,7 +24,9 @@
 	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import CompactSelect from '$lib/components/CompactSelect.svelte';
+	import CodeBlock from '$lib/components/CodeBlock.svelte';
 	import InlineText from '$lib/components/InlineText.svelte';
+	import MathFormula from '$lib/components/MathFormula.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
 	import type {
 		DocumentBlock,
@@ -678,6 +680,7 @@
 			<article
 				class="reading-canvas"
 				class:scrollbar-active={scrollbarActive}
+				style:--document-zoom={readerChrome.documentZoom}
 				aria-label={book.title}
 				{@attach trackReadingCanvas}
 			>
@@ -755,10 +758,22 @@
 							{:else if block.kind === 'code' && block.codeLanguage?.toLowerCase() === 'mermaid'}
 								<MermaidDiagram id={block.id} source={block.text} />
 							{:else if block.kind === 'code'}
-								<figure class="code-block" id={block.id}>
-									{#if block.codeLanguage}<figcaption>{block.codeLanguage}</figcaption>{/if}
-									<pre><code>{block.text}</code></pre>
-								</figure>
+								<CodeBlock id={block.id} source={block.text} language={block.codeLanguage} />
+							{:else if block.kind === 'math'}
+								<MathFormula id={block.id} formula={block.text} displayMode />
+							{:else if block.kind === 'footnote'}
+								<aside
+									class="document-footnote"
+									id={block.footnoteId ?? block.id}
+									aria-label={`Footnote ${block.footnoteLabel}`}
+								>
+									<span aria-hidden="true">{block.footnoteLabel}</span>
+									<p>
+										{#each blockSegments as segment (segment.id)}
+											{@render renderSegment(block, segment)}
+										{/each}
+									</p>
+								</aside>
 							{:else if block.kind === 'quote'}
 								<blockquote id={block.id}>
 									{#each blockSegments as segment (segment.id)}
@@ -1088,6 +1103,7 @@
 		grid-row: 1;
 		background: var(--sidebar);
 		flex-direction: column;
+		padding-top: var(--app-header-height);
 	}
 
 	.outline-panel {
@@ -1244,7 +1260,7 @@
 		grid-row: 1;
 		grid-column: 2;
 		overflow: hidden;
-		padding: 14px 18px 0;
+		padding: 0 18px;
 		background: var(--reader-stage);
 		flex-direction: column;
 	}
@@ -1255,16 +1271,33 @@
 
 	.engine-notice,
 	.import-warning {
+		position: absolute;
+		top: calc(var(--app-header-height) + 14px);
+		left: 50%;
+		z-index: 5;
 		display: flex;
-		width: min(820px, 100%);
+		width: min(820px, calc(100% - 36px));
 		min-height: 52px;
 		align-items: center;
 		gap: 11px;
-		margin: 0 auto 10px;
+		margin: 0;
 		padding: 6px 8px 6px 12px;
 		border-left: 2px solid var(--primary);
 		background: var(--notice);
 		flex: 0 0 auto;
+		transform: translateX(-50%);
+	}
+
+	.engine-notice + .import-warning {
+		top: calc(var(--app-header-height) + 76px);
+	}
+
+	.reader-stage:has(> .engine-notice, > .import-warning) .reading-canvas {
+		padding-top: calc(var(--app-header-height) + 112px);
+	}
+
+	.reader-stage:has(> .engine-notice + .import-warning) .reading-canvas {
+		padding-top: calc(var(--app-header-height) + 174px);
 	}
 
 	.engine-notice-icon {
@@ -1310,12 +1343,12 @@
 		overscroll-behavior: contain;
 		scrollbar-width: thin;
 		scrollbar-color: transparent transparent;
-		padding: 58px clamp(48px, 7vw, 92px) 92px;
+		padding: calc(var(--app-header-height) + 58px) clamp(48px, 7vw, 92px) 92px;
 		border-radius: 7px 7px 0 0;
 		background: var(--reader);
 		color: var(--reader-ink);
 		font-family: var(--font-reading);
-		font-size: clamp(1.04rem, 1vw, 1.16rem);
+		font-size: calc(clamp(1.04rem, 1vw, 1.16rem) * var(--document-zoom, 1));
 		font-variation-settings: 'opsz' 20;
 		line-height: 1.72;
 		flex: 1 1 auto;
@@ -1442,29 +1475,32 @@
 		font-style: italic;
 	}
 
-	.code-block,
+	.document-footnote {
+		display: grid;
+		grid-template-columns: 2.2em minmax(0, 1fr);
+		gap: 0.7em;
+		margin: 1em 0;
+		padding-top: 0.85em;
+		border-top: 1px solid var(--reader-rule);
+		color: var(--reader-quiet);
+		font-size: 0.82em;
+		scroll-margin-top: calc(var(--app-header-height) + 1rem);
+	}
+
+	.document-footnote > span {
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.72em;
+		font-weight: 700;
+	}
+
+	.document-footnote p {
+		margin: 0;
+	}
+
 	.document-metadata {
 		margin: 1.8em 0;
 	}
 
-	.code-block {
-		position: relative;
-	}
-
-	.code-block figcaption {
-		position: absolute;
-		top: 10px;
-		right: 13px;
-		z-index: 1;
-		color: var(--reader-quiet);
-		font-family: 'Inter Variable', sans-serif;
-		font-size: 0.58em;
-		font-weight: 680;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-	}
-
-	.code-block pre,
 	.document-metadata pre {
 		overflow: auto;
 		margin: 0;
@@ -2076,7 +2112,7 @@
 		}
 
 		.reading-canvas {
-			padding: 38px 24px 60px;
+			padding: calc(var(--app-header-height) + 38px) 24px 60px;
 		}
 
 		.document-heading h1 {

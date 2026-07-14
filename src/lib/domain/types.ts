@@ -5,6 +5,8 @@ export type BlockKind =
 	| 'list-item'
 	| 'quote'
 	| 'code'
+	| 'math'
+	| 'footnote'
 	| 'frontmatter'
 	| 'table'
 	| 'divider'
@@ -15,6 +17,7 @@ export type InlineMark = 'strong' | 'emphasis' | 'delete' | 'code';
 export interface InlineRun {
 	text: string;
 	marks?: InlineMark[];
+	math?: boolean;
 	href?: string;
 	title?: string;
 }
@@ -61,6 +64,8 @@ export interface DocumentBlock {
 	inlines?: InlineRun[];
 	list?: ListMetadata;
 	codeLanguage?: string;
+	footnoteId?: string;
+	footnoteLabel?: string;
 	table?: DocumentTable;
 	speak: boolean;
 	anchor: SourceAnchor;
