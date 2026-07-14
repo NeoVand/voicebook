@@ -24,6 +24,8 @@
 		Settings2,
 		ShieldCheck,
 		Sun,
+		ZoomIn,
+		ZoomOut,
 		X
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
@@ -80,6 +82,7 @@
 	);
 
 	onMount(() => {
+		readerChrome.hydratePreferences();
 		void appState.initialize();
 	});
 
@@ -157,6 +160,37 @@
 				>
 					<List size={17} />
 				</button>
+				<div class="document-zoom" role="group" aria-label="Document zoom">
+					<button
+						class="icon-button"
+						type="button"
+						disabled={readerChrome.documentZoom <= 0.8}
+						aria-label="Zoom document out"
+						title="Zoom document out"
+						onclick={() => readerChrome.zoomOut()}
+					>
+						<ZoomOut size={16} />
+					</button>
+					<button
+						class="zoom-value"
+						type="button"
+						aria-label={`Reset document zoom, currently ${readerChrome.zoomPercent}%`}
+						title="Reset document zoom"
+						onclick={() => readerChrome.resetZoom()}
+					>
+						{readerChrome.zoomPercent}%
+					</button>
+					<button
+						class="icon-button"
+						type="button"
+						disabled={readerChrome.documentZoom >= 1.6}
+						aria-label="Zoom document in"
+						title="Zoom document in"
+						onclick={() => readerChrome.zoomIn()}
+					>
+						<ZoomIn size={16} />
+					</button>
+				</div>
 				<button
 					class="icon-button"
 					class:marked={currentBookmarked}
@@ -240,7 +274,7 @@
 	{/if}
 </header>
 
-<div class="app-shell" class:sidebar-collapsed={sidebarCollapsed}>
+<div class="app-shell" class:sidebar-collapsed={sidebarCollapsed} class:reader-mode={isReader}>
 	<aside class="app-sidebar" aria-label="Voicebook navigation">
 		<div class="sidebar-head">
 			<button

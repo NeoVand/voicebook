@@ -1,5 +1,6 @@
 import mammoth from 'mammoth';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { segmentBlocks } from './segmenter';
@@ -17,7 +18,7 @@ import type {
 	TableCell
 } from './types';
 
-export const DOCUMENT_NORMALIZATION_VERSION = 2;
+export const DOCUMENT_NORMALIZATION_VERSION = 3;
 
 interface AstNode {
 	type: string;
@@ -31,6 +32,8 @@ interface AstNode {
 	url?: string;
 	title?: string;
 	alt?: string;
+	identifier?: string;
+	label?: string;
 	position?: {
 		start?: { offset?: number };
 		end?: { offset?: number };
@@ -103,7 +106,7 @@ function block(
 		id: `b${index}`,
 		kind,
 		text: normalizedText,
-		speak: !['code', 'frontmatter', 'divider', 'page-break'].includes(kind),
+		speak: !['code', 'math', 'frontmatter', 'divider', 'page-break'].includes(kind),
 		anchor: {},
 		...extras
 	};
@@ -113,6 +116,7 @@ function sameRun(left: InlineRun, right: InlineRun): boolean {
 	return (
 		left.href === right.href &&
 		left.title === right.title &&
+		left.math === right.math &&
 		(left.marks ?? []).join(':') === (right.marks ?? []).join(':')
 	);
 }
@@ -142,6 +146,10 @@ function safeHref(value?: string): string | undefined {
 	}
 }
 
+function footnoteId(identifier?: string): string {
+	return (identifier ?? 'note').toLocaleLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+}
+
 function run(
 	text: string,
 	marks: InlineMark[],
@@ -162,6 +170,11 @@ function inlineRuns(
 ): InlineRun[] {
 	if (node.type === 'text') return [run(node.value ?? '', marks, link)];
 	if (node.type === 'inlineCode') return [run(node.value ?? '', [...marks, 'code'], link)];
+	if (node.type === 'inlineMath') return [{ text: node.value ?? '', math: true }];
+	if (node.type === 'footnoteReference') {
+		const label = node.label ?? node.identifier ?? 'note';
+		return [{ text: `[${label}]`, href: `#footnote-${footnoteId(node.identifier)}` }];
+	}
 	if (node.type === 'break') return [run(' ', marks, link)];
 	if (node.type === 'image') {
 		const text = node.alt?.trim();
@@ -247,7 +260,11 @@ function tableCell(node: AstNode): TableCell {
 
 function parseMarkdown(markdown: string): ParsedSource {
 	const frontmatter = frontmatterFrom(markdown);
-	const tree = unified().use(remarkParse).use(remarkGfm).parse(frontmatter.content) as AstNode;
+	const tree = unified()
+		.use(remarkParse)
+		.use(remarkGfm)
+		.use(remarkMath)
+		.parse(frontmatter.content) as AstNode;
 	const blocks: DocumentBlock[] = [];
 	const add = (
 		kind: BlockKind,
@@ -311,6 +328,18 @@ function parseMarkdown(markdown: string): ParsedSource {
 				add('code', node.value ?? '', {
 					codeLanguage: node.lang?.trim() || undefined,
 					anchor: anchorFor(node, frontmatter.offset)
+				});
+				break;
+			case 'math':
+				add('math', node.value ?? '', {
+					anchor: anchorFor(node, frontmatter.offset),
+					speak: false
+				});
+				break;
+			case 'footnoteDefinition':
+				addInlineBlock('footnote', node, node.children ?? [], {
+					footnoteId: `footnote-${footnoteId(node.identifier)}`,
+					footnoteLabel: node.label ?? node.identifier ?? 'Note'
 				});
 				break;
 			case 'list':

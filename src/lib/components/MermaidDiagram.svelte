@@ -19,34 +19,48 @@
 			const statusMessage = figure?.querySelector<HTMLElement>('[data-diagram-status]');
 			const errorDetail = figure?.querySelector<HTMLElement>('[data-diagram-error]');
 			let active = true;
+			let rendering = 0;
 
-			if (figure) figure.dataset.status = 'loading';
-			if (statusMessage) statusMessage.textContent = 'Rendering…';
-			target.setAttribute('aria-busy', 'true');
-			target.replaceChildren();
+			const render = (themeRefresh = false) => {
+				rendering += 1;
+				const request = rendering;
+				if (figure) figure.dataset.status = themeRefresh ? 'refreshing' : 'loading';
+				if (statusMessage)
+					statusMessage.textContent = themeRefresh ? 'Updating theme…' : 'Rendering…';
+				target.setAttribute('aria-busy', 'true');
+				if (!themeRefresh) target.replaceChildren();
 
-			void renderMermaid(diagramSource, target)
-				.then(() => {
-					if (!active) return;
-					if (figure) figure.dataset.status = 'ready';
-					if (statusMessage) statusMessage.textContent = 'Rendered';
-					target.setAttribute('aria-busy', 'false');
-				})
-				.catch((error: unknown) => {
-					if (!active) return;
-					if (figure) figure.dataset.status = 'error';
-					if (statusMessage) statusMessage.textContent = '';
-					if (errorDetail) {
-						errorDetail.textContent =
-							error instanceof Error
-								? error.message.split('\n')[0]
-								: 'The diagram could not be rendered.';
-					}
-					target.setAttribute('aria-busy', 'false');
-					target.replaceChildren();
-				});
+				void renderMermaid(diagramSource, target)
+					.then(() => {
+						if (!active || request !== rendering) return;
+						if (figure) figure.dataset.status = 'ready';
+						if (statusMessage) statusMessage.textContent = 'Rendered';
+						target.setAttribute('aria-busy', 'false');
+					})
+					.catch((error: unknown) => {
+						if (!active || request !== rendering) return;
+						if (figure) figure.dataset.status = 'error';
+						if (statusMessage) statusMessage.textContent = '';
+						if (errorDetail) {
+							errorDetail.textContent =
+								error instanceof Error
+									? error.message.split('\n')[0]
+									: 'The diagram could not be rendered.';
+						}
+						target.setAttribute('aria-busy', 'false');
+						target.replaceChildren();
+					});
+			};
+
+			render();
+			const observer = new MutationObserver(() => render(true));
+			observer.observe(document.documentElement, {
+				attributes: true,
+				attributeFilter: ['data-theme']
+			});
 
 			return () => {
+				observer.disconnect();
 				active = false;
 			};
 		};
@@ -156,6 +170,10 @@
 	}
 
 	.mermaid-diagram:global([data-status='ready']) .size-toggle {
+		display: inline-flex;
+	}
+
+	.mermaid-diagram:global([data-status='refreshing']) .size-toggle {
 		display: inline-flex;
 	}
 

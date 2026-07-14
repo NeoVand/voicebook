@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { InlineMark, InlineRun } from '$lib/domain/types';
+	import MathFormula from './MathFormula.svelte';
 
 	interface Props {
 		run: InlineRun;
@@ -51,7 +52,11 @@
 	{/if}
 {/snippet}
 
-{@render wrapped(0)}
+{#if run.math}
+	<MathFormula formula={content.map((piece) => piece.text).join('')} />
+{:else}
+	{@render wrapped(0)}
+{/if}
 
 <style>
 	.spoken-word {

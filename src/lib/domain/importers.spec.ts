@@ -83,7 +83,7 @@ describe('document importers', () => {
 		].join('\n');
 		const document = await importFile(new File([markdown], 'guide.md', { type: 'text/markdown' }));
 		expect(document.title).toBe('Listening well');
-		expect(document.normalizationVersion).toBe(2);
+		expect(document.normalizationVersion).toBe(3);
 		expect(document.outline[0]).toMatchObject({ title: 'Listening well', level: 1 });
 		expect(document.blocks.map((item) => item.kind)).toEqual([
 			'heading',
@@ -117,6 +117,65 @@ describe('document importers', () => {
 			end:
 				markdown.indexOf('A **calm**') +
 				'A **calm** paragraph with [a link](https://example.com).'.length
+		});
+	});
+
+	it('preserves inline and display mathematics alongside fenced code', async () => {
+		const markdown = [
+			'# Technical notes',
+			'',
+			'The identity $e^{i\\pi} + 1 = 0$ stays inline.',
+			'',
+			'$$',
+			'\\int_0^1 x^2 \\, dx = \\frac{1}{3}',
+			'$$',
+			'',
+			'```typescript',
+			'const answer: number = 42;',
+			'```'
+		].join('\n');
+		const document = await importFile(
+			new File([markdown], 'technical.md', { type: 'text/markdown' })
+		);
+		const paragraph = document.blocks.find((item) => item.kind === 'paragraph');
+		const equation = document.blocks.find((item) => item.kind === 'math');
+		const code = document.blocks.find((item) => item.kind === 'code');
+
+		expect(paragraph?.inlines?.find((run) => run.math)).toEqual({
+			text: 'e^{i\\pi} + 1 = 0',
+			math: true
+		});
+		expect(equation).toMatchObject({
+			kind: 'math',
+			text: '\\int_0^1 x^2 \\, dx = \\frac{1}{3}',
+			speak: false
+		});
+		expect(code).toMatchObject({
+			kind: 'code',
+			codeLanguage: 'typescript',
+			text: 'const answer: number = 42;',
+			speak: false
+		});
+	});
+
+	it('links footnote references to preserved note content', async () => {
+		const markdown =
+			'A private reader keeps its context.[^privacy]\n\n[^privacy]: Nothing is uploaded.';
+		const document = await importFile(new File([markdown], 'notes.md', { type: 'text/markdown' }));
+		const paragraph = document.blocks.find((item) => item.kind === 'paragraph');
+		const footnote = document.blocks.find((item) => item.kind === 'footnote');
+
+		expect(paragraph?.inlines?.at(-1)).toEqual({
+			text: '[privacy]',
+			href: '#footnote-privacy'
+		});
+		expect(footnote).toMatchObject({
+			id: 'b1',
+			kind: 'footnote',
+			footnoteId: 'footnote-privacy',
+			footnoteLabel: 'privacy',
+			text: 'Nothing is uploaded.',
+			speak: true
 		});
 	});
 
