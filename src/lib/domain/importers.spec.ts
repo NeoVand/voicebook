@@ -83,18 +83,25 @@ describe('document importers', () => {
 		].join('\n');
 		const document = await importFile(new File([markdown], 'guide.md', { type: 'text/markdown' }));
 		expect(document.title).toBe('Listening well');
-		expect(document.normalizationVersion).toBe(3);
+		expect(document.normalizationVersion).toBe(7);
 		expect(document.outline[0]).toMatchObject({ title: 'Listening well', level: 1 });
 		expect(document.blocks.map((item) => item.kind)).toEqual([
 			'heading',
 			'paragraph',
 			'quote',
+			'paragraph',
+			'list',
 			'list-item',
 			'list-item',
-			'code',
 			'code',
 			'code'
 		]);
+		const quote = document.blocks.find((item) => item.kind === 'quote');
+		expect(quote?.children).toHaveLength(1);
+		expect(document.blocks.find((item) => item.parentId === quote?.id)).toMatchObject({
+			kind: 'paragraph',
+			text: 'A useful quotation.'
+		});
 		expect(document.blocks.find((item) => item.codeLanguage === 'mermaid')).toMatchObject({
 			kind: 'code',
 			text: 'flowchart LR\n  Document --> Speech',
@@ -232,7 +239,7 @@ describe('document importers', () => {
 		].join('\n');
 		const document = await importFile(new File([markdown], 'gfm.md'));
 		const listItems = document.blocks.filter((item) => item.kind === 'list-item');
-		expect(listItems.map((item) => item.list)).toEqual([
+		expect(listItems.map((item) => item.list)).toMatchObject([
 			{ ordered: true, depth: 0, index: 0, start: 3 },
 			{ ordered: true, depth: 0, index: 1, start: 3 },
 			{ ordered: false, depth: 1, index: 0 },
@@ -278,20 +285,228 @@ describe('document importers', () => {
 			{ text: ', ' },
 			{ text: 'mail', href: 'mailto:hello@example.com' },
 			{ text: ', and ' },
-			{ text: 'Cover art', marks: ['emphasis'] },
+			{
+				text: 'Cover art',
+				image: { src: undefined, alt: 'Cover art', title: undefined }
+			},
 			{ text: '.' }
 		]);
 		expect(document.blocks[1].inlines).toEqual([
 			{ text: 'Hard break with ' },
-			{ text: '<kbd>', marks: ['code'] },
-			{ text: 'Enter' },
-			{ text: '</kbd>', marks: ['code'] },
-			{ text: ' and an empty image .' }
+			{ text: 'Enter', marks: ['kbd'] },
+			{ text: ' and an empty image ' },
+			{
+				text: 'Image',
+				image: { src: undefined, alt: '', title: undefined }
+			},
+			{ text: '.' }
 		]);
 		expect(document.blocks[2]).toMatchObject({ kind: 'divider', text: '', speak: false });
 
 		const unclosed = await importFile(new File(['\uFEFF---\ntitle: Still Markdown'], 'open.md'));
 		expect(unclosed.blocks.every((item) => item.kind !== 'frontmatter')).toBe(true);
+	});
+
+	it('preserves extended Markdown containers and sanitizes embedded HTML', async () => {
+		const markdown = [
+			'> [!WARNING]',
+			'> Read this before continuing.',
+			'',
+			'1. Parent item',
+			'   - Nested item',
+			'     > Nested quote',
+			'',
+			'Term',
+			': Definition with **bold** text.',
+			': > Nested quote.',
+			'',
+			'```math',
+			'\\operatorname{tr}(A) = \\sum_i A_{ii}',
+			'```',
+			'',
+			'<details>',
+			'<summary>More context</summary>',
+			'',
+			'- Hidden list item',
+			'',
+			'</details>',
+			'',
+			'<div style="border-left: 4px solid red"><strong>Safe callout</strong><script>bad()</script></div>'
+		].join('\n');
+		const document = await importFile(new File([markdown], 'extended.md'));
+		const alert = document.blocks.find((item) => item.kind === 'alert');
+		const lists = document.blocks.filter((item) => item.kind === 'list');
+		const definition = document.blocks.find((item) => item.kind === 'definition-list');
+		const details = document.blocks.find((item) => item.kind === 'details');
+		const html = document.blocks.find((item) => item.kind === 'html');
+
+		expect(alert).toMatchObject({ alertKind: 'warning', speak: false });
+		expect(document.blocks.find((item) => item.parentId === alert?.id)?.text).toBe(
+			'Read this before continuing.'
+		);
+		expect(lists).toHaveLength(3);
+		expect(lists.map((item) => item.list?.depth)).toEqual([0, 1, 0]);
+		expect(definition?.children).toHaveLength(3);
+		expect(document.blocks.find((item) => item.kind === 'definition-term')?.text).toBe('Term');
+		const nestedDefinition = document.blocks.find(
+			(item) => item.kind === 'definition-description' && item.children?.length
+		);
+		expect(document.blocks.find((item) => item.parentId === nestedDefinition?.id)).toMatchObject({
+			kind: 'quote'
+		});
+		expect(document.blocks.find((item) => item.kind === 'math')).toMatchObject({
+			text: '\\operatorname{tr}(A) = \\sum_i A_{ii}',
+			speak: false
+		});
+		expect(details).toMatchObject({ detailsSummary: 'More context', speak: false });
+		expect(details?.children).toHaveLength(1);
+		expect(html?.text).toContain('Safe callout');
+		expect(JSON.stringify(html?.html)).not.toContain('script');
+		expect(document.segments.some((segment) => segment.text.includes('bad'))).toBe(false);
+	});
+
+	it('retains supported inline HTML marks, progress, and safe image sources', async () => {
+		const markdown = [
+			"Text <sub>sub</sub> <sup>sup</sup> <mark>marked</mark> <kbd>Enter</kbd> <abbr title='Hypertext'>HTML</abbr>.",
+			'',
+			'Progress <progress value=120 max=100></progress> and default <progress></progress> plus a break<br>here.',
+			'',
+			'![Embedded](data:image/png;base64,AA== "Tiny") and ![Remote](blob:https://example.com/id).'
+		].join('\n');
+		const document = await importFile(new File([markdown], 'inline-html.md'));
+		const runs = document.blocks.flatMap((item) => item.inlines ?? []);
+
+		expect(runs.filter((item) => item.marks?.length).map((item) => item.marks?.[0])).toEqual([
+			'sub',
+			'sup',
+			'mark',
+			'kbd',
+			'abbr'
+		]);
+		expect(runs.find((item) => item.marks?.includes('abbr'))).toMatchObject({
+			text: 'HTML',
+			title: 'Hypertext'
+		});
+		expect(runs.filter((item) => item.progress).map((item) => item.progress)).toEqual([
+			{ value: 100, max: 100 },
+			{ value: 0, max: 1 }
+		]);
+		expect(runs.filter((item) => item.image).map((item) => item.image)).toEqual([
+			{
+				src: 'data:image/png;base64,AA==',
+				alt: 'Embedded',
+				title: 'Tiny'
+			},
+			{ src: 'blob:https://example.com/id', alt: 'Remote', title: undefined }
+		]);
+	});
+
+	it('allowlists rich HTML structure and drops unsafe elements and attributes', async () => {
+		const markdown = [
+			'<div style="padding: 1rem; background: red" onclick="bad()">',
+			'<p><span><strong>Strong</strong> <em>emphasis</em> <del>gone</del> <sub>sub</sub> <sup>sup</sup> <mark>mark</mark> <kbd>K</kbd> <abbr title="Accessible">abbr</abbr> <abbr>plain</abbr></span></p>',
+			'<p><a href="https://example.com" title="Allowed">Good link</a> <a href="javascript:bad()">Bad link text</a></p>',
+			'<p><img src="https://example.com/image.png" alt="Example" title="Preview" width="100" height="80"><img src="https://example.com/plain.png" alt="Plain" width="wide" height="bad"><img alt="Missing"><img src="javascript:bad()" alt="Unsafe"></p>',
+			'<br><unknown>Unwrapped text</unknown>',
+			'<table><thead><tr><th colspan="2" rowspan="1">Header</th><th>Plain</th></tr></thead><tbody><tr><td colspan="2">Cell</td><td>Plain</td></tr></tbody></table>',
+			'<progress value="150" max="100"></progress><progress></progress>',
+			'<!-- nested comment -->',
+			'<button>Removed button</button><iframe>Removed frame</iframe><script>bad()</script>',
+			'</div>'
+		].join('\n');
+		const document = await importFile(new File([markdown], 'safe-html.md'));
+		const html = document.blocks.find((item) => item.kind === 'html');
+		const serialized = JSON.stringify(html?.html);
+
+		expect(html?.text).toContain('Strong emphasis gone sub sup mark K abbr');
+		expect(html?.text).toContain('Bad link text');
+		expect(html?.text).toContain('Unwrapped text');
+		expect(html?.text).not.toContain('Removed');
+		expect(serialized).toContain('"variant":"callout"');
+		expect(serialized).toContain('"href":"https://example.com/"');
+		expect(serialized).not.toContain('javascript');
+		expect(serialized).not.toContain('onclick');
+		expect(serialized).toContain('"width":100');
+		expect(serialized).toContain('"height":80');
+		expect(serialized).toContain('"colspan":2');
+		expect(serialized).toContain('"rowspan":1');
+		expect(serialized).toContain('"value":100');
+	});
+
+	it('recovers from sparse HTML containers and reference definitions', async () => {
+		const markdown = [
+			'<details><summary>Inline <strong>summary</strong><script>bad()</script></summary>',
+			'',
+			'Inline details body.',
+			'',
+			'</details>',
+			'',
+			'</details>',
+			'',
+			'<details>',
+			'',
+			'Unclosed details body.'
+		].join('\n');
+		const document = await importFile(new File([markdown], '.md'));
+		const details = document.blocks.filter((item) => item.kind === 'details');
+
+		expect(document.title).toBe('Untitled');
+		expect(details[0]).toMatchObject({ detailsSummary: 'Inline summary' });
+		expect(document.blocks.find((item) => item.parentId === details[0].id)?.text).toBe(
+			'Inline details body.'
+		);
+		expect(details[1]).toMatchObject({ detailsSummary: 'Details', children: [] });
+		expect(document.blocks.some((item) => item.text === 'Unclosed details body.')).toBe(true);
+		const references = await importFile(
+			new File(
+				[
+					[
+						'[reference]: https://example.com',
+						'[image]: https://example.com/reference.png "Referenced image"',
+						'',
+						'Use [reference].',
+						'',
+						'![Reference art][image]'
+					].join('\n')
+				],
+				'references.md'
+			)
+		);
+		expect(
+			references.blocks.find((item) => item.text === 'Use reference.')?.inlines
+		).toContainEqual({
+			text: 'reference',
+			href: 'https://example.com/'
+		});
+		expect(
+			references.blocks.flatMap((item) => item.inlines ?? []).find((item) => item.image)?.image
+		).toEqual({
+			src: 'https://example.com/reference.png',
+			alt: 'Reference art',
+			title: 'Referenced image'
+		});
+	});
+
+	it('keeps container-only list items and footnotes navigable', async () => {
+		const markdown = [
+			'- > Quote-only list item',
+			'',
+			'Reference.[^nested]',
+			'',
+			'[^nested]:',
+			'    - Footnote list item'
+		].join('\n');
+		const document = await importFile(new File([markdown], 'container-only.md'));
+		const listItem = document.blocks.find((item) => item.kind === 'list-item');
+		const footnote = document.blocks.find((item) => item.kind === 'footnote');
+
+		expect(document.blocks.find((item) => item.parentId === listItem?.id)).toMatchObject({
+			kind: 'quote'
+		});
+		expect(footnote).toMatchObject({ text: '', speak: false });
+		expect(document.blocks.find((item) => item.parentId === footnote?.id)).toMatchObject({
+			kind: 'list'
+		});
 	});
 
 	it('imports a semantic DOCX fixture', async () => {

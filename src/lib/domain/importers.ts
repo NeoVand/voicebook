@@ -1,4 +1,5 @@
 import mammoth from 'mammoth';
+import remarkDefinitionList from 'remark-definition-list';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import remarkParse from 'remark-parse';
@@ -6,19 +7,23 @@ import { unified } from 'unified';
 import { segmentBlocks } from './segmenter';
 import type {
 	BlockKind,
+	AlertKind,
 	DocumentTable,
 	DocumentBlock,
 	DocumentKind,
 	InlineMark,
 	InlineRun,
+	InlineImage,
 	NormalizedDocument,
 	OutlineEntry,
 	SourceAnchor,
+	SafeHtmlNode,
+	SafeHtmlTag,
 	TableAlignment,
 	TableCell
 } from './types';
 
-export const DOCUMENT_NORMALIZATION_VERSION = 3;
+export const DOCUMENT_NORMALIZATION_VERSION = 7;
 
 interface AstNode {
 	type: string;
@@ -28,6 +33,7 @@ interface AstNode {
 	ordered?: boolean;
 	start?: number | null;
 	checked?: boolean | null;
+	spread?: boolean;
 	align?: TableAlignment[];
 	url?: string;
 	title?: string;
@@ -106,7 +112,18 @@ function block(
 		id: `b${index}`,
 		kind,
 		text: normalizedText,
-		speak: !['code', 'math', 'frontmatter', 'divider', 'page-break'].includes(kind),
+		speak: ![
+			'list',
+			'quote',
+			'alert',
+			'details',
+			'definition-list',
+			'code',
+			'math',
+			'frontmatter',
+			'divider',
+			'page-break'
+		].includes(kind),
 		anchor: {},
 		...extras
 	};
@@ -117,6 +134,8 @@ function sameRun(left: InlineRun, right: InlineRun): boolean {
 		left.href === right.href &&
 		left.title === right.title &&
 		left.math === right.math &&
+		JSON.stringify(left.image) === JSON.stringify(right.image) &&
+		JSON.stringify(left.progress) === JSON.stringify(right.progress) &&
 		(left.marks ?? []).join(':') === (right.marks ?? []).join(':')
 	);
 }
@@ -146,6 +165,17 @@ function safeHref(value?: string): string | undefined {
 	}
 }
 
+function safeImageSrc(value?: string): string | undefined {
+	if (!value) return undefined;
+	if (/^data:image\/(?:png|gif|jpe?g|webp|svg\+xml);/i.test(value)) return value;
+	try {
+		const url = new URL(value);
+		return ['http:', 'https:', 'blob:'].includes(url.protocol) ? url.href : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function footnoteId(identifier?: string): string {
 	return (identifier ?? 'note').toLocaleLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 }
@@ -153,34 +183,92 @@ function footnoteId(identifier?: string): string {
 function run(
 	text: string,
 	marks: InlineMark[],
-	link?: Pick<InlineRun, 'href' | 'title'>
+	link?: Pick<InlineRun, 'href' | 'title'>,
+	extras: Partial<InlineRun> = {}
 ): InlineRun {
 	return {
 		text,
 		...(marks.length ? { marks } : {}),
 		...(link?.href ? { href: link.href } : {}),
-		...(link?.title ? { title: link.title } : {})
+		...(link?.title ? { title: link.title } : {}),
+		...extras
 	};
+}
+
+interface HtmlMark {
+	mark: Extract<InlineMark, 'sub' | 'sup' | 'mark' | 'kbd' | 'abbr'>;
+	title?: string;
+}
+
+function htmlAttribute(source: string, name: string): string | undefined {
+	const match = new RegExp(`${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(source);
+	return match?.[1] ?? match?.[2] ?? match?.[3];
+}
+
+function inlineHtmlRun(value: string, marks: InlineMark[], stack: HtmlMark[]): InlineRun[] {
+	const trimmed = value.trim();
+	const progress = /^<progress\b[^>]*>(?:<\/progress>)?$/i.test(trimmed)
+		? trimmed
+		: /^<progress\b[^>]*><\/progress>$/i.test(trimmed)
+			? trimmed
+			: undefined;
+	if (progress) {
+		const maximum = Math.max(1, Number(htmlAttribute(progress, 'max') ?? 1));
+		const value = Math.min(maximum, Math.max(0, Number(htmlAttribute(progress, 'value') ?? 0)));
+		return [
+			run(`${Math.round((value / maximum) * 100)}%`, marks, undefined, {
+				progress: { value, max: maximum }
+			})
+		];
+	}
+	if (/^<br\s*\/?\s*>$/i.test(trimmed)) return [run(' ', marks)];
+	const close = /^<\/(sub|sup|mark|kbd|abbr)\s*>$/i.exec(trimmed);
+	if (close) {
+		const index = stack
+			.map((entry) => entry.mark)
+			.lastIndexOf(close[1].toLowerCase() as HtmlMark['mark']);
+		if (index >= 0) stack.splice(index, 1);
+		return [];
+	}
+	const open = /^<(sub|sup|mark|kbd|abbr)\b[^>]*>$/i.exec(trimmed);
+	if (open) {
+		stack.push({
+			mark: open[1].toLowerCase() as HtmlMark['mark'],
+			title: open[1].toLowerCase() === 'abbr' ? htmlAttribute(trimmed, 'title') : undefined
+		});
+	}
+	return [];
 }
 
 function inlineRuns(
 	node: AstNode,
 	marks: InlineMark[] = [],
-	link?: Pick<InlineRun, 'href' | 'title'>
+	link?: Pick<InlineRun, 'href' | 'title'>,
+	htmlStack: HtmlMark[] = []
 ): InlineRun[] {
-	if (node.type === 'text') return [run(node.value ?? '', marks, link)];
-	if (node.type === 'inlineCode') return [run(node.value ?? '', [...marks, 'code'], link)];
+	const htmlMarks = htmlStack.map((entry) => entry.mark);
+	const activeMarks = [...marks, ...htmlMarks];
+	const abbrTitle = htmlStack.findLast((entry) => entry.mark === 'abbr')?.title;
+	const activeLink = abbrTitle ? { ...link, title: abbrTitle } : link;
+	if (node.type === 'text') return [run(node.value ?? '', activeMarks, activeLink)];
+	if (node.type === 'inlineCode')
+		return [run(node.value ?? '', [...activeMarks, 'code'], activeLink)];
 	if (node.type === 'inlineMath') return [{ text: node.value ?? '', math: true }];
 	if (node.type === 'footnoteReference') {
 		const label = node.label ?? node.identifier ?? 'note';
 		return [{ text: `[${label}]`, href: `#footnote-${footnoteId(node.identifier)}` }];
 	}
-	if (node.type === 'break') return [run(' ', marks, link)];
+	if (node.type === 'break') return [run(' ', activeMarks, activeLink)];
 	if (node.type === 'image') {
-		const text = node.alt?.trim();
-		return text ? [run(text, [...marks, 'emphasis'], link)] : [];
+		const alt = node.alt?.trim() ?? '';
+		const image: InlineImage = {
+			src: safeImageSrc(node.url),
+			alt,
+			title: node.title?.trim() || undefined
+		};
+		return [run(alt || 'Image', activeMarks, activeLink, { image })];
 	}
-	if (node.type === 'html') return [run(node.value ?? '', [...marks, 'code'], link)];
+	if (node.type === 'html') return inlineHtmlRun(node.value ?? '', activeMarks, htmlStack);
 
 	let nextMarks = marks;
 	if (node.type === 'strong') nextMarks = [...marks, 'strong'];
@@ -193,7 +281,10 @@ function inlineRuns(
 					title: node.title?.trim() || undefined
 				}
 			: link;
-	return (node.children ?? []).flatMap((child) => inlineRuns(child, nextMarks, nextLink));
+	const runs: InlineRun[] = [];
+	for (const child of node.children ?? [])
+		runs.push(...inlineRuns(child, nextMarks, nextLink, htmlStack));
+	return runs;
 }
 
 function runsForBlocks(nodes: AstNode[]): InlineRun[] {
@@ -258,51 +349,481 @@ function tableCell(node: AstNode): TableCell {
 	return { text: inlines.map((run) => run.text).join(''), inlines };
 }
 
+const SAFE_HTML_TAGS = new Set<SafeHtmlTag>([
+	'p',
+	'div',
+	'span',
+	'strong',
+	'em',
+	'del',
+	'sub',
+	'sup',
+	'mark',
+	'kbd',
+	'abbr',
+	'a',
+	'img',
+	'br',
+	'table',
+	'thead',
+	'tbody',
+	'tr',
+	'th',
+	'td',
+	'progress'
+]);
+
+interface HtmlDomNode {
+	nodeType: number;
+	textContent?: string | null;
+	tagName?: string;
+	childNodes?: Iterable<HtmlDomNode>;
+	getAttribute?(name: string): string | null;
+}
+
+function boundedInteger(
+	value: string | null | undefined,
+	minimum: number,
+	maximum: number
+): number | undefined {
+	const parsed = Number(value);
+	return Number.isInteger(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : undefined;
+}
+
+function safeHtmlNode(node: HtmlDomNode): SafeHtmlNode[] {
+	if (node.nodeType === 3)
+		return node.textContent ? [{ type: 'text', text: node.textContent }] : [];
+	if (node.nodeType !== 1 || !node.tagName) return [];
+	const tag = node.tagName.toLowerCase();
+	if (['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button'].includes(tag))
+		return [];
+	const children = Array.from(node.childNodes ?? []).flatMap(safeHtmlNode);
+	if (!SAFE_HTML_TAGS.has(tag as SafeHtmlTag)) return children;
+	const attributes: Record<string, string | number | boolean> = {};
+	if (tag === 'a') {
+		const href = safeHref(node.getAttribute?.('href') ?? undefined);
+		if (href) attributes.href = href;
+		const title = node.getAttribute?.('title')?.trim();
+		if (title) attributes.title = title;
+	}
+	if (tag === 'img') {
+		const src = safeImageSrc(node.getAttribute?.('src') ?? undefined);
+		if (!src) return [];
+		attributes.src = src;
+		attributes.alt = node.getAttribute?.('alt') ?? '';
+		const title = node.getAttribute?.('title')?.trim();
+		if (title) attributes.title = title;
+		const width = boundedInteger(node.getAttribute?.('width'), 16, 1600);
+		const height = boundedInteger(node.getAttribute?.('height'), 16, 1600);
+		if (width) attributes.width = width;
+		if (height) attributes.height = height;
+	}
+	if (tag === 'abbr') {
+		const title = node.getAttribute?.('title')?.trim();
+		if (title) attributes.title = title;
+	}
+	if (tag === 'td' || tag === 'th') {
+		const colspan = boundedInteger(node.getAttribute?.('colspan'), 1, 12);
+		const rowspan = boundedInteger(node.getAttribute?.('rowspan'), 1, 100);
+		if (colspan) attributes.colspan = colspan;
+		if (rowspan) attributes.rowspan = rowspan;
+	}
+	if (tag === 'progress') {
+		const maximum = Math.max(1, Number(node.getAttribute?.('max') ?? 1));
+		attributes.max = maximum;
+		attributes.value = Math.min(maximum, Math.max(0, Number(node.getAttribute?.('value') ?? 0)));
+	}
+	if (tag === 'div' && /border-left|background/i.test(node.getAttribute?.('style') ?? '')) {
+		attributes.variant = 'callout';
+	}
+	return [{ type: 'element', tag: tag as SafeHtmlTag, attributes, children }];
+}
+
+function parseSafeHtml(source: string): SafeHtmlNode[] {
+	if (/^\s*<!--/.test(source)) return [];
+	const parsed = new DOMParser().parseFromString(
+		`<html><body>${source}</body></html>`,
+		'text/html'
+	);
+	return Array.from(parsed.body?.childNodes ?? []).flatMap((node) =>
+		safeHtmlNode(node as HtmlDomNode)
+	);
+}
+
+function safeHtmlText(nodes: SafeHtmlNode[]): string {
+	return nodes
+		.map((node) => (node.type === 'text' ? node.text : safeHtmlText(node.children)))
+		.join(' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
 function parseMarkdown(markdown: string): ParsedSource {
 	const frontmatter = frontmatterFrom(markdown);
-	const tree = unified()
+	const parsedTree = unified()
 		.use(remarkParse)
 		.use(remarkGfm)
 		.use(remarkMath)
+		.use(remarkDefinitionList)
 		.parse(frontmatter.content) as AstNode;
+	const definitions = new Map(
+		(parsedTree.children ?? [])
+			.filter((node) => node.type === 'definition' && node.identifier)
+			.map((node) => [node.identifier!.toLocaleLowerCase(), node])
+	);
+	const resolveReferences = (node: AstNode): AstNode => {
+		const definition = node.identifier
+			? definitions.get(node.identifier.toLocaleLowerCase())
+			: undefined;
+		if (node.type === 'linkReference' && definition) {
+			return {
+				...node,
+				type: 'link',
+				url: definition.url,
+				title: definition.title,
+				children: node.children?.map(resolveReferences)
+			};
+		}
+		if (node.type === 'imageReference' && definition) {
+			return { ...node, type: 'image', url: definition.url, title: definition.title };
+		}
+		return { ...node, children: node.children?.map(resolveReferences) };
+	};
+	const tree = resolveReferences(parsedTree);
 	const blocks: DocumentBlock[] = [];
 	const add = (
 		kind: BlockKind,
 		text: string,
 		extras: Partial<DocumentBlock> = {},
 		allowEmpty = false
-	) => {
-		if (text.trim() || allowEmpty) blocks.push(block(kind, text, blocks.length, extras));
+	): DocumentBlock | undefined => {
+		if (!text.trim() && !allowEmpty) return;
+		const candidate = block(kind, text, blocks.length, extras);
+		blocks.push(candidate);
+		if (candidate.parentId) {
+			const parent = blocks.find((item) => item.id === candidate.parentId);
+			if (parent) parent.children = [...(parent.children ?? []), candidate.id];
+		}
+		return candidate;
 	};
 	const addInlineBlock = (
 		kind: BlockKind,
 		node: AstNode,
 		nodes: AstNode[] = [node],
 		extras: Partial<DocumentBlock> = {}
-	) => {
+	): DocumentBlock | undefined => {
 		const inlines = runsForBlocks(nodes);
-		add(kind, inlines.map((run) => run.text).join(''), {
+		return add(kind, inlines.map((run) => run.text).join(''), {
 			inlines,
 			anchor: anchorFor(node, frontmatter.offset),
 			...extras
 		});
 	};
-	const addList = (node: AstNode, depth: number) => {
-		const ordered = Boolean(node.ordered);
-		const start = ordered ? (node.start ?? 1) : undefined;
-		(node.children ?? []).forEach((item, index) => {
-			const directChildren = (item.children ?? []).filter((child) => child.type !== 'list');
-			addInlineBlock('list-item', item, directChildren, {
-				list: {
-					ordered,
-					depth,
-					index,
-					start,
-					checked: typeof item.checked === 'boolean' ? item.checked : undefined
-				}
-			});
-			for (const child of item.children ?? []) if (child.type === 'list') addList(child, depth + 1);
+	const listDepth = (parentId?: string): number => {
+		let depth = 0;
+		let current = parentId ? blocks.find((candidate) => candidate.id === parentId) : undefined;
+		while (current) {
+			if (current.kind === 'list') depth += 1;
+			current = current.parentId
+				? blocks.find((candidate) => candidate.id === current?.parentId)
+				: undefined;
+		}
+		return depth;
+	};
+	const alertFor = (node: AstNode): AlertKind | undefined => {
+		const first = node.children?.[0];
+		const text = first?.children?.map((child) => child.value ?? '').join('') ?? '';
+		return /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/i.exec(text)?.[1].toLowerCase() as
+			AlertKind | undefined;
+	};
+	const withoutAlertMarker = (node: AstNode): AstNode => {
+		const [first, ...rest] = node.children ?? [];
+		if (!first) return node;
+		let removed = false;
+		const cleanedChildren = (first.children ?? []).map((child) => {
+			if (removed || child.type !== 'text') return child;
+			removed = true;
+			return {
+				...child,
+				value: (child.value ?? '').replace(/^\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/i, '')
+			};
 		});
+		return { ...node, children: [{ ...first, children: cleanedChildren }, ...rest] };
+	};
+	const addTable = (node: AstNode, parentId?: string) => {
+		const [header, ...rows] = (node.children ?? []).map((row) =>
+			(row.children ?? []).map(tableCell)
+		);
+		const table: DocumentTable = {
+			align: node.align ?? [],
+			header: header ?? [],
+			rows
+		};
+		const text = [table.header, ...table.rows]
+			.map((row) =>
+				row
+					.map((cell) => cell.text)
+					.filter(Boolean)
+					.join(', ')
+			)
+			.filter(Boolean)
+			.join('. ');
+		add('table', text, { table, parentId, anchor: anchorFor(node, frontmatter.offset) });
+	};
+
+	const walkNodes = (nodes: AstNode[], parentId?: string) => {
+		for (let index = 0; index < nodes.length; index += 1) {
+			const node = nodes[index];
+			if (node.type === 'html' && /^\s*<details\b/i.test(node.value ?? '')) {
+				const followingSummary =
+					nodes[index + 1]?.type === 'html' && /^\s*<summary\b/i.test(nodes[index + 1].value ?? '')
+						? nodes[index + 1]
+						: undefined;
+				const closingIndex = nodes.findIndex(
+					(candidate, candidateIndex) =>
+						candidateIndex > index &&
+						candidate.type === 'html' &&
+						/^\s*<\/details\s*>/i.test(candidate.value ?? '')
+				);
+				const summaryMarkup = /<summary\b[^>]*>([\s\S]*?)<\/summary>/i.exec(
+					followingSummary?.value ?? node.value ?? ''
+				)?.[1];
+				const summary = summaryMarkup ? safeHtmlText(parseSafeHtml(summaryMarkup)) : undefined;
+				const details = add(
+					'details',
+					'',
+					{
+						parentId,
+						children: [],
+						detailsSummary: summary || 'Details',
+						anchor: anchorFor(node, frontmatter.offset),
+						speak: false
+					},
+					true
+				);
+				if (details && closingIndex > index) {
+					walkNodes(nodes.slice(index + (followingSummary ? 2 : 1), closingIndex), details.id);
+				}
+				if (closingIndex > index) index = closingIndex;
+				continue;
+			}
+			if (node.type === 'html' && /^\s*<\/details\s*>/i.test(node.value ?? '')) continue;
+
+			switch (node.type) {
+				case 'heading':
+					addInlineBlock('heading', node, [node], {
+						parentId,
+						level: node.depth ?? 2
+					});
+					break;
+				case 'paragraph':
+					addInlineBlock('paragraph', node, [node], { parentId });
+					break;
+				case 'blockquote': {
+					const alertKind = alertFor(node);
+					const container = add(
+						alertKind ? 'alert' : 'quote',
+						'',
+						{
+							parentId,
+							children: [],
+							alertKind,
+							anchor: anchorFor(node, frontmatter.offset),
+							speak: false
+						},
+						true
+					);
+					if (container)
+						walkNodes((alertKind ? withoutAlertMarker(node) : node).children ?? [], container.id);
+					break;
+				}
+				case 'list': {
+					const depth = listDepth(parentId);
+					const ordered = Boolean(node.ordered);
+					const list = add(
+						'list',
+						'',
+						{
+							parentId,
+							children: [],
+							list: {
+								ordered,
+								depth,
+								index: 0,
+								start: ordered ? (node.start ?? 1) : undefined,
+								spread: Boolean(node.spread)
+							},
+							anchor: anchorFor(node, frontmatter.offset),
+							speak: false
+						},
+						true
+					);
+					if (!list) break;
+					(node.children ?? []).forEach((item, itemIndex) => {
+						const [firstParagraph, ...rest] = item.children ?? [];
+						const itemBlock =
+							firstParagraph?.type === 'paragraph'
+								? addInlineBlock('list-item', item, [firstParagraph], {
+										parentId: list.id,
+										children: [],
+										list: {
+											ordered,
+											depth,
+											index: itemIndex,
+											start: ordered ? (node.start ?? 1) : undefined,
+											checked: typeof item.checked === 'boolean' ? item.checked : undefined,
+											spread: Boolean(node.spread || item.spread)
+										}
+									})
+								: add(
+										'list-item',
+										'',
+										{
+											parentId: list.id,
+											children: [],
+											list: {
+												ordered,
+												depth,
+												index: itemIndex,
+												start: ordered ? (node.start ?? 1) : undefined,
+												checked: typeof item.checked === 'boolean' ? item.checked : undefined,
+												spread: Boolean(node.spread || item.spread)
+											},
+											anchor: anchorFor(item, frontmatter.offset),
+											speak: false
+										},
+										true
+									);
+						if (itemBlock)
+							walkNodes(
+								firstParagraph?.type === 'paragraph' ? rest : (item.children ?? []),
+								itemBlock.id
+							);
+					});
+					break;
+				}
+				case 'code':
+					if (node.lang?.trim().toLowerCase() === 'math') {
+						add('math', node.value ?? '', {
+							parentId,
+							anchor: anchorFor(node, frontmatter.offset),
+							speak: false
+						});
+					} else {
+						add('code', node.value ?? '', {
+							parentId,
+							codeLanguage: node.lang?.trim() || undefined,
+							anchor: anchorFor(node, frontmatter.offset)
+						});
+					}
+					break;
+				case 'math':
+					add('math', node.value ?? '', {
+						parentId,
+						anchor: anchorFor(node, frontmatter.offset),
+						speak: false
+					});
+					break;
+				case 'footnoteDefinition': {
+					const [firstParagraph, ...rest] = node.children ?? [];
+					const footnoteExtras: Partial<DocumentBlock> = {
+						parentId,
+						children: [],
+						footnoteId: `footnote-${footnoteId(node.identifier)}`,
+						footnoteLabel: node.label ?? node.identifier ?? 'Note'
+					};
+					const footnote =
+						firstParagraph?.type === 'paragraph'
+							? addInlineBlock('footnote', node, [firstParagraph], footnoteExtras)
+							: add(
+									'footnote',
+									'',
+									{
+										...footnoteExtras,
+										anchor: anchorFor(node, frontmatter.offset),
+										speak: false
+									},
+									true
+								);
+					if (footnote)
+						walkNodes(
+							firstParagraph?.type === 'paragraph' ? rest : (node.children ?? []),
+							footnote.id
+						);
+					break;
+				}
+				case 'table':
+					addTable(node, parentId);
+					break;
+				case 'thematicBreak':
+					add(
+						'divider',
+						'',
+						{ parentId, anchor: anchorFor(node, frontmatter.offset), speak: false },
+						true
+					);
+					break;
+				case 'defList': {
+					const definitionList = add(
+						'definition-list',
+						'',
+						{
+							parentId,
+							children: [],
+							anchor: anchorFor(node, frontmatter.offset),
+							speak: false
+						},
+						true
+					);
+					if (!definitionList) break;
+					for (const entry of node.children ?? []) {
+						if (entry.type === 'defListTerm') {
+							addInlineBlock('definition-term', entry, [entry], { parentId: definitionList.id });
+						} else if (entry.type === 'defListDescription') {
+							const [firstParagraph, ...rest] = entry.children ?? [];
+							const description =
+								firstParagraph?.type === 'paragraph'
+									? addInlineBlock('definition-description', entry, [firstParagraph], {
+											parentId: definitionList.id,
+											children: []
+										})
+									: add(
+											'definition-description',
+											'',
+											{
+												parentId: definitionList.id,
+												children: [],
+												anchor: anchorFor(entry, frontmatter.offset),
+												speak: false
+											},
+											true
+										);
+							if (description)
+								walkNodes(
+									firstParagraph?.type === 'paragraph' ? rest : (entry.children ?? []),
+									description.id
+								);
+						}
+					}
+					break;
+				}
+				case 'html': {
+					const html = parseSafeHtml(node.value ?? '');
+					const text = safeHtmlText(html);
+					if (html.length) {
+						add('html', text, {
+							parentId,
+							html,
+							anchor: anchorFor(node, frontmatter.offset),
+							speak: false
+						});
+					}
+					break;
+				}
+				default:
+					if (node.children?.length) walkNodes(node.children, parentId);
+			}
+		}
 	};
 
 	if (frontmatter.raw !== undefined) {
@@ -312,71 +833,7 @@ function parseMarkdown(markdown: string): ParsedSource {
 			speak: false
 		});
 	}
-
-	for (const node of tree.children ?? []) {
-		switch (node.type) {
-			case 'heading':
-				addInlineBlock('heading', node, [node], { level: node.depth ?? 2 });
-				break;
-			case 'paragraph':
-				addInlineBlock('paragraph', node);
-				break;
-			case 'blockquote':
-				addInlineBlock('quote', node, node.children ?? []);
-				break;
-			case 'code':
-				add('code', node.value ?? '', {
-					codeLanguage: node.lang?.trim() || undefined,
-					anchor: anchorFor(node, frontmatter.offset)
-				});
-				break;
-			case 'math':
-				add('math', node.value ?? '', {
-					anchor: anchorFor(node, frontmatter.offset),
-					speak: false
-				});
-				break;
-			case 'footnoteDefinition':
-				addInlineBlock('footnote', node, node.children ?? [], {
-					footnoteId: `footnote-${footnoteId(node.identifier)}`,
-					footnoteLabel: node.label ?? node.identifier ?? 'Note'
-				});
-				break;
-			case 'list':
-				addList(node, 0);
-				break;
-			case 'table': {
-				const [header, ...rows] = (node.children ?? []).map((row) =>
-					(row.children ?? []).map(tableCell)
-				);
-				const table: DocumentTable = {
-					align: node.align ?? [],
-					header: header ?? [],
-					rows
-				};
-				const text = [table.header, ...table.rows]
-					.map((row) =>
-						row
-							.map((cell) => cell.text)
-							.filter(Boolean)
-							.join(', ')
-					)
-					.filter(Boolean)
-					.join('. ');
-				add('table', text, { table, anchor: anchorFor(node, frontmatter.offset) });
-				break;
-			}
-			case 'thematicBreak':
-				add('divider', '', { anchor: anchorFor(node, frontmatter.offset), speak: false }, true);
-				break;
-			case 'html':
-				add('code', node.value ?? '', {
-					codeLanguage: 'html',
-					anchor: anchorFor(node, frontmatter.offset)
-				});
-				break;
-		}
-	}
+	walkNodes(tree.children ?? []);
 	return {
 		blocks,
 		title:

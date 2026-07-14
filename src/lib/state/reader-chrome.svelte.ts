@@ -8,6 +8,10 @@ class ReaderChromeState {
 		return Math.round(this.documentZoom * 100);
 	}
 
+	get documentCanvasWidth(): number {
+		return Math.round(900 * this.documentZoom);
+	}
+
 	hydratePreferences(): void {
 		if (typeof window === 'undefined') return;
 		const stored = Number(window.localStorage.getItem('voicebook:document-zoom'));

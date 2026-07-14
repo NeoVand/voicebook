@@ -28,6 +28,7 @@
 	import InlineText from '$lib/components/InlineText.svelte';
 	import MathFormula from '$lib/components/MathFormula.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
+	import SafeHtml from '$lib/components/SafeHtml.svelte';
 	import type {
 		DocumentBlock,
 		InlineRun,
@@ -106,42 +107,22 @@
 	let titleBlock = $derived.by(() => {
 		return book?.blocks.find((block) => block.kind === 'heading' && block.level === 1);
 	});
-	type ReadingNode =
-		| { type: 'block'; key: string; block: DocumentBlock }
-		| {
-				type: 'list';
-				key: string;
-				ordered: boolean;
-				depth: number;
-				start: number;
-				items: DocumentBlock[];
-		  };
-	let readingFlow = $derived.by(() => {
-		const nodes: ReadingNode[] = [];
-		for (const block of book?.blocks ?? []) {
-			if (block.id === titleBlock?.id) continue;
-			if (block.kind !== 'list-item') {
-				nodes.push({ type: 'block', key: block.id, block });
-				continue;
-			}
-			const ordered = block.list?.ordered ?? false;
-			const depth = block.list?.depth ?? 0;
-			const previous = nodes.at(-1);
-			if (previous?.type === 'list' && previous.ordered === ordered && previous.depth === depth) {
-				previous.items.push(block);
-			} else {
-				nodes.push({
-					type: 'list',
-					key: `list-${block.id}`,
-					ordered,
-					depth,
-					start: block.list?.start ?? 1,
-					items: [block]
-				});
-			}
-		}
-		return nodes;
-	});
+	let blocksById = $derived.by(
+		() => new SvelteMap((book?.blocks ?? []).map((block) => [block.id, block]))
+	);
+	let rootBlocks = $derived.by(() =>
+		(book?.blocks ?? []).filter((block) => !block.parentId && block.id !== titleBlock?.id)
+	);
+
+	function childBlocks(block: DocumentBlock): DocumentBlock[] {
+		return (block.children ?? [])
+			.map((id) => blocksById.get(id))
+			.filter((child): child is DocumentBlock => Boolean(child));
+	}
+
+	function alertTitle(kind: DocumentBlock['alertKind']): string {
+		return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : 'Note';
+	}
 
 	onMount(() => {
 		player.onSegmentChange = (segmentId) => {
@@ -565,6 +546,169 @@
 	{/each}
 {/snippet}
 
+{#snippet renderBlockContent(block: DocumentBlock)}
+	{@const blockSegments = segmentsByBlock.get(block.id) ?? []}
+	{#if blockSegments.length}
+		{#each blockSegments as segment (segment.id)}
+			{@render renderSegment(block, segment)}
+		{/each}
+	{:else}
+		{#each block.inlines ?? [] as inline, inlineIndex (inlineIndex)}
+			<InlineText run={inline} />
+		{/each}
+	{/if}
+{/snippet}
+
+{#snippet renderBlock(block: DocumentBlock)}
+	{@const children = childBlocks(block)}
+	{@const pageLabel = block.anchor.page ? `Page ${block.anchor.page}` : ''}
+	{#if block.kind === 'list'}
+		{#if block.list?.ordered}
+			<ol
+				class="document-list"
+				class:loose={block.list.spread}
+				id={block.id}
+				start={block.list.start ?? 1}
+			>
+				{#each children as child (child.id)}
+					{@render renderBlock(child)}
+				{/each}
+			</ol>
+		{:else}
+			<ul
+				class="document-list"
+				class:loose={block.list?.spread}
+				class:task-list={children.some((child) => child.list?.checked !== undefined)}
+				id={block.id}
+			>
+				{#each children as child (child.id)}
+					{@render renderBlock(child)}
+				{/each}
+			</ul>
+		{/if}
+	{:else if block.kind === 'list-item'}
+		<li id={block.id} class:task-item={block.list?.checked !== undefined}>
+			{#if block.list?.checked !== undefined}
+				<span class="task-marker" aria-hidden="true">
+					{#if block.list.checked}<Check size={11} strokeWidth={2.6} />{/if}
+				</span>
+				<span class="sr-only">{block.list.checked ? 'Completed: ' : 'Not completed: '}</span>
+			{/if}
+			{@render renderBlockContent(block)}
+			{#each children as child (child.id)}
+				{@render renderBlock(child)}
+			{/each}
+		</li>
+	{:else if block.kind === 'heading'}
+		<section class="document-section" id={block.id} tabindex="-1">
+			{#if pageLabel}<span class="page-anchor">{pageLabel}</span>{/if}
+			<svelte:element this={headingTag(block)}>{@render renderBlockContent(block)}</svelte:element>
+		</section>
+	{:else if block.kind === 'frontmatter'}
+		<details class="document-metadata" id={block.id}>
+			<summary>Document metadata</summary>
+			<pre><code>{block.text}</code></pre>
+		</details>
+	{:else if block.kind === 'code' && block.codeLanguage?.toLowerCase() === 'mermaid'}
+		<MermaidDiagram id={block.id} source={block.text} />
+	{:else if block.kind === 'code'}
+		<CodeBlock id={block.id} source={block.text} language={block.codeLanguage} />
+	{:else if block.kind === 'math'}
+		<MathFormula id={block.id} formula={block.text} displayMode />
+	{:else if block.kind === 'footnote'}
+		<aside
+			class="document-footnote"
+			id={block.footnoteId ?? block.id}
+			aria-label={`Footnote ${block.footnoteLabel}`}
+		>
+			<span aria-hidden="true">{block.footnoteLabel}</span>
+			<div>
+				{@render renderBlockContent(block)}
+				{#each children as child (child.id)}
+					{@render renderBlock(child)}
+				{/each}
+			</div>
+		</aside>
+	{:else if block.kind === 'quote'}
+		<blockquote id={block.id}>
+			{@render renderBlockContent(block)}
+			{#each children as child (child.id)}
+				{@render renderBlock(child)}
+			{/each}
+		</blockquote>
+	{:else if block.kind === 'alert'}
+		<aside
+			class={`document-alert ${block.alertKind ?? 'note'}`}
+			id={block.id}
+			aria-label={`${alertTitle(block.alertKind)} alert`}
+		>
+			<header>
+				<span aria-hidden="true"></span><strong>{alertTitle(block.alertKind)}</strong>
+			</header>
+			<div>
+				{#each children as child (child.id)}
+					{@render renderBlock(child)}
+				{/each}
+			</div>
+		</aside>
+	{:else if block.kind === 'details'}
+		<details class="document-details" id={block.id}>
+			<summary>{block.detailsSummary ?? 'Details'}</summary>
+			<div>
+				{#each children as child (child.id)}
+					{@render renderBlock(child)}
+				{/each}
+			</div>
+		</details>
+	{:else if block.kind === 'definition-list'}
+		<dl class="document-definition-list" id={block.id}>
+			{#each children as child (child.id)}
+				{@render renderBlock(child)}
+			{/each}
+		</dl>
+	{:else if block.kind === 'definition-term'}
+		<dt id={block.id}>{@render renderBlockContent(block)}</dt>
+	{:else if block.kind === 'definition-description'}
+		<dd id={block.id}>
+			{@render renderBlockContent(block)}
+			{#each children as child (child.id)}
+				{@render renderBlock(child)}
+			{/each}
+		</dd>
+	{:else if block.kind === 'table' && block.table}
+		<div class="table-region" id={block.id} role="region" aria-label="Document table">
+			<table>
+				<thead>
+					<tr>
+						{#each block.table.header as cell, index (index)}
+							<th scope="col" style:text-align={block.table.align[index] ?? undefined}>
+								{@render renderCell(cell)}
+							</th>
+						{/each}
+					</tr>
+				</thead>
+				<tbody>
+					{#each block.table.rows as row, rowIndex (rowIndex)}
+						<tr>
+							{#each row as cell, index (index)}
+								<td style:text-align={block.table.align[index] ?? undefined}>
+									{@render renderCell(cell)}
+								</td>
+							{/each}
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{:else if block.kind === 'divider'}
+		<hr id={block.id} />
+	{:else if block.kind === 'html'}
+		<div class="html-fragment" id={block.id}><SafeHtml nodes={block.html ?? []} /></div>
+	{:else}
+		<p id={block.id}>{@render renderBlockContent(block)}</p>
+	{/if}
+{/snippet}
+
 {#if !appState.initialized}
 	<div class="reader-loading">
 		<LoaderCircle class="spin" size={24} />
@@ -681,6 +825,7 @@
 				class="reading-canvas"
 				class:scrollbar-active={scrollbarActive}
 				style:--document-zoom={readerChrome.documentZoom}
+				style:--document-canvas-width={`${readerChrome.documentCanvasWidth}px`}
 				aria-label={book.title}
 				{@attach trackReadingCanvas}
 			>
@@ -702,118 +847,11 @@
 				</header>
 
 				<div class="document-body">
-					{#each readingFlow as node (node.key)}
-						{#if node.type === 'list'}
-							{#if node.ordered}
-								<ol class="document-list" style:--list-depth={node.depth} start={node.start}>
-									{#each node.items as block (block.id)}
-										<li id={block.id}>
-											{#each segmentsByBlock.get(block.id) ?? [] as segment (segment.id)}
-												{@render renderSegment(block, segment)}
-											{/each}
-										</li>
-									{/each}
-								</ol>
-							{:else}
-								<ul
-									class="document-list"
-									class:task-list={node.items.some((item) => item.list?.checked !== undefined)}
-									style:--list-depth={node.depth}
-								>
-									{#each node.items as block (block.id)}
-										<li id={block.id} class:task-item={block.list?.checked !== undefined}>
-											{#if block.list?.checked !== undefined}
-												<span class="task-marker" aria-hidden="true">
-													{#if block.list.checked}<Check size={11} strokeWidth={2.6} />{/if}
-												</span>
-												<span class="sr-only"
-													>{block.list.checked ? 'Completed: ' : 'Not completed: '}</span
-												>
-											{/if}
-											{#each segmentsByBlock.get(block.id) ?? [] as segment (segment.id)}
-												{@render renderSegment(block, segment)}
-											{/each}
-										</li>
-									{/each}
-								</ul>
-							{/if}
+					{#each rootBlocks as block (block.id)}
+						{#if block.kind === 'list-item'}
+							<ul class="document-list legacy-list">{@render renderBlock(block)}</ul>
 						{:else}
-							{@const block = node.block}
-							{@const blockSegments = segmentsByBlock.get(block.id) ?? []}
-							{@const pageLabel = block.anchor.page ? 'Page ' + block.anchor.page : ''}
-							{#if block.kind === 'heading'}
-								<section class="document-section" id={block.id} tabindex="-1">
-									{#if pageLabel}<span class="page-anchor">{pageLabel}</span>{/if}
-									<svelte:element this={headingTag(block)}>
-										{#each blockSegments as segment (segment.id)}
-											{@render renderSegment(block, segment)}
-										{/each}
-									</svelte:element>
-								</section>
-							{:else if block.kind === 'frontmatter'}
-								<details class="document-metadata" id={block.id}>
-									<summary>Document metadata</summary>
-									<pre><code>{block.text}</code></pre>
-								</details>
-							{:else if block.kind === 'code' && block.codeLanguage?.toLowerCase() === 'mermaid'}
-								<MermaidDiagram id={block.id} source={block.text} />
-							{:else if block.kind === 'code'}
-								<CodeBlock id={block.id} source={block.text} language={block.codeLanguage} />
-							{:else if block.kind === 'math'}
-								<MathFormula id={block.id} formula={block.text} displayMode />
-							{:else if block.kind === 'footnote'}
-								<aside
-									class="document-footnote"
-									id={block.footnoteId ?? block.id}
-									aria-label={`Footnote ${block.footnoteLabel}`}
-								>
-									<span aria-hidden="true">{block.footnoteLabel}</span>
-									<p>
-										{#each blockSegments as segment (segment.id)}
-											{@render renderSegment(block, segment)}
-										{/each}
-									</p>
-								</aside>
-							{:else if block.kind === 'quote'}
-								<blockquote id={block.id}>
-									{#each blockSegments as segment (segment.id)}
-										{@render renderSegment(block, segment)}
-									{/each}
-								</blockquote>
-							{:else if block.kind === 'table' && block.table}
-								<div class="table-region" id={block.id} role="region" aria-label="Document table">
-									<table>
-										<thead>
-											<tr>
-												{#each block.table.header as cell, index (index)}
-													<th scope="col" style:text-align={block.table.align[index] ?? undefined}>
-														{@render renderCell(cell)}
-													</th>
-												{/each}
-											</tr>
-										</thead>
-										<tbody>
-											{#each block.table.rows as row, rowIndex (rowIndex)}
-												<tr>
-													{#each row as cell, index (index)}
-														<td style:text-align={block.table.align[index] ?? undefined}>
-															{@render renderCell(cell)}
-														</td>
-													{/each}
-												</tr>
-											{/each}
-										</tbody>
-									</table>
-								</div>
-							{:else if block.kind === 'divider'}
-								<hr id={block.id} />
-							{:else}
-								<p id={block.id}>
-									{#each blockSegments as segment (segment.id)}
-										{@render renderSegment(block, segment)}
-									{/each}
-								</p>
-							{/if}
+							{@render renderBlock(block)}
 						{/if}
 					{/each}
 				</div>
@@ -1335,7 +1373,7 @@
 
 	.reading-canvas {
 		position: relative;
-		width: min(900px, 100%);
+		width: min(var(--document-canvas-width, 900px), 100%);
 		min-height: 0;
 		margin: 0 auto;
 		overflow-y: auto;
@@ -1414,7 +1452,10 @@
 	}
 
 	.document-body > p,
-	.document-body blockquote,
+	.document-body > blockquote,
+	.document-body > .document-alert,
+	.document-body > .document-details,
+	.document-body > .document-definition-list,
 	.document-list {
 		margin: 0 0 1.22em;
 	}
@@ -1475,6 +1516,95 @@
 		font-style: italic;
 	}
 
+	.reading-canvas blockquote > :first-child,
+	.document-alert > div > :first-child,
+	.document-details > div > :first-child {
+		margin-top: 0;
+	}
+
+	.reading-canvas blockquote > :last-child,
+	.document-alert > div > :last-child,
+	.document-details > div > :last-child {
+		margin-bottom: 0;
+	}
+
+	.document-alert {
+		--alert-color: var(--primary);
+		margin: 1.6em 0;
+		padding: 0.9em 1em 0.95em;
+		border-left: 3px solid var(--alert-color);
+		background: color-mix(in srgb, var(--alert-color) 7%, transparent);
+		font-style: normal;
+	}
+
+	.document-alert.tip,
+	.document-alert.important {
+		--alert-color: var(--success);
+	}
+
+	.document-alert.warning {
+		--alert-color: var(--bookmark);
+	}
+
+	.document-alert.caution {
+		--alert-color: var(--danger);
+	}
+
+	.document-alert > header {
+		display: flex;
+		align-items: center;
+		gap: 0.55em;
+		margin-bottom: 0.55em;
+		color: var(--alert-color);
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.68em;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+
+	.document-alert > header > span {
+		width: 0.48em;
+		height: 0.48em;
+		border-radius: 50%;
+		background: currentColor;
+	}
+
+	.document-details {
+		margin: 1.5em 0;
+		border-top: 1px solid var(--reader-rule);
+		border-bottom: 1px solid var(--reader-rule);
+	}
+
+	.document-details > summary {
+		padding: 0.7em 0;
+		color: var(--reader-ink-strong);
+		cursor: pointer;
+		font-family: 'Inter Variable', sans-serif;
+		font-size: 0.78em;
+		font-weight: 650;
+	}
+
+	.document-details > div {
+		padding: 0.2em 0 1em 1.35em;
+	}
+
+	.document-definition-list {
+		margin: 1.5em 0;
+	}
+
+	.document-definition-list dt {
+		margin-top: 1em;
+		color: var(--reader-ink-strong);
+		font-weight: 650;
+	}
+
+	.document-definition-list dd {
+		margin: 0.25em 0 0 1.25em;
+		padding-left: 1em;
+		border-left: 1px solid var(--reader-rule);
+		color: var(--reader-quiet);
+	}
+
 	.document-footnote {
 		display: grid;
 		grid-template-columns: 2.2em minmax(0, 1fr);
@@ -1533,12 +1663,24 @@
 	}
 
 	.document-list {
-		padding-left: calc(1.35em + var(--list-depth, 0) * 1.15em);
+		padding-left: 1.35em;
 	}
 
 	.document-list li {
 		padding-left: 0.22em;
 		margin-bottom: 0.38em;
+	}
+
+	.document-list .document-list {
+		margin: 0.45em 0 0.65em;
+	}
+
+	.document-list.loose > li {
+		margin-bottom: 0.85em;
+	}
+
+	.document-list.loose > li > p {
+		margin: 0.35em 0;
 	}
 
 	.document-list li::marker {
@@ -1549,7 +1691,7 @@
 	}
 
 	.document-list.task-list {
-		padding-left: calc(0.1em + var(--list-depth, 0) * 1.15em);
+		padding-left: 0.1em;
 		list-style: none;
 	}
 
@@ -1610,11 +1752,15 @@
 	}
 
 	.document-body hr {
-		width: 3.5rem;
+		width: 100%;
 		height: 1px;
-		margin: 3.2em auto;
+		margin: 3em 0;
 		border: 0;
 		background: var(--reader-rule);
+	}
+
+	.html-fragment {
+		margin: 1.35em 0;
 	}
 
 	.document-body p,

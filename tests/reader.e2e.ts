@@ -473,17 +473,24 @@ test('renders technical Markdown and zooms only the document beneath the navbar'
 	await page.getByRole('button', { name: 'Open document outline' }).click();
 	await expect(page.getByRole('complementary', { name: 'Document outline' })).toBeVisible();
 
-	const beforeZoom = await canvas.evaluate((element) =>
-		Number.parseFloat(getComputedStyle(element).fontSize)
-	);
+	const beforeZoom = await canvas.evaluate((element) => ({
+		fontSize: Number.parseFloat(getComputedStyle(element).fontSize),
+		canvasWidth: Number.parseFloat(
+			getComputedStyle(element).getPropertyValue('--document-canvas-width')
+		)
+	}));
 	await page.getByRole('button', { name: 'Zoom document in' }).click();
 	await expect(
 		page.getByRole('button', { name: 'Reset document zoom, currently 110%' })
 	).toBeVisible();
-	const afterZoom = await canvas.evaluate((element) =>
-		Number.parseFloat(getComputedStyle(element).fontSize)
-	);
-	expect(afterZoom).toBeGreaterThan(beforeZoom);
+	const afterZoom = await canvas.evaluate((element) => ({
+		fontSize: Number.parseFloat(getComputedStyle(element).fontSize),
+		canvasWidth: Number.parseFloat(
+			getComputedStyle(element).getPropertyValue('--document-canvas-width')
+		)
+	}));
+	expect(afterZoom.fontSize).toBeGreaterThan(beforeZoom.fontSize);
+	expect(afterZoom.canvasWidth).toBeGreaterThan(beforeZoom.canvasWidth);
 	expect(
 		await header.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))
 	).toBe(geometry.headerFontSize);
@@ -495,6 +502,70 @@ test('renders technical Markdown and zooms only the document beneath the navbar'
 	await expect(
 		page.getByRole('button', { name: 'Reset document zoom, currently 100%' })
 	).toBeVisible();
+});
+
+test('renders nested Markdown extensions as safe semantic document content', async ({ page }) => {
+	await page.goto('./');
+	await page.locator('#document-upload').setInputFiles({
+		name: 'structured-reader.md',
+		mimeType: 'text/markdown',
+		buffer: Buffer.from(
+			[
+				'# Structured reader',
+				'',
+				'> [!WARNING]',
+				'> Check the local model before continuing.',
+				'',
+				'3. Ordered parent',
+				'   - Nested child',
+				'     > Quoted child',
+				'',
+				'Term',
+				': Definition with **bold** text.',
+				': > A nested definition quote.',
+				'',
+				'```math',
+				'\\operatorname{tr}(A) = \\sum_i A_{ii}',
+				'```',
+				'',
+				'<details>',
+				'<summary>More context</summary>',
+				'',
+				'- Hidden item',
+				'',
+				'</details>',
+				'',
+				'<table><thead><tr><th>Local</th><th>Safe</th></tr></thead><tbody><tr><td colspan="2">Yes</td></tr></tbody></table>',
+				'',
+				'![Remote illustration](https://example.com/illustration.png)',
+				'',
+				'---',
+				'',
+				'<script>window.markdownWasUnsafe = true</script>'
+			].join('\n')
+		)
+	});
+
+	await expect(page.getByRole('complementary', { name: 'Warning alert' })).toContainText(
+		'Check the local model before continuing.'
+	);
+	const ordered = page.locator('.document-body > ol').first();
+	await expect(ordered).toHaveAttribute('start', '3');
+	await expect(ordered.locator('ul blockquote')).toContainText('Quoted child');
+	await expect(page.locator('dl.document-definition-list')).toContainText(
+		'A nested definition quote.'
+	);
+	await expect(page.getByRole('figure', { name: 'Mathematical equation' })).toBeVisible();
+	await page.getByText('More context', { exact: true }).click();
+	await expect(page.locator('details.document-details ul')).toContainText('Hidden item');
+	await expect(page.locator('.html-fragment table')).toContainText('Yes');
+	await expect(page.locator('.html-fragment td')).toHaveAttribute('colspan', '2');
+	await expect(page.locator('img[alt="Remote illustration"]')).toHaveAttribute(
+		'src',
+		'https://example.com/illustration.png'
+	);
+	await expect(page.locator('.document-body hr')).toHaveCount(1);
+	await expect(page.locator('script').filter({ hasText: 'markdownWasUnsafe' })).toHaveCount(0);
 });
 
 test('table of contents moves the reading canvas and closes its compact drawer', async ({

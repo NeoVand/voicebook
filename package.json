@@ -73,6 +73,7 @@
 		"mermaid": "^11.16.0",
 		"onnxruntime-web-supertone": "npm:onnxruntime-web@1.23.0",
 		"pdfjs-dist": "5.4.624",
+		"remark-definition-list": "^2.0.0",
 		"remark-gfm": "4.0.1",
 		"remark-math": "^6.0.0",
 		"remark-parse": "11.0.0",
