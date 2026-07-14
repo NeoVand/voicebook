@@ -585,10 +585,10 @@ function parseMarkdown(markdown: string): ParsedSource {
 						candidate.type === 'html' &&
 						/^\s*<\/details\s*>/i.test(candidate.value ?? '')
 				);
-				const summary = /<summary\b[^>]*>([\s\S]*?)<\/summary>/i
-					.exec(followingSummary?.value ?? node.value ?? '')?.[1]
-					.replace(/<[^>]+>/g, '')
-					.trim();
+				const summaryMarkup = /<summary\b[^>]*>([\s\S]*?)<\/summary>/i.exec(
+					followingSummary?.value ?? node.value ?? ''
+				)?.[1];
+				const summary = summaryMarkup ? safeHtmlText(parseSafeHtml(summaryMarkup)) : undefined;
 				const details = add(
 					'details',
 					'',

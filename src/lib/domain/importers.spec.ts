@@ -435,7 +435,7 @@ describe('document importers', () => {
 
 	it('recovers from sparse HTML containers and reference definitions', async () => {
 		const markdown = [
-			'<details><summary>Inline summary</summary>',
+			'<details><summary>Inline <strong>summary</strong><script>bad()</script></summary>',
 			'',
 			'Inline details body.',
 			'',
