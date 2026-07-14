@@ -78,6 +78,43 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await context.setOffline(false);
 });
 
+test('keeps the desktop player settings inside the playback dock', async ({ page }) => {
+	await page.goto('./');
+	await page.getByRole('button', { name: 'Paste text' }).click();
+	await page.getByLabel('Title').fill('Player spacing check');
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill('The playback dock should remain compact, aligned, and fully visible.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page.getByRole('heading', { name: 'Player spacing check' })).toBeVisible();
+
+	for (const width of [1024, 1280, 1440]) {
+		await page.setViewportSize({ width, height: 800 });
+		const geometry = await page.locator('.player-options').evaluate((options) => {
+			const player = options.closest<HTMLElement>('.player-bar');
+			const volume = options.querySelector<HTMLElement>('.volume-field');
+			if (!player || !volume) throw new Error('Player settings geometry is unavailable');
+
+			const playerRect = player.getBoundingClientRect();
+			const optionsRect = options.getBoundingClientRect();
+			const volumeRect = volume.getBoundingClientRect();
+
+			return {
+				documentOverflow:
+					document.documentElement.scrollWidth - document.documentElement.clientWidth,
+				optionsOverflow: Math.max(0, options.scrollWidth - options.clientWidth),
+				playerRightInset: playerRect.right - optionsRect.right,
+				volumeRightInset: playerRect.right - volumeRect.right
+			};
+		});
+
+		expect(geometry.documentOverflow, `${width}px document overflow`).toBe(0);
+		expect(geometry.optionsOverflow, `${width}px settings overflow`).toBe(0);
+		expect(geometry.playerRightInset, `${width}px settings right inset`).toBeGreaterThanOrEqual(19);
+		expect(geometry.volumeRightInset, `${width}px volume right inset`).toBeGreaterThanOrEqual(19);
+	}
+});
+
 test('detects duplicate file imports and keeps navigation under the Pages base path', async ({
 	page
 }) => {
