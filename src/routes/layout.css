@@ -384,7 +384,7 @@ h3 {
 	pointer-events: auto;
 }
 
-.mobile-nav-toggle,
+.mobile-nav-toggle.icon-button,
 .mobile-nav-scrim {
 	display: none;
 }
