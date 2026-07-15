@@ -11,6 +11,7 @@
 		CloudSun,
 		Cpu,
 		FileText,
+		GitFork,
 		HardDrive,
 		Library,
 		List,
@@ -29,7 +30,6 @@
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
-	import GitHubMark from '$lib/components/GitHubMark.svelte';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
@@ -141,7 +141,7 @@
 
 			<div class="reader-commandbar-actions">
 				<button
-					class="icon-button"
+					class="icon-button github-link"
 					class:active={readerChrome.outlineOpen}
 					type="button"
 					aria-label={readerChrome.outlineOpen ? 'Close document outline' : 'Open document outline'}
@@ -240,14 +240,14 @@
 					aria-label="Open Voicebook on GitHub"
 					title="Open Voicebook on GitHub"
 				>
-					<GitHubMark size={16} />
+					<GitFork size={16} />
 				</a>
 			</div>
 		</div>
 	{:else}
 		<div class="global-commandbar">
 			<button
-				class="icon-button"
+				class="icon-button github-link"
 				type="button"
 				aria-label={`Theme: ${themeLabels[theme]}. Switch to ${themeLabels[nextTheme]} theme`}
 				title={`${themeLabels[theme]} · next ${themeLabels[nextTheme]}`}
@@ -271,7 +271,7 @@
 				aria-label="Open Voicebook on GitHub"
 				title="Open Voicebook on GitHub"
 			>
-				<GitHubMark size={16} />
+				<GitFork size={16} />
 			</a>
 		</div>
 	{/if}

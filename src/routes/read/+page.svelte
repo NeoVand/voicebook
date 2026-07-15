@@ -1000,11 +1000,11 @@
 						}}
 					>
 						{#if player.isBuffering}
-							<Square size={16} fill="currentColor" />
+							<Square size={14} fill="currentColor" />
 						{:else if player.isPlaying}
-							<Pause size={20} fill="currentColor" />
+							<Pause size={18} fill="currentColor" />
 						{:else}
-							<Play size={20} fill="currentColor" />
+							<Play size={18} fill="currentColor" />
 						{/if}
 					</button>
 					<button
@@ -2033,18 +2033,37 @@
 		height: 44px;
 		margin: 0 4px;
 		border-radius: 50%;
-		background: var(--text);
+		background: transparent;
 		color: var(--primary-ink);
 	}
 
-	.play-button:hover {
+	.play-button::after {
+		position: absolute;
+		inset: 4px;
+		z-index: 0;
+		border-radius: 50%;
+		background: var(--text);
+		content: '';
+		transition: background 150ms var(--ease);
+	}
+
+	.play-button :global(svg) {
+		position: relative;
+		z-index: 1;
+	}
+
+	.play-button:hover::after {
 		background: var(--primary-hover);
+	}
+
+	.play-button:hover {
 		transform: translateY(-1px);
 	}
 
 	.play-button.loading::before {
 		position: absolute;
-		inset: 5px;
+		inset: 8px;
+		z-index: 2;
 		border: 2px solid color-mix(in srgb, var(--primary-ink) 18%, transparent);
 		border-top-color: var(--primary-ink);
 		border-right-color: var(--primary-ink);

@@ -59,6 +59,7 @@ test('import → install → play → seek → bookmark → reload → offline r
 		'href',
 		'https://github.com/NeoVand/voicebook'
 	);
+	await expect(page.locator('.github-link svg')).toHaveAttribute('fill', 'none');
 
 	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
 	await expect(page.getByRole('button', { name: 'Prepare whole document audio' })).toBeVisible();
@@ -170,6 +171,7 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 			const volume = options.querySelector<HTMLElement>('.player-volume');
 			const generation = player?.querySelector<HTMLElement>('.generation-options');
 			const transport = player?.querySelector<HTMLElement>('.transport');
+			const playButton = player?.querySelector<HTMLElement>('.play-button');
 			if (
 				!player ||
 				!shell ||
@@ -179,7 +181,8 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 				!outline ||
 				!volume ||
 				!generation ||
-				!transport
+				!transport ||
+				!playButton
 			)
 				throw new Error('Player settings geometry is unavailable');
 
@@ -193,6 +196,8 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 			const volumeRect = volume.getBoundingClientRect();
 			const generationRect = generation.getBoundingClientRect();
 			const transportRect = transport.getBoundingClientRect();
+			const playButtonRect = playButton.getBoundingClientRect();
+			const playVisualStyle = getComputedStyle(playButton, '::after');
 			const playerStyle = getComputedStyle(player);
 
 			return {
@@ -219,6 +224,10 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 					header: headerRect.height,
 					sidebar: sidebarRect.width,
 					player: playerRect.height
+				},
+				playControl: {
+					target: playButtonRect.width,
+					visual: Number.parseFloat(playVisualStyle.width)
 				},
 				singleLine:
 					Math.abs(
@@ -249,6 +258,10 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 			header: 48,
 			sidebar: 48,
 			player: 48
+		});
+		expect(geometry.playControl, `${width}px play target and visual circle`).toEqual({
+			target: 44,
+			visual: 36
 		});
 		expect(geometry.singleLine, `${width}px player controls use one line`).toBe(true);
 	}
