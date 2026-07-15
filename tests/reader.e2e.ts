@@ -56,7 +56,13 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
 	const sunnySurfaces = await surfaceBrightness();
 	expect(sunnySurfaces.outline).toBeGreaterThan(sunnySurfaces.sidebar);
-	for (let index = 0; index < 3; index += 1) await readerThemeButton.click();
+	expect(sunnySurfaces.outline - sunnySurfaces.sidebar).toBeLessThan(20);
+	await readerThemeButton.click();
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'cloudy');
+	const cloudySurfaces = await surfaceBrightness();
+	expect(cloudySurfaces.outline).toBeGreaterThan(cloudySurfaces.sidebar);
+	expect(cloudySurfaces.outline - cloudySurfaces.sidebar).toBeLessThan(20);
+	for (let index = 0; index < 2; index += 1) await readerThemeButton.click();
 	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
 	await expect(page.getByRole('banner', { name: 'Voicebook header' })).toHaveCount(1);
 	await expect(page.locator('.reader-header')).toHaveCount(0);
