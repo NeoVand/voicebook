@@ -216,6 +216,30 @@ test('import → install → play → seek → bookmark → reload → offline r
 		'fill',
 		'none'
 	);
+	const brandPalette = await page.locator('.brand-logo').evaluate((logo) => {
+		const fill = (selector: string) => {
+			const element = logo.querySelector<SVGElement>(selector);
+			if (!element) throw new Error(`Missing brand layer: ${selector}`);
+			return getComputedStyle(element).fill;
+		};
+		return [fill('.headphones'), fill('.paper'), fill('.wave-bar'), fill('.wave-bar:nth-child(2)')];
+	});
+	expect(new Set(brandPalette).size).toBe(4);
+	const readerTypography = await page.evaluate(() => {
+		const title = document.querySelector<HTMLElement>('.reader-commandbar-title strong');
+		const outlineItem = document.querySelector<HTMLElement>('.outline-panel nav button');
+		if (!title || !outlineItem) throw new Error('Reader typography targets are unavailable');
+		const titleStyle = getComputedStyle(title);
+		const outlineStyle = getComputedStyle(outlineItem);
+		return {
+			titleFamily: titleStyle.fontFamily,
+			outlineFamily: outlineStyle.fontFamily,
+			titleOpticalSize: titleStyle.fontVariationSettings,
+			outlineOpticalSize: outlineStyle.fontVariationSettings
+		};
+	});
+	expect(readerTypography.outlineFamily).toBe(readerTypography.titleFamily);
+	expect(readerTypography.outlineOpticalSize).toBe(readerTypography.titleOpticalSize);
 
 	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
 	await expect(page.getByRole('button', { name: 'Prepare whole document audio' })).toBeVisible();
@@ -232,6 +256,7 @@ test('import → install → play → seek → bookmark → reload → offline r
 	const timeline = page.locator('.timeline');
 	const timelineBeforePlayback = await timeline.boundingBox();
 	await page.getByRole('button', { name: 'Play', exact: true }).click();
+	await expect(page.locator('.brand-logo.active')).toBeVisible();
 	const preparingButton = page.getByRole('button', { name: 'Stop preparing speech' });
 	await expect(preparingButton).toHaveAttribute('aria-busy', 'true');
 	await expect(timeline).toBeVisible();

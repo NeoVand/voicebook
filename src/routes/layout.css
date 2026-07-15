@@ -43,6 +43,10 @@
 	--primary-hover: #b2d7c3;
 	--primary-ink: #0c1a15;
 	--primary-soft: rgba(155, 199, 176, 0.12);
+	--brand-headphones: var(--primary);
+	--brand-paper: color-mix(in srgb, var(--primary) 54%, var(--text));
+	--brand-wave: var(--text-soft);
+	--brand-wave-accent: var(--bookmark);
 	--bookmark: #e4b86a;
 	--bookmark-soft: rgba(228, 184, 106, 0.11);
 	--success: #71d4ae;
@@ -547,7 +551,8 @@ h3 {
 }
 
 .brand-name {
-	margin-left: -7px;
+	margin-left: -5px;
+	transform: translateY(1px);
 }
 
 .brand-mark {

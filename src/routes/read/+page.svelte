@@ -1317,6 +1317,8 @@
 		border-radius: 0;
 		background: transparent;
 		color: var(--muted);
+		font-family: var(--font-display);
+		font-variation-settings: 'opsz' 18;
 		font-size: 13px;
 		font-weight: 500;
 		line-height: 1.32;
