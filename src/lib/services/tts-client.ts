@@ -1,5 +1,10 @@
 import type { DeviceCapabilities, ModelDescriptor, TimingMap } from '$lib/domain/types';
 import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
+import {
+	beginRuntimeOperation,
+	finishRuntimeOperation,
+	recordRuntimeEvent
+} from './runtime-diagnostics';
 import type {
 	BackendPreference,
 	SynthesisMetrics,
@@ -42,17 +47,24 @@ export class TtsClient {
 
 	private ensureWorker(): Worker {
 		if (!this.worker) {
-			this.worker = new Worker(new URL('./tts.worker.ts', import.meta.url), {
+			const speechWorker = new Worker(new URL('./tts.worker.ts', import.meta.url), {
 				type: 'module',
 				name: 'voicebook-tts'
 			});
-			this.worker.addEventListener('message', (event: MessageEvent<TtsWorkerResponse>) =>
+			this.worker = speechWorker;
+			speechWorker.addEventListener('message', (event: MessageEvent<TtsWorkerResponse>) =>
 				this.receive(event.data)
 			);
-			this.worker.addEventListener('error', (event) => {
+			speechWorker.addEventListener('error', (event) => {
+				recordRuntimeEvent('worker-error', event.message || 'speech worker stopped unexpectedly');
 				for (const request of this.pending.values())
 					request.reject(new Error(event.message || 'The speech worker stopped unexpectedly.'));
 				this.pending.clear();
+				if (this.worker === speechWorker) {
+					speechWorker.terminate();
+					this.worker = undefined;
+					this.modelId = undefined;
+				}
 			});
 		}
 		return this.worker;
@@ -66,8 +78,11 @@ export class TtsClient {
 			return;
 		}
 		this.pending.delete(message.requestId);
-		if (message.type === 'error' || message.type === 'gpu-lost')
+		if (message.type === 'gpu-lost') {
+			recordRuntimeEvent('gpu-lost', message.message);
+			this.modelId = undefined;
 			request.reject(new Error(message.message));
+		} else if (message.type === 'error') request.reject(new Error(message.message));
 		else request.resolve(message);
 	}
 
@@ -93,14 +108,25 @@ export class TtsClient {
 		backend: BackendPreference = 'auto',
 		progress?: (update: ProgressUpdate) => void
 	): Promise<void> {
-		const response = await this.request(
-			{ type: 'load', requestId: crypto.randomUUID(), modelId, backend },
-			progress
-		);
-		if (response.type !== 'loaded') throw new Error('The speech worker did not finish loading.');
-		this.modelId = response.modelId;
-		this.backend = response.backend;
-		this.dtype = response.dtype;
+		const operationId = beginRuntimeOperation('model-load', { modelId, backend });
+		try {
+			const response = await this.request(
+				{ type: 'load', requestId: crypto.randomUUID(), modelId, backend },
+				progress
+			);
+			if (response.type !== 'loaded') throw new Error('The speech worker did not finish loading.');
+			this.modelId = response.modelId;
+			this.backend = response.backend;
+			this.dtype = response.dtype;
+			finishRuntimeOperation(operationId, 'completed');
+		} catch (error) {
+			finishRuntimeOperation(
+				operationId,
+				'failed',
+				error instanceof Error ? error.message : 'unknown model load error'
+			);
+			throw error;
+		}
 	}
 
 	async synthesize(
@@ -112,6 +138,11 @@ export class TtsClient {
 	): Promise<SynthesisResult> {
 		if (signal?.aborted) throw new DOMException('Speech generation was canceled.', 'AbortError');
 		const requestId = crypto.randomUUID();
+		const operationId = beginRuntimeOperation('speech-generation', {
+			characters: text.length,
+			steps: normalizeGenerationSteps(totalSteps),
+			backend: this.backend
+		});
 		let timedOut = false;
 		const abort = () => {
 			this.ensureWorker().postMessage({ type: 'cancel', requestId } satisfies TtsWorkerRequest);
@@ -144,12 +175,21 @@ export class TtsClient {
 			});
 			if (response.type !== 'result')
 				throw new Error('The speech worker returned an invalid audio result.');
-			return {
+			const result = {
 				audio: response.audio,
 				sampleRate: response.sampleRate,
 				timing: response.timing,
 				metrics: response.metrics
 			};
+			finishRuntimeOperation(operationId, 'completed');
+			return result;
+		} catch (error) {
+			finishRuntimeOperation(
+				operationId,
+				'failed',
+				error instanceof Error ? error.message : 'unknown synthesis error'
+			);
+			throw error;
 		} finally {
 			globalThis.clearTimeout(timeout);
 			signal?.removeEventListener('abort', abort);

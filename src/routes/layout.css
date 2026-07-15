@@ -414,21 +414,14 @@ h3 {
 	display: flex;
 	min-width: 0;
 	align-items: center;
-	gap: 2px;
+	gap: 4px;
 }
 
 .document-zoom {
 	display: flex;
 	align-items: center;
-	gap: 0;
-	margin: 0 3px;
-}
-
-.zoom-divider {
-	width: 1px;
-	height: 18px;
-	margin: 0 3px;
-	background: var(--line-strong);
+	gap: 2px;
+	margin: 0 2px;
 }
 
 .document-zoom .icon-button {
@@ -493,13 +486,6 @@ h3 {
 	transform: translateX(-50%);
 	text-align: center;
 	pointer-events: none;
-}
-
-.commandbar-divider {
-	width: 1px;
-	height: 18px;
-	margin: 0 4px;
-	background: var(--line-strong);
 }
 
 .reader-commandbar-title strong {
@@ -990,6 +976,25 @@ textarea {
 	line-height: 1.45;
 }
 
+.update-toast {
+	border-left-color: var(--primary);
+	background: var(--modal-surface);
+}
+
+.update-toast.stacked {
+	bottom: 112px;
+}
+
+.update-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.update-actions .button {
+	height: 36px;
+}
+
 .spin {
 	animation: spin 0.9s linear infinite;
 }
@@ -1241,8 +1246,7 @@ textarea {
 	}
 
 	.reader-commandbar .mobile-reader-hidden,
-	.reader-commandbar .document-zoom,
-	.reader-commandbar .commandbar-divider {
+	.reader-commandbar .document-zoom {
 		display: none;
 	}
 

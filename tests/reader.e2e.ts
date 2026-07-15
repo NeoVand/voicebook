@@ -1,13 +1,26 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
-import { installFakeTts } from './helpers';
+import { completeModelSetup, installFakeTts, openReadyLibrary } from './helpers';
 
 test.beforeEach(async ({ page }) => {
 	await installFakeTts(page);
 });
 
-test('presents one intentional empty-library import surface', async ({ page }) => {
+test('completes voice setup before presenting the empty-library import surface', async ({
+	page
+}) => {
 	await page.goto('./');
+	await expect(
+		page.getByRole('heading', { name: 'Listen privately, right in this browser.' })
+	).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Add document', exact: true })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Paste text', exact: true })).toHaveCount(0);
+	const setupA11y = await new AxeBuilder({ page }).analyze();
+	expect(
+		setupA11y.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))
+	).toEqual([]);
+	await completeModelSetup(page);
+
 	const emptyState = page.getByRole('region', { name: 'What would you like to listen to?' });
 	await expect(emptyState).toBeVisible();
 	await expect(page.getByText('Your library is empty', { exact: true })).toHaveCount(0);
@@ -71,7 +84,7 @@ test('presents one intentional empty-library import surface', async ({ page }) =
 });
 
 test('highlights only the document currently open in the reader', async ({ page }) => {
-	await page.goto('./');
+	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
 	const title = 'A Quiet Sidebar With a Deliberately Long Document Title';
 	await page.getByLabel('Title').fill(title);
@@ -101,16 +114,13 @@ test('import → install → play → seek → bookmark → reload → offline r
 	context
 }) => {
 	await page.goto('./');
+	await completeModelSetup(page);
 	await expect(page.getByRole('heading', { name: 'Library', exact: true })).toBeVisible();
 	const emptyA11y = await new AxeBuilder({ page }).analyze();
 	expect(
 		emptyA11y.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))
 	).toEqual([]);
 
-	await page.getByRole('link', { name: 'Voice', exact: true }).click();
-	await page.getByRole('checkbox', { name: 'I have reviewed the terms' }).check();
-	await page.getByRole('button', { name: 'Install locally' }).click();
-	await page.getByRole('link', { name: 'Library', exact: true }).click();
 	await page.getByRole('button', { name: 'Paste text' }).click();
 	await page.getByLabel('Title').fill('The Quiet Machine');
 	await page
@@ -296,11 +306,7 @@ test('import → install → play → seek → bookmark → reload → offline r
 test('whole-document preparation fills cache coverage and preserves read-along timing', async ({
 	page
 }) => {
-	await page.goto('./');
-	await page.getByRole('link', { name: 'Voice', exact: true }).click();
-	await page.getByRole('checkbox', { name: 'I have reviewed the terms' }).check();
-	await page.getByRole('button', { name: 'Install locally' }).click();
-	await page.getByRole('link', { name: 'Library', exact: true }).click();
+	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text' }).click();
 	await page.getByLabel('Title').fill('Prepared Without Pressure');
 	await page
@@ -405,7 +411,7 @@ test('whole-document preparation fills cache coverage and preserves read-along t
 
 test('keeps the phone reader focused on content and a compact transport', async ({ page }) => {
 	await page.setViewportSize({ width: 390, height: 844 });
-	await page.goto('./');
+	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text' }).click();
 	await page.getByLabel('Title').fill('Pocket reader');
 	await page
@@ -467,7 +473,7 @@ test('keeps the phone reader focused on content and a compact transport', async 
 });
 
 test('keeps the desktop player settings inside the playback dock', async ({ page }) => {
-	await page.goto('./');
+	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text' }).click();
 	await page.getByLabel('Title').fill('Player spacing check');
 	await page
@@ -597,7 +603,7 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 
 test('collapses and remembers the desktop sidebar', async ({ page }) => {
 	await page.setViewportSize({ width: 1280, height: 800 });
-	await page.goto('./');
+	await openReadyLibrary(page);
 	await expect(page.getByText('Supertonic 3', { exact: true })).toHaveCount(0);
 
 	const header = page.getByRole('banner', { name: 'Voicebook header' });
@@ -661,11 +667,7 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 });
 
 test('starts narration from a chosen passage or selected word', async ({ page }) => {
-	await page.goto('./');
-	await page.getByRole('link', { name: 'Voice', exact: true }).click();
-	await page.getByRole('checkbox', { name: 'I have reviewed the terms' }).check();
-	await page.getByRole('button', { name: 'Install locally' }).click();
-	await page.getByRole('link', { name: 'Library', exact: true }).click();
+	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text' }).click();
 	await page.getByLabel('Title').fill('Choose a passage');
 	await page
@@ -744,7 +746,7 @@ test('starts narration from a chosen passage or selected word', async ({ page })
 test('detects duplicate file imports and keeps navigation under the Pages base path', async ({
 	page
 }) => {
-	await page.goto('./');
+	await openReadyLibrary(page);
 	const input = page.locator('#document-upload');
 	await input.setInputFiles({
 		name: 'repeat.txt',
@@ -838,7 +840,7 @@ test('previews and selects built-in voices without loading another engine', asyn
 });
 
 test('renders Mermaid fences as accessible diagrams with a source fallback', async ({ page }) => {
-	await page.goto('./');
+	await openReadyLibrary(page);
 	await page.locator('#document-upload').setInputFiles({
 		name: 'diagram.md',
 		mimeType: 'text/markdown',
@@ -883,7 +885,7 @@ test('renders Mermaid fences as accessible diagrams with a source fallback', asy
 test('renders technical Markdown and zooms only the document beneath the navbar', async ({
 	page
 }) => {
-	await page.goto('./');
+	await openReadyLibrary(page);
 	await page.locator('#document-upload').setInputFiles({
 		name: 'technical-reader.md',
 		mimeType: 'text/markdown',
@@ -926,17 +928,22 @@ test('renders technical Markdown and zooms only the document beneath the navbar'
 	const geometry = await page.evaluate(() => {
 		const headerElement = document.querySelector<HTMLElement>('.app-header');
 		const canvasElement = document.querySelector<HTMLElement>('.reading-canvas');
-		if (!headerElement || !canvasElement) throw new Error('Reader geometry is unavailable');
+		const stageElement = document.querySelector<HTMLElement>('.reader-stage');
+		if (!headerElement || !canvasElement || !stageElement)
+			throw new Error('Reader geometry is unavailable');
 		const headerStyle = getComputedStyle(headerElement);
 		return {
 			headerBottom: headerElement.getBoundingClientRect().bottom,
 			canvasTop: canvasElement.getBoundingClientRect().top,
+			canvasRight: canvasElement.getBoundingClientRect().right,
+			stageRight: stageElement.getBoundingClientRect().right,
 			headerBackground: headerStyle.backgroundColor,
 			rootBackground: getComputedStyle(document.documentElement).backgroundColor,
 			headerFontSize: Number.parseFloat(headerStyle.fontSize)
 		};
 	});
 	expect(geometry.canvasTop).toBeLessThan(geometry.headerBottom);
+	expect(Math.abs(geometry.canvasRight - geometry.stageRight)).toBeLessThan(1);
 	expect(geometry.headerBackground).not.toBe(geometry.rootBackground);
 
 	await page.getByRole('button', { name: 'Close document outline' }).click();
@@ -976,7 +983,7 @@ test('renders technical Markdown and zooms only the document beneath the navbar'
 });
 
 test('renders nested Markdown extensions as safe semantic document content', async ({ page }) => {
-	await page.goto('./');
+	await openReadyLibrary(page);
 	await page.locator('#document-upload').setInputFiles({
 		name: 'structured-reader.md',
 		mimeType: 'text/markdown',
@@ -1042,7 +1049,7 @@ test('renders nested Markdown extensions as safe semantic document content', asy
 test('table of contents moves the reading canvas and closes its compact drawer', async ({
 	page
 }) => {
-	await page.goto('./');
+	await openReadyLibrary(page);
 	const openingParagraphs = Array.from(
 		{ length: 28 },
 		(_, index) =>

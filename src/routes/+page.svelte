@@ -12,6 +12,7 @@
 		X
 	} from '@lucide/svelte';
 	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
+	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
 	import type { DocumentKind, NormalizedDocument } from '$lib/domain/types';
 	import { appState } from '$lib/state/app-state.svelte';
 
@@ -21,6 +22,7 @@
 	let pasteOpen = $state(false);
 	let pasteTitle = $state('');
 	let pasteText = $state('');
+	let modelInstalled = $derived(appState.installedModels.includes('supertonic-3'));
 
 	function captureFileInput(node: HTMLInputElement): () => void {
 		fileInput = node;
@@ -112,224 +114,239 @@
 	<title>Library — Voicebook</title>
 </svelte:head>
 
-<div
-	class="workspace-page library-page"
-	class:dragging
-	role="region"
-	aria-label="Document library workspace"
-	ondragenter={onDragEnter}
-	ondragover={onDragOver}
-	ondragleave={onDragLeave}
-	ondrop={onDrop}
->
-	<header class="page-heading">
-		<div>
-			<p class="eyebrow">Local library</p>
-			<h1>Library</h1>
-			<p class="subtitle">Everything you add stays private on this device.</p>
-		</div>
-		{#if appState.initialized && appState.documents.length}
-			<div class="library-actions heading-actions">
-				<button class="button library-action" type="button" onclick={() => (pasteOpen = true)}>
-					<FileText size={16} /> Paste text
-				</button>
-				<button
-					class="button primary library-action"
-					type="button"
-					onclick={() => fileInput?.click()}
-				>
-					<Plus size={16} /> Add document
-				</button>
+{#if !appState.initialized}
+	<div class="workspace-page library-page" aria-busy="true">
+		<div class="loading-row">Opening your private library…</div>
+	</div>
+{:else if !modelInstalled}
+	<ModelInstallPrompt />
+{:else}
+	<div
+		class="workspace-page library-page"
+		class:dragging
+		role="region"
+		aria-label="Document library workspace"
+		ondragenter={onDragEnter}
+		ondragover={onDragOver}
+		ondragleave={onDragLeave}
+		ondrop={onDrop}
+	>
+		<header class="page-heading">
+			<div>
+				<p class="eyebrow">Local library</p>
+				<h1>Library</h1>
+				<p class="subtitle">Everything you add stays private on this device.</p>
 			</div>
-		{/if}
-	</header>
-
-	<input
-		id="document-upload"
-		class="visually-hidden"
-		type="file"
-		multiple
-		aria-label="Choose documents to import"
-		accept=".pdf,.docx,.md,.markdown,.txt,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-		{@attach captureFileInput}
-		onchange={onFileChange}
-	/>
-
-	{#if !appState.initialized}
-		<div class="loading-row">Opening your local library…</div>
-	{:else if appState.documents.length}
-		<section class="library-collection" aria-labelledby="documents-heading">
-			<header class="library-meta">
-				<div>
-					<h2 id="documents-heading">Documents</h2>
-					<span>
-						{appState.documents.length}
-						{appState.documents.length === 1 ? 'item' : 'items'}
-					</span>
-				</div>
-				<p>Drop files anywhere in the library to add them.</p>
-			</header>
-
-			<div class="document-table">
-				{#each appState.documents as document (document.id)}
-					<article class="document-row">
-						<a
-							class="document-link"
-							href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
-							aria-label={'Open ' + document.title}
-						>
-							<span class="file-kind" aria-hidden="true">
-								<DocumentKindIcon kind={document.sourceKind} />
-								<small>{fileKindLabel(document.sourceKind)}</small>
-							</span>
-							<span class="document-copy">
-								<strong>{document.title}</strong>
-								<small>{document.segments[0]?.text ?? 'Ready to listen.'}</small>
-							</span>
-							<span class="document-time"><Clock3 size={13} /> {readingMinutes(document)} min</span>
-							<span class="document-progress">
-								<span>{Math.round(progressFor(document))}%</span>
-								<i><b style:width={progressFor(document) + '%'}></b></i>
-							</span>
-							<span class="row-arrow"><ArrowRight size={16} /></span>
-						</a>
-						<button
-							class="icon-button remove-document"
-							type="button"
-							aria-label={'Remove ' + document.title}
-							onclick={() => removeDocument(document)}
-						>
-							<Trash2 size={15} />
-						</button>
-					</article>
-				{/each}
-			</div>
-		</section>
-	{:else}
-		<section
-			class="empty-library"
-			aria-labelledby="empty-library-title"
-			aria-busy={appState.importing}
-		>
-			<div class="empty-library-content">
-				<span class="empty-icon" aria-hidden="true">
-					{#if appState.importing}
-						<span class="importing-icon"><FileUp size={24} /></span>
-					{:else}
-						<BookOpenText size={25} />
-					{/if}
-				</span>
-				<h2 id="empty-library-title">
-					{appState.importing ? 'Adding your document…' : 'What would you like to listen to?'}
-				</h2>
-				<p>
-					{appState.importing
-						? appState.statusMessage
-						: 'Drop a PDF, DOCX, Markdown, or text file here to turn it into a calm reading experience.'}
-				</p>
-				<div class="library-actions empty-actions">
+			{#if appState.initialized && appState.documents.length}
+				<div class="library-actions heading-actions">
+					<button class="button library-action" type="button" onclick={() => (pasteOpen = true)}>
+						<FileText size={16} /> Paste text
+					</button>
 					<button
 						class="button primary library-action"
 						type="button"
-						disabled={appState.importing}
 						onclick={() => fileInput?.click()}
 					>
 						<Plus size={16} /> Add document
 					</button>
-					<button
-						class="button library-action"
-						type="button"
-						disabled={appState.importing}
-						onclick={() => (pasteOpen = true)}
-					>
-						<FileText size={16} /> Paste text
-					</button>
 				</div>
-				<div class="empty-library-note">
-					<span>PDF · DOCX · Markdown · TXT</span>
-					<span aria-hidden="true">·</span>
-					<span>Processed locally</span>
-				</div>
-			</div>
-		</section>
-	{/if}
+			{/if}
+		</header>
 
-	{#if dragging}
-		<div class="library-drop-overlay" aria-hidden="true">
-			<span><FileUp size={24} /></span>
-			<strong>Drop to add to your library</strong>
-			<small>Release the files to import them locally</small>
+		<input
+			id="document-upload"
+			class="visually-hidden"
+			type="file"
+			multiple
+			aria-label="Choose documents to import"
+			accept=".pdf,.docx,.md,.markdown,.txt,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+			{@attach captureFileInput}
+			onchange={onFileChange}
+		/>
+
+		{#if !appState.initialized}
+			<div class="loading-row">Opening your local library…</div>
+		{:else if appState.documents.length}
+			<section class="library-collection" aria-labelledby="documents-heading">
+				<header class="library-meta">
+					<div>
+						<h2 id="documents-heading">Documents</h2>
+						<span>
+							{appState.documents.length}
+							{appState.documents.length === 1 ? 'item' : 'items'}
+						</span>
+					</div>
+					<p>Drop files anywhere in the library to add them.</p>
+				</header>
+
+				<div class="document-table">
+					{#each appState.documents as document (document.id)}
+						<article class="document-row">
+							<a
+								class="document-link"
+								href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
+								aria-label={'Open ' + document.title}
+							>
+								<span class="file-kind" aria-hidden="true">
+									<DocumentKindIcon kind={document.sourceKind} />
+									<small>{fileKindLabel(document.sourceKind)}</small>
+								</span>
+								<span class="document-copy">
+									<strong>{document.title}</strong>
+									<small>{document.segments[0]?.text ?? 'Ready to listen.'}</small>
+								</span>
+								<span class="document-time"
+									><Clock3 size={13} /> {readingMinutes(document)} min</span
+								>
+								<span class="document-progress">
+									<span>{Math.round(progressFor(document))}%</span>
+									<i><b style:width={progressFor(document) + '%'}></b></i>
+								</span>
+								<span class="row-arrow"><ArrowRight size={16} /></span>
+							</a>
+							<button
+								class="icon-button remove-document"
+								type="button"
+								aria-label={'Remove ' + document.title}
+								onclick={() => removeDocument(document)}
+							>
+								<Trash2 size={15} />
+							</button>
+						</article>
+					{/each}
+				</div>
+			</section>
+		{:else}
+			<section
+				class="empty-library"
+				aria-labelledby="empty-library-title"
+				aria-busy={appState.importing}
+			>
+				<div class="empty-library-content">
+					<span class="empty-icon" aria-hidden="true">
+						{#if appState.importing}
+							<span class="importing-icon"><FileUp size={24} /></span>
+						{:else}
+							<BookOpenText size={25} />
+						{/if}
+					</span>
+					<h2 id="empty-library-title">
+						{appState.importing ? 'Adding your document…' : 'What would you like to listen to?'}
+					</h2>
+					<p>
+						{appState.importing
+							? appState.statusMessage
+							: 'Drop a PDF, DOCX, Markdown, or text file here to turn it into a calm reading experience.'}
+					</p>
+					<div class="library-actions empty-actions">
+						<button
+							class="button primary library-action"
+							type="button"
+							disabled={appState.importing}
+							onclick={() => fileInput?.click()}
+						>
+							<Plus size={16} /> Add document
+						</button>
+						<button
+							class="button library-action"
+							type="button"
+							disabled={appState.importing}
+							onclick={() => (pasteOpen = true)}
+						>
+							<FileText size={16} /> Paste text
+						</button>
+					</div>
+					<div class="empty-library-note">
+						<span>PDF · DOCX · Markdown · TXT</span>
+						<span aria-hidden="true">·</span>
+						<span>Processed locally</span>
+					</div>
+				</div>
+			</section>
+		{/if}
+
+		{#if dragging}
+			<div class="library-drop-overlay" aria-hidden="true">
+				<span><FileUp size={24} /></span>
+				<strong>Drop to add to your library</strong>
+				<small>Release the files to import them locally</small>
+			</div>
+		{/if}
+	</div>
+
+	{#if pasteOpen}
+		<div class="modal-scrim" role="presentation">
+			<div class="paste-dialog" role="dialog" aria-modal="true" aria-labelledby="paste-title">
+				<header>
+					<div>
+						<p class="eyebrow">Quick import</p>
+						<h2 id="paste-title">Paste text</h2>
+					</div>
+					<button
+						class="icon-button"
+						type="button"
+						aria-label="Close"
+						onclick={() => (pasteOpen = false)}
+					>
+						<X size={18} />
+					</button>
+				</header>
+				<label class="form-field">
+					<span>Title</span>
+					<input bind:value={pasteTitle} placeholder="Untitled document" />
+				</label>
+				<label class="form-field">
+					<span>Text</span>
+					<textarea bind:value={pasteText} placeholder="Paste text to read aloud…"></textarea>
+				</label>
+				<footer>
+					<small>{pasteText.trim().split(/\s+/).filter(Boolean).length} words</small>
+					<div>
+						<button class="button ghost" type="button" onclick={() => (pasteOpen = false)}
+							>Cancel</button
+						>
+						<button
+							class="button primary"
+							type="button"
+							disabled={!pasteText.trim()}
+							onclick={savePaste}
+						>
+							Add to library
+						</button>
+					</div>
+				</footer>
+			</div>
 		</div>
 	{/if}
-</div>
 
-{#if pasteOpen}
-	<div class="modal-scrim" role="presentation">
-		<div class="paste-dialog" role="dialog" aria-modal="true" aria-labelledby="paste-title">
-			<header>
-				<div>
-					<p class="eyebrow">Quick import</p>
-					<h2 id="paste-title">Paste text</h2>
-				</div>
-				<button
-					class="icon-button"
-					type="button"
-					aria-label="Close"
-					onclick={() => (pasteOpen = false)}
-				>
-					<X size={18} />
-				</button>
-			</header>
-			<label class="form-field">
-				<span>Title</span>
-				<input bind:value={pasteTitle} placeholder="Untitled document" />
-			</label>
-			<label class="form-field">
-				<span>Text</span>
-				<textarea bind:value={pasteText} placeholder="Paste text to read aloud…"></textarea>
-			</label>
-			<footer>
-				<small>{pasteText.trim().split(/\s+/).filter(Boolean).length} words</small>
-				<div>
-					<button class="button ghost" type="button" onclick={() => (pasteOpen = false)}
+	{#if appState.duplicate}
+		<div class="modal-scrim" role="presentation">
+			<div
+				class="duplicate-dialog"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="duplicate-title"
+			>
+				<span class="duplicate-icon"><BookOpenText size={22} /></span>
+				<h2 id="duplicate-title">Already in your library</h2>
+				<p>“{appState.duplicate.existing.title}” matches this file.</p>
+				<footer>
+					<button class="button ghost" type="button" onclick={() => (appState.duplicate = null)}
 						>Cancel</button
 					>
-					<button
-						class="button primary"
-						type="button"
-						disabled={!pasteText.trim()}
-						onclick={savePaste}
+					<button class="button" type="button" onclick={() => appState.importDuplicateCopy()}
+						>Keep copy</button
 					>
-						Add to library
-					</button>
-				</div>
-			</footer>
+					<a
+						class="button primary"
+						href={resolve(`/read?document=${encodeURIComponent(appState.duplicate.existing.id)}`)}
+					>
+						Open existing
+					</a>
+				</footer>
+			</div>
 		</div>
-	</div>
-{/if}
-
-{#if appState.duplicate}
-	<div class="modal-scrim" role="presentation">
-		<div class="duplicate-dialog" role="dialog" aria-modal="true" aria-labelledby="duplicate-title">
-			<span class="duplicate-icon"><BookOpenText size={22} /></span>
-			<h2 id="duplicate-title">Already in your library</h2>
-			<p>“{appState.duplicate.existing.title}” matches this file.</p>
-			<footer>
-				<button class="button ghost" type="button" onclick={() => (appState.duplicate = null)}
-					>Cancel</button
-				>
-				<button class="button" type="button" onclick={() => appState.importDuplicateCopy()}
-					>Keep copy</button
-				>
-				<a
-					class="button primary"
-					href={resolve(`/read?document=${encodeURIComponent(appState.duplicate.existing.id)}`)}
-				>
-					Open existing
-				</a>
-			</footer>
-		</div>
-	</div>
+	{/if}
 {/if}
 
 <div class="status-region" aria-live="polite">{appState.statusMessage}</div>

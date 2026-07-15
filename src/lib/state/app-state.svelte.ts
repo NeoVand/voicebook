@@ -28,6 +28,7 @@ import {
 } from '$lib/services/repository';
 import { ttsClient } from '$lib/services/tts-client';
 import { clearLegacyModelAssets, clearPinnedModelAssets } from '$lib/services/model-asset-cache';
+import { recoverInterruptedRuntimeOperation } from '$lib/services/runtime-diagnostics';
 
 interface DuplicateImport {
 	file: File;
@@ -133,6 +134,7 @@ export class VoicebookState {
 	importing = $state(false);
 	statusMessage = $state('Preparing your private library…');
 	errorMessage = $state('');
+	runtimeNotice = $state('');
 	duplicate = $state<DuplicateImport | null>(null);
 	capabilities = $state<DeviceCapabilities>(EMPTY_CAPABILITIES);
 	storage = $state<StorageSnapshot>(EMPTY_STORAGE);
@@ -157,6 +159,14 @@ export class VoicebookState {
 
 	private async openLibrary(): Promise<void> {
 		try {
+			const interrupted = recoverInterruptedRuntimeOperation();
+			if (interrupted) {
+				this.runtimeNotice =
+					interrupted.operation === 'model-load'
+						? 'The previous page ended while the voice engine was loading. The resumable download is safe; local diagnostics were saved under System settings.'
+						: 'The previous page ended during speech generation. Voicebook saved local diagnostics, and the inference memory has been reset.';
+				this.errorMessage = this.runtimeNotice;
+			}
 			await clearLegacyModelAssets();
 			const [
 				documents,
@@ -437,6 +447,10 @@ export class VoicebookState {
 
 	clearError(): void {
 		this.errorMessage = '';
+	}
+
+	clearRuntimeNotice(): void {
+		this.runtimeNotice = '';
 	}
 }
 

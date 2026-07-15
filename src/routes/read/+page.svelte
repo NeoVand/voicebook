@@ -14,7 +14,6 @@
 		Play,
 		RotateCcw,
 		RotateCw,
-		Sparkles,
 		Square,
 		Volume2,
 		X
@@ -28,6 +27,7 @@
 	import InlineText from '$lib/components/InlineText.svelte';
 	import MathFormula from '$lib/components/MathFormula.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
+	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
 	import PlayerActionsMenu from '$lib/components/PlayerActionsMenu.svelte';
 	import SafeHtml from '$lib/components/SafeHtml.svelte';
 	import VolumeControl from '$lib/components/VolumeControl.svelte';
@@ -44,7 +44,6 @@
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 
 	let book = $state<NormalizedDocument | null>(null);
-	let installing = $state(false);
 	let clearingAudio = $state(false);
 	let downloadingAudio = $state(false);
 	let downloadProgress = $state(0);
@@ -106,7 +105,6 @@
 		player.isPlaying || player.position > 0 ? player.currentSegment?.id : undefined
 	);
 	let installed = $derived(appState.installedModels.includes('supertonic-3'));
-	let licenseAccepted = $derived(appState.acceptedLicenses.includes('supertonic-3'));
 	let voiceOptions = $derived(
 		appState.selectedModel.voices.map((voice) => ({ value: voice.id, label: voice.name }))
 	);
@@ -482,18 +480,6 @@
 		return minutes + ':' + remainder.toString().padStart(2, '0');
 	}
 
-	async function installEngine(): Promise<void> {
-		installing = true;
-		try {
-			await appState.installModel('supertonic-3');
-		} catch (error) {
-			appState.errorMessage =
-				error instanceof Error ? error.message : 'The voice engine could not be installed.';
-		} finally {
-			installing = false;
-		}
-	}
-
 	async function changeVoice(voiceId: string): Promise<void> {
 		await player.chooseVoice(voiceId);
 	}
@@ -773,7 +759,6 @@
 				<header>
 					<div class="outline-heading">
 						<strong>Contents</strong>
-						<span>{book.outline.length || book.segments.length} sections</span>
 					</div>
 					<div class="outline-legend" aria-label="Contents indicators">
 						<span><i class="view-key"></i>View</span>
@@ -795,6 +780,7 @@
 								data-narration-current={narrationOutlineBlockId === item.blockId
 									? 'true'
 									: undefined}
+								data-level={Math.min(3, item.level)}
 								style={'--outline-level:' + Math.max(0, item.level - 1)}
 								onclick={() => outlineBlock && navigateToOutlineBlock(outlineBlock)}
 							>
@@ -833,26 +819,7 @@
 
 		<section class="reader-stage">
 			{#if !installed}
-				<div class="engine-notice">
-					<span class="engine-notice-icon"><Sparkles size={17} /></span>
-					<div>
-						<strong>Install Supertonic 3 to listen</strong>
-						<span>One local download · {appState.selectedModel.sizeMb} MB</span>
-					</div>
-					{#if !licenseAccepted}
-						<a class="button" href={resolve('/settings')}>Review license</a>
-					{:else}
-						<button
-							class="button primary"
-							type="button"
-							disabled={installing}
-							onclick={installEngine}
-						>
-							{#if installing}<LoaderCircle class="spin" size={15} />{/if}
-							{installing ? 'Installing' : 'Install'}
-						</button>
-					{/if}
-				</div>
+				<ModelInstallPrompt compact />
 			{/if}
 
 			{#if book.warnings.length}
@@ -1255,16 +1222,22 @@
 	.outline-panel > header,
 	.bookmarks-panel > header {
 		display: flex;
-		min-height: 68px;
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
 		padding: 0 14px;
+	}
+
+	.outline-panel > header {
+		min-height: 50px;
+	}
+
+	.bookmarks-panel > header {
+		min-height: 68px;
 		border-bottom: 1px solid var(--line);
 	}
 
 	.outline-heading strong,
-	.outline-heading > span,
 	.bookmarks-panel header strong,
 	.bookmarks-panel header span {
 		display: block;
@@ -1279,7 +1252,10 @@
 		letter-spacing: -0.015em;
 	}
 
-	.outline-heading > span,
+	.outline-heading strong {
+		font-weight: 680;
+	}
+
 	.bookmarks-panel header span {
 		margin-top: 3px;
 		color: var(--faint);
@@ -1324,7 +1300,7 @@
 		align-content: start;
 		overflow-y: auto;
 		overscroll-behavior: contain;
-		padding: 8px 8px calc(var(--player-height) + 16px);
+		padding: 7px 0 calc(var(--player-height) + 16px);
 		scroll-padding-bottom: calc(var(--player-height) + 16px);
 		flex: 1;
 	}
@@ -1336,18 +1312,33 @@
 		grid-template-columns: minmax(0, 1fr) 22px;
 		align-items: center;
 		gap: 8px;
-		padding: 8px 8px 8px calc(11px + var(--outline-level, 0) * 11px);
+		padding: 8px 12px 8px calc(13px + var(--outline-level, 0) * 7px);
 		border: 0;
-		border-radius: 6px;
+		border-radius: 0;
 		background: transparent;
 		color: var(--muted);
 		font-size: 13px;
-		font-weight: 470;
+		font-weight: 500;
 		line-height: 1.32;
 		text-align: left;
 		transition:
 			background 140ms var(--ease),
 			color 140ms var(--ease);
+	}
+
+	.outline-panel nav button[data-level='1'] {
+		font-size: 13.5px;
+		font-weight: 650;
+	}
+
+	.outline-panel nav button[data-level='2'] {
+		font-size: 12.5px;
+		font-weight: 550;
+	}
+
+	.outline-panel nav button[data-level='3'] {
+		font-size: 12px;
+		font-weight: 490;
 	}
 
 	.outline-panel .outline-label {
@@ -1397,7 +1388,7 @@
 		grid-row: 1;
 		grid-column: 2;
 		overflow: hidden;
-		padding: 0 18px;
+		padding: 0;
 		background: var(--reader);
 		flex-direction: column;
 	}
@@ -1406,7 +1397,6 @@
 		grid-column: 1;
 	}
 
-	.engine-notice,
 	.import-warning {
 		position: absolute;
 		top: calc(var(--app-header-height) + 14px);
@@ -1425,40 +1415,20 @@
 		transform: translateX(-50%);
 	}
 
-	.engine-notice + .import-warning {
-		top: calc(var(--app-header-height) + 76px);
-	}
-
-	.reader-stage:has(> .engine-notice, > .import-warning) .reading-canvas {
+	.reader-stage:has(> .import-warning) .reading-canvas {
 		padding-top: calc(var(--app-header-height) + 112px);
 	}
 
-	.reader-stage:has(> .engine-notice + .import-warning) .reading-canvas {
-		padding-top: calc(var(--app-header-height) + 174px);
-	}
-
-	.engine-notice-icon {
-		color: var(--primary);
-	}
-
-	.engine-notice > div,
 	.import-warning span {
 		min-width: 0;
 		flex: 1;
 	}
 
-	.engine-notice strong,
-	.engine-notice span {
-		display: block;
-	}
-
-	.engine-notice strong,
 	.import-warning strong {
 		font-size: 9px;
 		font-weight: 640;
 	}
 
-	.engine-notice span,
 	.import-warning span {
 		margin-top: 3px;
 		color: var(--faint);
@@ -1472,7 +1442,7 @@
 
 	.reading-canvas {
 		position: relative;
-		width: min(var(--document-canvas-width, 900px), 100%);
+		width: 100%;
 		min-height: 0;
 		margin: 0 auto;
 		overflow-y: auto;
