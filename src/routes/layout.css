@@ -25,6 +25,9 @@
 	--control-strong: #0f1014;
 	--control-border: rgba(242, 243, 246, 0.13);
 	--track: rgba(242, 243, 246, 0.16);
+	--timeline-cached: #6f96aa;
+	--timeline-listened: #9bc7b0;
+	--timeline-generating: #e4b86a;
 	--reader: #18191d;
 	--reader-stage: #0c0d10;
 	--notice: #15161b;
@@ -92,6 +95,9 @@
 	--control-strong: #ffffff;
 	--control-border: rgba(30, 44, 50, 0.17);
 	--track: rgba(30, 44, 50, 0.18);
+	--timeline-cached: #6c98a2;
+	--timeline-listened: #5b7189;
+	--timeline-generating: #a8783f;
 	--reader: #fbfcfc;
 	--reader-stage: #dfe6e9;
 	--notice: #f2f6f7;
@@ -154,6 +160,9 @@
 	--control-strong: #fffdf8;
 	--control-border: rgba(52, 43, 31, 0.17);
 	--track: rgba(52, 43, 31, 0.18);
+	--timeline-cached: #618b88;
+	--timeline-listened: #9b6c38;
+	--timeline-generating: #bd8738;
 	--reader: #fffaf1;
 	--reader-stage: #e8dfd2;
 	--notice: #f8f1e7;
@@ -216,6 +225,9 @@
 	--control-strong: #0e171e;
 	--control-border: rgba(226, 239, 245, 0.14);
 	--track: rgba(226, 239, 245, 0.17);
+	--timeline-cached: #72a38e;
+	--timeline-listened: #8cb8cc;
+	--timeline-generating: #d2b47c;
 	--reader: #1b252d;
 	--reader-stage: #0f171e;
 	--notice: #18232c;

@@ -1,6 +1,6 @@
 import { SoundTouchNode } from '@soundtouchjs/audio-worklet';
 import processorUrl from '@soundtouchjs/audio-worklet/processor?url';
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getModel } from '$lib/domain/model-catalog';
 import type {
 	AudioVariantMeta,
@@ -10,12 +10,14 @@ import type {
 	TimingMap
 } from '$lib/domain/types';
 import { audioVariantKey, decodeAudio, encodeAudio } from '$lib/services/audio-codec';
-import { getAudio, putAudio } from '$lib/services/repository';
+import { getAudio, listAudioVariants, putAudio } from '$lib/services/repository';
 import { ttsClient } from '$lib/services/tts-client';
 import { generationPlan } from '$lib/services/generation-plan';
 import {
 	absoluteTimelinePosition,
+	listenedDuration,
 	locateTimelinePosition,
+	mergeListenedRange,
 	timelineDuration,
 	timelineProgress
 } from '$lib/services/timeline';
@@ -25,6 +27,22 @@ interface PreparedAudio {
 	key: string;
 	buffer: AudioBuffer;
 	timing: TimingMap;
+}
+
+interface GeneratedSegment {
+	audio: Float32Array;
+	sampleRate: number;
+	meta: Omit<AudioVariantMeta, 'mimeType'>;
+	signal: AbortSignal;
+}
+
+export interface TimelineSegmentVisual {
+	id: string;
+	left: number;
+	width: number;
+	cached: boolean;
+	generating: number;
+	listened: Array<{ left: number; width: number }>;
 }
 
 export class VoicebookPlayer {
@@ -64,10 +82,15 @@ export class VoicebookPlayer {
 	private audioCache = new SvelteMap<string, PreparedAudio>();
 	private preparedBySegment = new SvelteMap<number, PreparedAudio>();
 	private queue = new SvelteMap<number, Promise<PreparedAudio>>();
+	private cacheQueue = new SvelteMap<number, Promise<void>>();
+	private persistenceBySegment = new SvelteMap<number, Promise<boolean>>();
+	private cachedSegments = new SvelteSet<number>();
+	private generationBySegment = new SvelteMap<number, number>();
 	private abortControllers = new SvelteMap<number, AbortController>();
 	private lastSavedAt = 0;
 	private cancellationVersion = 0;
 	private engineLoad?: { modelId: string; promise: Promise<void> };
+	private cacheCoverageSignature = '';
 	onSegmentChange?: (segmentId: string) => void;
 
 	get currentSegment(): SpeechSegment | undefined {
@@ -82,6 +105,71 @@ export class VoicebookPlayer {
 		return timelineDuration(this.timelineDurations());
 	}
 
+	get cachedProgress(): number {
+		const durations = this.timelineDurations();
+		const total = timelineDuration(durations);
+		if (!total) return 0;
+		return (
+			durations.reduce(
+				(sum, duration, index) => sum + (this.cachedSegments.has(index) ? duration : 0),
+				0
+			) / total
+		);
+	}
+
+	get listenedProgress(): number {
+		const durations = this.timelineDurations();
+		const total = timelineDuration(durations);
+		if (!total || !this.book) return 0;
+		return (
+			this.book.segments.reduce(
+				(sum, segment, index) =>
+					sum + listenedDuration(this.book?.listened?.[segment.id] ?? [], durations[index] ?? 0),
+				0
+			) / total
+		);
+	}
+
+	get timelineSegments(): TimelineSegmentVisual[] {
+		if (!this.book) return [];
+		const durations = this.timelineDurations();
+		const total = timelineDuration(durations);
+		if (!total) return [];
+		let elapsed = 0;
+		return this.book.segments.map((segment, index) => {
+			const duration = durations[index] ?? 0;
+			const left = elapsed / total;
+			elapsed += duration;
+			return {
+				id: segment.id,
+				left,
+				width: duration / total,
+				cached: this.cachedSegments.has(index),
+				generating: this.generationBySegment.get(index) ?? 0,
+				listened: mergeListenedRange(this.book?.listened?.[segment.id] ?? [], 0, 0).map(
+					(range) => ({
+						left: duration ? Math.min(1, range.start / duration) : 0,
+						width: duration
+							? Math.max(0, Math.min(duration, range.end) - Math.min(duration, range.start)) /
+								duration
+							: 0
+					})
+				)
+			};
+		});
+	}
+
+	get timelineSummary(): string {
+		const cached = Math.round(this.cachedProgress * 100);
+		const listened = Math.round(this.listenedProgress * 100);
+		const generating = this.generationBySegment.size;
+		return `${cached}% audio cached for this voice. ${listened}% listened.${generating ? ` Preparing ${generating} ${generating === 1 ? 'passage' : 'passages'}.` : ''}`;
+	}
+
+	get isDocumentPrepared(): boolean {
+		return Boolean(this.book?.segments.length) && this.cachedProgress >= 0.9999;
+	}
+
 	get runtimeLabel(): string {
 		if (!this.engineBackend) return 'Engine warming';
 		return `${this.engineBackend === 'webgpu' ? 'WebGPU' : 'WASM'} · ${this.engineDtype}`;
@@ -94,8 +182,20 @@ export class VoicebookPlayer {
 	}
 
 	setDocument(document: NormalizedDocument): void {
-		this.pause();
+		this.stopPlayback(false);
+		this.cancellationVersion += 1;
+		this.reprioritize();
+		ttsClient.cancelAll();
+		this.audioCache.clear();
 		this.preparedBySegment.clear();
+		this.cacheQueue.clear();
+		this.persistenceBySegment.clear();
+		this.cachedSegments.clear();
+		this.generationBySegment.clear();
+		this.cacheCoverageSignature = '';
+		this.isBuffering = false;
+		this.isGeneratingAll = false;
+		this.generationProgress = 0;
 		this.requestedWordIndex = undefined;
 		this.book = document;
 		const savedIndex = document.playback
@@ -118,6 +218,49 @@ export class VoicebookPlayer {
 		for (const controller of this.abortControllers.values()) controller.abort();
 		this.abortControllers.clear();
 		this.queue.clear();
+	}
+
+	private variantSignature(): string {
+		const model = appState.selectedModel;
+		return [
+			this.book?.id ?? '',
+			model.id,
+			model.revision,
+			appState.selectedVoiceId,
+			appState.generationSteps,
+			this.engineBackend ?? '',
+			this.engineDtype
+		].join('\u001f');
+	}
+
+	private matchesCurrentVariant(meta: AudioVariantMeta): boolean {
+		const model = appState.selectedModel;
+		return (
+			meta.modelId === model.id &&
+			meta.modelRevision === model.revision &&
+			meta.voiceId === appState.selectedVoiceId &&
+			meta.generationSteps === appState.generationSteps &&
+			meta.backend === this.engineBackend &&
+			meta.dtype === this.engineDtype
+		);
+	}
+
+	private async refreshCacheCoverage(force = false): Promise<void> {
+		if (!this.book || !this.engineBackend || !this.engineDtype) return;
+		const signature = this.variantSignature();
+		if (!force && signature === this.cacheCoverageSignature) return;
+		const documentId = this.book.id;
+		const variants = await listAudioVariants(documentId);
+		if (!this.book || this.book.id !== documentId || signature !== this.variantSignature()) return;
+		this.cachedSegments.clear();
+		const indexes = new SvelteMap(this.book.segments.map((segment, index) => [segment.id, index]));
+		for (const variant of variants) {
+			if (!this.matchesCurrentVariant(variant)) continue;
+			const index = indexes.get(variant.segmentId);
+			if (index !== undefined) this.cachedSegments.add(index);
+		}
+		this.cacheCoverageSignature = signature;
+		this.generationProgress = this.cachedProgress * 100;
 	}
 
 	private async audioGraph(): Promise<AudioContext> {
@@ -190,6 +333,7 @@ export class VoicebookPlayer {
 		if (ttsClient.modelId === modelId) {
 			this.engineBackend = ttsClient.backend;
 			this.engineDtype = ttsClient.dtype;
+			await this.refreshCacheCoverage();
 			return;
 		}
 		if (!this.engineLoad || this.engineLoad.modelId !== modelId) {
@@ -210,6 +354,7 @@ export class VoicebookPlayer {
 		}
 		this.engineBackend = ttsClient.backend;
 		this.engineDtype = ttsClient.dtype;
+		await this.refreshCacheCoverage();
 	}
 
 	async warmEngine(): Promise<void> {
@@ -247,7 +392,10 @@ export class VoicebookPlayer {
 		this.bufferingStage = 'Checking saved audio…';
 		const key = await this.cacheKey(segment);
 		const memory = this.audioCache.get(key);
-		if (memory) return memory;
+		if (memory) {
+			this.preparedBySegment.set(index, memory);
+			return memory;
+		}
 		const stored = await getAudio(key);
 		if (stored) {
 			this.bufferingStage = 'Opening saved audio…';
@@ -258,11 +406,37 @@ export class VoicebookPlayer {
 			};
 			this.audioCache.set(key, prepared);
 			this.preparedBySegment.set(index, prepared);
+			this.cachedSegments.add(index);
+			this.prunePreparedAudio(index);
 			return prepared;
 		}
+		this.cachedSegments.delete(index);
+		const generated = await this.synthesizeSegment(index, key);
+		this.bufferingStage = 'Starting playback…';
+		const buffer = context.createBuffer(1, generated.audio.length, generated.sampleRate);
+		buffer.getChannelData(0).set(generated.audio);
+		const prepared = { key, buffer, timing: generated.meta.timing };
+		this.audioCache.set(key, prepared);
+		this.preparedBySegment.set(index, prepared);
+		this.prunePreparedAudio(index);
+		void this.trackPersistence(index, generated);
+		return prepared;
+	}
 
+	private async synthesizeSegment(
+		index: number,
+		key: string,
+		keepGenerationVisible = false
+	): Promise<GeneratedSegment> {
+		if (!this.book) throw new Error('No document is open.');
+		const segment = this.book.segments[index];
+		if (!segment) throw new Error('This reading position no longer exists.');
+		const documentId = this.book.id;
+		const model = appState.selectedModel;
 		const controller = new AbortController();
+		let completed = false;
 		this.abortControllers.set(index, controller);
+		this.generationBySegment.set(index, 0.02);
 		try {
 			this.bufferingStage = `Generating “${segment.normalizedText.slice(0, 48)}${segment.normalizedText.length > 48 ? '…' : ''}”`;
 			const generated = await ttsClient.synthesize(
@@ -271,6 +445,7 @@ export class VoicebookPlayer {
 				controller.signal,
 				(update) => {
 					this.bufferingStage = update.status;
+					this.generationBySegment.set(index, Math.max(0.02, update.progress / 100));
 				},
 				appState.generationSteps
 			);
@@ -281,41 +456,29 @@ export class VoicebookPlayer {
 				? generated.metrics.elapsedMs / 1_000 / generated.metrics.audioDuration
 				: undefined;
 			this.lastPassageChars = segment.normalizedText.length;
-			const duration = generated.audio.length / generated.sampleRate;
-			const model = appState.selectedModel;
-			this.bufferingStage = 'Starting playback…';
-			const buffer = context.createBuffer(1, generated.audio.length, generated.sampleRate);
-			buffer.getChannelData(0).set(generated.audio);
-			const prepared = {
-				key,
-				buffer,
-				timing: generated.timing
+			completed = true;
+			return {
+				audio: generated.audio,
+				sampleRate: generated.sampleRate,
+				meta: {
+					key,
+					documentId,
+					segmentId: segment.id,
+					modelId: model.id,
+					modelRevision: model.revision,
+					voiceId: appState.selectedVoiceId,
+					generationSteps: appState.generationSteps,
+					backend: ttsClient.backend,
+					dtype: ttsClient.dtype,
+					duration: generated.audio.length / generated.sampleRate,
+					timing: generated.timing,
+					createdAt: Date.now()
+				},
+				signal: controller.signal
 			};
-			this.audioCache.set(key, prepared);
-			this.preparedBySegment.set(index, prepared);
-			const meta: Omit<AudioVariantMeta, 'mimeType'> = {
-				key,
-				documentId: this.book.id,
-				segmentId: segment.id,
-				modelId: model.id,
-				modelRevision: model.revision,
-				voiceId: appState.selectedVoiceId,
-				generationSteps: appState.generationSteps,
-				backend: ttsClient.backend,
-				dtype: ttsClient.dtype,
-				duration,
-				timing: generated.timing,
-				createdAt: Date.now()
-			};
-			void this.persistGeneratedAudio(
-				meta,
-				generated.audio,
-				generated.sampleRate,
-				controller.signal
-			);
-			return prepared;
 		} finally {
 			if (this.abortControllers.get(index) === controller) this.abortControllers.delete(index);
+			if (!keepGenerationVisible || !completed) this.generationBySegment.delete(index);
 		}
 	}
 
@@ -324,21 +487,96 @@ export class VoicebookPlayer {
 		audio: Float32Array,
 		sampleRate: number,
 		signal: AbortSignal
-	): Promise<void> {
+	): Promise<boolean> {
 		try {
 			const encoded = await encodeAudio(audio, sampleRate);
-			if (signal.aborted) return;
+			if (signal.aborted) return false;
 			await putAudio({ ...meta, mimeType: encoded.mimeType }, encoded.blob);
+			return true;
 		} catch {
 			// Persistence is an optimization; generated PCM must remain playable even
 			// if encoding or browser storage is temporarily unavailable.
+			return false;
 		}
+	}
+
+	private trackPersistence(index: number, generated: GeneratedSegment): Promise<boolean> {
+		const task = this.persistGeneratedAudio(
+			generated.meta,
+			generated.audio,
+			generated.sampleRate,
+			generated.signal
+		)
+			.then((saved) => {
+				if (
+					saved &&
+					this.book?.id === generated.meta.documentId &&
+					this.matchesCurrentVariant({ ...generated.meta, mimeType: '' })
+				)
+					this.cachedSegments.add(index);
+				this.generationProgress = this.cachedProgress * 100;
+				return saved;
+			})
+			.finally(() => {
+				if (this.persistenceBySegment.get(index) === task) this.persistenceBySegment.delete(index);
+			});
+		this.persistenceBySegment.set(index, task);
+		return task;
+	}
+
+	private prunePreparedAudio(center: number): void {
+		for (const [index, prepared] of this.preparedBySegment) {
+			if (Math.abs(index - center) <= 3) continue;
+			this.preparedBySegment.delete(index);
+			this.audioCache.delete(prepared.key);
+		}
+	}
+
+	private async cacheSegment(index: number): Promise<void> {
+		if (!this.book || this.cachedSegments.has(index)) return;
+		const playbackRequest = this.queue.get(index);
+		if (playbackRequest) {
+			await playbackRequest;
+			await this.persistenceBySegment.get(index);
+			if (this.cachedSegments.has(index)) return;
+			throw new Error('Voicebook generated a passage but could not save it on this device.');
+		}
+		await this.ensureEngine();
+		const segment = this.book.segments[index];
+		if (!segment) return;
+		const key = await this.cacheKey(segment);
+		if (await getAudio(key)) {
+			this.cachedSegments.add(index);
+			this.generationProgress = this.cachedProgress * 100;
+			return;
+		}
+		const generated = await this.synthesizeSegment(index, key, true);
+		this.generationBySegment.set(index, 1);
+		try {
+			if (!(await this.trackPersistence(index, generated)))
+				throw new Error('Voicebook generated a passage but could not save it on this device.');
+		} finally {
+			this.generationBySegment.delete(index);
+		}
+	}
+
+	private queuedCache(index: number): Promise<void> {
+		const existing = this.cacheQueue.get(index);
+		if (existing) return existing;
+		const request = this.cacheSegment(index).finally(() => {
+			if (this.cacheQueue.get(index) === request) this.cacheQueue.delete(index);
+		});
+		this.cacheQueue.set(index, request);
+		return request;
 	}
 
 	private queuedAudio(index: number): Promise<PreparedAudio> {
 		const existing = this.queue.get(index);
 		if (existing) return existing;
-		const request = this.prepareAudio(index).finally(() => {
+		const cacheRequest = this.cacheQueue.get(index);
+		const request = (
+			cacheRequest ? cacheRequest.then(() => this.prepareAudio(index)) : this.prepareAudio(index)
+		).finally(() => {
 			if (this.queue.get(index) === request) this.queue.delete(index);
 		});
 		this.queue.set(index, request);
@@ -434,7 +672,9 @@ export class VoicebookPlayer {
 		ttsClient.cancelAll();
 		this.isBuffering = false;
 		this.isGeneratingAll = false;
-		this.generationProgress = 0;
+		this.generationProgress = this.cachedProgress * 100;
+		this.generationBySegment.clear();
+		this.cacheQueue.clear();
 		this.bufferingStage = 'Preparing this passage…';
 		this.errorMessage = '';
 	}
@@ -484,10 +724,13 @@ export class VoicebookPlayer {
 
 	private updateClock(now = performance.now()): void {
 		if (!this.context || !this.isPlaying) return;
-		this.position = Math.min(
+		const previousPosition = this.position;
+		const nextPosition = Math.min(
 			this.currentDuration,
 			this.sourceOffset + (this.context.currentTime - this.sourceStartedAt) * this.rate
 		);
+		this.markListened(this.currentSegmentIndex, previousPosition, nextPosition);
+		this.position = nextPosition;
 		const timing = this.currentTiming();
 		if (timing) {
 			const index = timing.words.findLastIndex((word) => word.start <= this.position);
@@ -499,6 +742,18 @@ export class VoicebookPlayer {
 			this.updateMediaPosition();
 		}
 		void this.persistPosition(false);
+	}
+
+	private markListened(index: number, start: number, end: number): void {
+		if (!this.book || end <= start) return;
+		const segment = this.book.segments[index];
+		if (!segment) return;
+		this.book.listened ??= {};
+		this.book.listened[segment.id] = mergeListenedRange(
+			this.book.listened[segment.id] ?? [],
+			start,
+			end
+		);
 	}
 
 	private tick = (now: number): void => {
@@ -604,10 +859,24 @@ export class VoicebookPlayer {
 	}
 
 	async chooseVoice(id: string): Promise<void> {
-		this.pause();
+		this.stopPlayback(false);
+		const hadPendingSynthesis = this.isBuffering || this.isGeneratingAll || this.queue.size > 0;
+		this.cancellationVersion += 1;
 		this.reprioritize();
+		if (hadPendingSynthesis) ttsClient.cancelAll();
+		this.audioCache.clear();
 		this.preparedBySegment.clear();
+		this.cacheQueue.clear();
+		this.generationBySegment.clear();
+		this.isBuffering = false;
+		this.isGeneratingAll = false;
+		this.generationProgress = 0;
+		this.bufferingStage = 'Preparing this passage…';
+		this.errorMessage = '';
 		await appState.selectVoice(id);
+		this.cacheCoverageSignature = '';
+		this.cachedSegments.clear();
+		await this.refreshCacheCoverage(true);
 	}
 
 	async chooseGenerationSteps(value: number): Promise<void> {
@@ -617,13 +886,19 @@ export class VoicebookPlayer {
 		this.cancellationVersion += 1;
 		this.reprioritize();
 		if (hadPendingSynthesis) ttsClient.cancelAll();
+		this.audioCache.clear();
 		this.preparedBySegment.clear();
 		this.isBuffering = false;
 		this.isGeneratingAll = false;
 		this.generationProgress = 0;
+		this.generationBySegment.clear();
+		this.cacheQueue.clear();
 		this.bufferingStage = 'Preparing this passage…';
 		this.errorMessage = '';
 		await appState.setGenerationSteps(value);
+		this.cacheCoverageSignature = '';
+		this.cachedSegments.clear();
+		await this.refreshCacheCoverage(true);
 	}
 
 	async toggleBookmark(): Promise<void> {
@@ -661,23 +936,32 @@ export class VoicebookPlayer {
 	}
 
 	async generateAll(): Promise<void> {
-		if (!this.book || this.isGeneratingAll) return;
+		if (!this.book || this.isGeneratingAll || this.isDocumentPrepared) return;
 		this.isGeneratingAll = true;
-		this.generationProgress = 0;
 		this.errorMessage = '';
 		const version = this.cancellationVersion;
 		try {
 			await this.ensureEngine();
-			for (const [position, index] of generationPlan(
+			await this.refreshCacheCoverage(true);
+			this.generationProgress = this.cachedProgress * 100;
+			const plan = generationPlan(
 				this.book.segments.length,
 				this.currentSegmentIndex,
 				3,
 				true
-			).entries()) {
-				await this.queuedAudio(index);
-				if (version !== this.cancellationVersion) return;
-				this.generationProgress = ((position + 1) / this.book.segments.length) * 100;
-			}
+			).filter((index) => !this.cachedSegments.has(index));
+			let cursor = 0;
+			const concurrency = ttsClient.backend === 'webgpu' ? 2 : 1;
+			await Promise.all(
+				Array.from({ length: Math.min(concurrency, plan.length) }, async () => {
+					while (cursor < plan.length) {
+						const index = plan[cursor++];
+						await this.queuedCache(index);
+						if (version !== this.cancellationVersion) return;
+						this.generationProgress = this.cachedProgress * 100;
+					}
+				})
+			);
 			await appState.refreshStorage();
 		} catch (error) {
 			if (
@@ -687,7 +971,10 @@ export class VoicebookPlayer {
 				this.errorMessage =
 					error instanceof Error ? error.message : 'The full document could not be generated.';
 		} finally {
-			if (version === this.cancellationVersion) this.isGeneratingAll = false;
+			if (version === this.cancellationVersion) {
+				this.isGeneratingAll = false;
+				this.generationProgress = this.cachedProgress * 100;
+			}
 		}
 	}
 

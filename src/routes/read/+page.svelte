@@ -942,22 +942,29 @@
 				<button
 					class="generate-all icon-button"
 					class:active={player.isGeneratingAll}
+					class:ready={player.isDocumentPrepared}
 					type="button"
-					disabled={!player.isGeneratingAll && !installed}
+					disabled={player.isDocumentPrepared || (!player.isGeneratingAll && !installed)}
 					aria-busy={player.isGeneratingAll}
-					aria-label={player.isGeneratingAll
-						? `Stop preparing whole document, ${Math.round(player.generationProgress)} percent complete`
-						: 'Prepare whole document audio'}
-					title={player.isGeneratingAll
-						? `Stop preparing · ${Math.round(player.generationProgress)}%`
-						: 'Prepare whole document audio'}
+					aria-label={player.isDocumentPrepared
+						? 'Whole document audio is ready'
+						: player.isGeneratingAll
+							? `Stop preparing whole document, ${Math.round(player.generationProgress)} percent complete`
+							: 'Prepare whole document audio'}
+					title={player.isDocumentPrepared
+						? 'Whole document audio is ready'
+						: player.isGeneratingAll
+							? `Stop preparing · ${Math.round(player.generationProgress)}%`
+							: 'Prepare whole document audio'}
 					style:--generation-progress={`${Math.round(player.generationProgress)}%`}
 					onclick={() => {
 						if (player.isGeneratingAll) player.cancelGeneration();
 						else void player.generateAll();
 					}}
 				>
-					{#if player.isGeneratingAll}
+					{#if player.isDocumentPrepared}
+						<Check size={17} strokeWidth={2.2} />
+					{:else if player.isGeneratingAll}
 						<Square size={13} fill="currentColor" />
 					{:else}
 						<AudioLines size={17} />
@@ -1027,18 +1034,56 @@
 				</div>
 
 				<div class="timeline">
-					<span>{formatTime(player.progress * player.totalDuration)}</span>
-					<input
-						type="range"
-						min="0"
-						max="1000"
-						value={Math.round(player.progress * 1000)}
-						style:--timeline-progress={`${Math.round(player.progress * 100)}%`}
-						aria-label="Reading position"
-						onchange={(event) =>
-							player.seekToProgress(Number((event.currentTarget as HTMLInputElement).value) / 1000)}
-					/>
-					<span>{formatTime(player.totalDuration)}</span>
+					<span class="timeline-time">{formatTime(player.progress * player.totalDuration)}</span>
+					<div class="timeline-scrubber">
+						<div class="timeline-key" aria-hidden="true">
+							<span class="cached-key">Cached {Math.round(player.cachedProgress * 100)}%</span>
+							<span class="listened-key">Listened {Math.round(player.listenedProgress * 100)}%</span
+							>
+							{#if player.isGeneratingAll}
+								<span class="generating-key">Preparing</span>
+							{/if}
+						</div>
+						<div class="timeline-rail" aria-hidden="true">
+							{#each player.timelineSegments as segment (segment.id)}
+								{#if segment.cached}
+									<i
+										class="timeline-band cached"
+										style:left={`${segment.left * 100}%`}
+										style:width={`${segment.width * 100}%`}
+									></i>
+								{/if}
+								{#if segment.generating}
+									<i
+										class="timeline-band generating"
+										style:left={`${segment.left * 100}%`}
+										style:width={`${segment.width * segment.generating * 100}%`}
+									></i>
+								{/if}
+								{#each segment.listened as range (`${range.left}:${range.width}`)}
+									<i
+										class="timeline-band listened"
+										style:left={`${(segment.left + segment.width * range.left) * 100}%`}
+										style:width={`${segment.width * range.width * 100}%`}
+									></i>
+								{/each}
+							{/each}
+						</div>
+						<input
+							type="range"
+							min="0"
+							max="1000"
+							value={Math.round(player.progress * 1000)}
+							aria-label="Reading position"
+							aria-describedby="timeline-coverage-summary"
+							onchange={(event) =>
+								player.seekToProgress(
+									Number((event.currentTarget as HTMLInputElement).value) / 1000
+								)}
+						/>
+					</div>
+					<span class="timeline-time end">{formatTime(player.totalDuration)}</span>
+					<span id="timeline-coverage-summary" class="sr-only">{player.timelineSummary}</span>
 				</div>
 				<span class="sr-only" aria-live="polite" aria-atomic="true">
 					{player.isBuffering
@@ -1963,6 +2008,13 @@
 		color: var(--primary);
 	}
 
+	.generate-all.ready:disabled {
+		background: color-mix(in srgb, var(--timeline-cached) 14%, transparent);
+		color: var(--timeline-cached);
+		cursor: default;
+		opacity: 1;
+	}
+
 	.generate-all.active::before {
 		position: absolute;
 		inset: 2px;
@@ -2099,11 +2151,118 @@
 		font-variant-numeric: tabular-nums;
 	}
 
-	.timeline span:last-child {
+	.timeline-time.end {
 		text-align: right;
 	}
 
+	.timeline-scrubber {
+		position: relative;
+		height: 20px;
+		min-width: 0;
+	}
+
+	.timeline-rail {
+		position: absolute;
+		top: 50%;
+		right: 0;
+		left: 0;
+		height: 6px;
+		overflow: hidden;
+		border-radius: 999px;
+		background: var(--track);
+		transform: translateY(-50%);
+	}
+
+	.timeline-band {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		min-width: 1px;
+	}
+
+	.timeline-band.cached {
+		z-index: 1;
+		background: var(--timeline-cached);
+	}
+
+	.timeline-band.generating {
+		z-index: 2;
+		background: repeating-linear-gradient(
+			135deg,
+			var(--timeline-generating) 0 4px,
+			color-mix(in srgb, var(--timeline-generating) 54%, transparent) 4px 7px
+		);
+	}
+
+	.timeline-band.listened {
+		z-index: 3;
+		background: var(--timeline-listened);
+	}
+
+	.timeline-key {
+		position: absolute;
+		bottom: calc(100% + 8px);
+		left: 50%;
+		z-index: 5;
+		display: flex;
+		width: max-content;
+		align-items: center;
+		gap: 12px;
+		padding: 7px 9px;
+		border: 1px solid var(--control-border);
+		border-radius: 6px;
+		background: var(--surface-overlay);
+		color: var(--text-soft);
+		font-size: 9px;
+		font-weight: 560;
+		line-height: 1;
+		opacity: 0;
+		pointer-events: none;
+		transform: translate(-50%, 3px);
+		transition:
+			opacity 150ms var(--ease),
+			transform 150ms var(--ease),
+			visibility 150ms var(--ease);
+		visibility: hidden;
+	}
+
+	.timeline-key span {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		white-space: nowrap;
+	}
+
+	.timeline-key span::before {
+		width: 7px;
+		height: 7px;
+		border-radius: 2px;
+		background: currentColor;
+		content: '';
+	}
+
+	.cached-key {
+		color: var(--timeline-cached);
+	}
+
+	.listened-key {
+		color: var(--timeline-listened);
+	}
+
+	.generating-key {
+		color: var(--timeline-generating);
+	}
+
+	.timeline-scrubber:hover .timeline-key,
+	.timeline-scrubber:focus-within .timeline-key {
+		opacity: 1;
+		transform: translate(-50%, 0);
+		visibility: visible;
+	}
+
 	.timeline input {
+		position: relative;
+		z-index: 4;
 		appearance: none;
 		width: 100%;
 		height: 20px;
@@ -2111,14 +2270,19 @@
 		background: transparent;
 	}
 
-	.timeline input::-webkit-slider-runnable-track,
+	.timeline input::-webkit-slider-runnable-track {
+		height: 6px;
+		border-radius: 999px;
+		background: transparent;
+	}
+
 	.player-volume input::-webkit-slider-runnable-track {
 		height: 4px;
 		border-radius: 999px;
 		background: linear-gradient(
 			to right,
-			var(--primary) 0 var(--timeline-progress, var(--volume-progress, 0%)),
-			var(--track) var(--timeline-progress, var(--volume-progress, 0%)) 100%
+			var(--primary) 0 var(--volume-progress, 0%),
+			var(--track) var(--volume-progress, 0%) 100%
 		);
 	}
 
@@ -2134,7 +2298,13 @@
 		box-shadow: 0 0 0 1px var(--control-border);
 	}
 
-	.timeline input::-moz-range-track,
+	.timeline input::-moz-range-track {
+		height: 6px;
+		border: 0;
+		border-radius: 999px;
+		background: transparent;
+	}
+
 	.player-volume input::-moz-range-track {
 		height: 4px;
 		border: 0;
@@ -2142,7 +2312,11 @@
 		background: var(--track);
 	}
 
-	.timeline input::-moz-range-progress,
+	.timeline input::-moz-range-progress {
+		height: 6px;
+		background: transparent;
+	}
+
 	.player-volume input::-moz-range-progress {
 		height: 4px;
 		border-radius: 999px;
@@ -2205,6 +2379,10 @@
 	}
 
 	@media (prefers-reduced-motion: reduce) {
+		.timeline-key {
+			transition: none;
+		}
+
 		.play-button.loading::before {
 			animation: none;
 			transform: rotate(45deg);

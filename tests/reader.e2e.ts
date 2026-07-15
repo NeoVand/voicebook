@@ -293,6 +293,46 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await context.setOffline(false);
 });
 
+test('whole-document preparation fills cache coverage and preserves read-along timing', async ({
+	page
+}) => {
+	await page.goto('./');
+	await page.getByRole('link', { name: 'Voice', exact: true }).click();
+	await page.getByRole('checkbox', { name: 'I have reviewed the terms' }).check();
+	await page.getByRole('button', { name: 'Install locally' }).click();
+	await page.getByRole('link', { name: 'Library', exact: true }).click();
+	await page.getByRole('button', { name: 'Paste text' }).click();
+	await page.getByLabel('Title').fill('Prepared Without Pressure');
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill(
+			'First passage keeps its word timing. Second passage is cached without decoding. Third passage confirms the preparation state.'
+		);
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await page.evaluate(() => {
+		(
+			window as unknown as {
+				__voicebookTtsDelayMs: number;
+			}
+		).__voicebookTtsDelayMs = 120;
+	});
+
+	await page.getByRole('button', { name: 'Prepare whole document audio' }).click();
+	await expect(page.getByRole('button', { name: /Stop preparing whole document/ })).toBeVisible();
+	await expect(page.locator('.timeline-band.generating').first()).toBeVisible();
+	const ready = page.getByRole('button', { name: 'Whole document audio is ready' });
+	await expect(ready).toBeVisible();
+	await expect(ready).toBeDisabled();
+	await expect(page.locator('.timeline-band.cached')).toHaveCount(3);
+	await expect(page.locator('#timeline-coverage-summary')).toContainText('100% audio cached');
+
+	await page.getByRole('button', { name: 'Play', exact: true }).click();
+	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+	await expect(page.locator('.active-word').first()).toBeVisible();
+	await expect(page.locator('.timeline-band.listened').first()).toBeVisible();
+	await expect(page.locator('#timeline-coverage-summary')).not.toContainText('0% listened');
+});
+
 test('keeps the desktop player settings inside the playback dock', async ({ page }) => {
 	await page.goto('./');
 	await page.getByRole('button', { name: 'Paste text' }).click();
