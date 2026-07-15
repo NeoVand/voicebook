@@ -150,7 +150,7 @@
 					title={readerChrome.outlineOpen ? 'Close contents' : 'Open contents'}
 					onclick={() => (readerChrome.outlineOpen = !readerChrome.outlineOpen)}
 				>
-					<List size={17} />
+					<List size={16} strokeWidth={1.6} />
 				</button>
 				<div class="document-zoom" role="group" aria-label="Document zoom">
 					<button
