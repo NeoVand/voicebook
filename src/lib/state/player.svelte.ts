@@ -52,14 +52,6 @@ export interface TimelineSegmentVisual {
 	listened: Array<{ left: number; width: number }>;
 }
 
-function isMemoryConstrainedRuntime(): boolean {
-	const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-	return (
-		(memory !== undefined && memory <= 4) ||
-		(matchMedia('(pointer: coarse)').matches && matchMedia('(max-width: 840px)').matches)
-	);
-}
-
 export class VoicebookPlayer {
 	book = $state<NormalizedDocument | null>(null);
 	isPlaying = $state(false);
@@ -105,6 +97,7 @@ export class VoicebookPlayer {
 	private abortControllers = new SvelteMap<number, ActiveSynthesis>();
 	private lastSavedAt = 0;
 	private cancellationVersion = 0;
+	private prefetchVersion = 0;
 	private engineLoad?: { modelId: string; promise: Promise<void> };
 	private cacheCoverageSignature = '';
 	onSegmentChange?: (segmentId: string) => void;
@@ -241,6 +234,7 @@ export class VoicebookPlayer {
 	}
 
 	private reprioritize(preserveDocumentPreparation = false): void {
+		this.prefetchVersion += 1;
 		for (const [index, active] of this.abortControllers) {
 			if (preserveDocumentPreparation && active.purpose === 'document') continue;
 			active.controller.abort();
@@ -424,6 +418,7 @@ export class VoicebookPlayer {
 		const memory = this.audioCache.get(key);
 		if (memory) {
 			this.preparedBySegment.set(index, memory);
+			this.prunePreparedAudio(this.currentSegmentIndex);
 			return memory;
 		}
 		const stored = await getAudio(key);
@@ -437,7 +432,7 @@ export class VoicebookPlayer {
 			this.audioCache.set(key, prepared);
 			this.preparedBySegment.set(index, prepared);
 			this.cachedSegments.add(index);
-			this.prunePreparedAudio(index);
+			this.prunePreparedAudio(this.currentSegmentIndex);
 			return prepared;
 		}
 		this.cachedSegments.delete(index);
@@ -448,7 +443,7 @@ export class VoicebookPlayer {
 		const prepared = { key, buffer, timing: generated.meta.timing };
 		this.audioCache.set(key, prepared);
 		this.preparedBySegment.set(index, prepared);
-		this.prunePreparedAudio(index);
+		this.prunePreparedAudio(this.currentSegmentIndex);
 		void this.trackPersistence(index, generated);
 		return prepared;
 	}
@@ -524,6 +519,9 @@ export class VoicebookPlayer {
 		version: number
 	): Promise<boolean> {
 		try {
+			// Let the playback queue dispatch the next inference request before a
+			// synchronous WAV fallback starts walking the generated PCM on Safari.
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
 			const encoded = await encodeAudio(audio, sampleRate);
 			if (signal.aborted || version !== this.cancellationVersion) return false;
 			await putAudio({ ...meta, mimeType: encoded.mimeType }, encoded.blob);
@@ -562,7 +560,7 @@ export class VoicebookPlayer {
 	}
 
 	private prunePreparedAudio(center: number): void {
-		const radius = isMemoryConstrainedRuntime() ? 1 : 3;
+		const radius = 3;
 		for (const [index, prepared] of this.preparedBySegment) {
 			if (Math.abs(index - center) <= radius) continue;
 			this.preparedBySegment.delete(index);
@@ -627,14 +625,24 @@ export class VoicebookPlayer {
 
 	private prefetch(): void {
 		if (!this.book) return;
-		const lookAhead = ttsClient.backend === 'webgpu' && !isMemoryConstrainedRuntime() ? 2 : 1;
-		for (const index of generationPlan(
-			this.book.segments.length,
-			this.currentSegmentIndex,
-			lookAhead
-		).slice(1)) {
-			void this.queuedAudio(index).catch(() => undefined);
-		}
+		const documentId = this.book.id;
+		const version = this.prefetchVersion;
+		const upcoming = generationPlan(this.book.segments.length, this.currentSegmentIndex, 3).slice(
+			1
+		);
+		void (async () => {
+			// Keep inference serialized, but fill a real rolling buffer in narration
+			// order. Each result becomes playable before its storage encoding finishes.
+			for (const index of upcoming) {
+				if (
+					version !== this.prefetchVersion ||
+					this.book?.id !== documentId ||
+					index <= this.currentSegmentIndex
+				)
+					return;
+				await this.queuedAudio(index);
+			}
+		})().catch(() => undefined);
 	}
 
 	async play(): Promise<void> {
@@ -651,6 +659,9 @@ export class VoicebookPlayer {
 			this.bufferingStage = 'Opening audio output…';
 			const context = await this.audioGraph();
 			const prepared = await this.queuedAudio(this.currentSegmentIndex);
+			// Queue the next passage before waiting for iOS audio output to resume.
+			// That unlock can be noticeably slower than the desktop path.
+			this.prefetch();
 			this.bufferingStage = 'Starting audio output…';
 			await this.requireAudioOutput(context);
 			this.currentDuration = prepared.buffer.duration;
@@ -695,7 +706,6 @@ export class VoicebookPlayer {
 			this.isPlaying = true;
 			this.lastUiFrameAt = 0;
 			this.tick(performance.now());
-			this.prefetch();
 			if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
 		} catch (error) {
 			if (

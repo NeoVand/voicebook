@@ -126,6 +126,47 @@ test('detects and renders pasted Markdown as structured document content', async
 	await expect(readingCanvas).not.toContainText('```ts');
 });
 
+test('fills a rolling three-passage buffer while the current passage is playing', async ({
+	page
+}) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByLabel('Title').fill('Continuous listening');
+	const passages = [
+		'First passage is playing now.',
+		'Second passage should be ready next.',
+		'Third passage belongs in the rolling buffer.',
+		'Fourth passage proves the buffer keeps filling.'
+	];
+	await page.getByRole('textbox', { name: 'Text' }).fill(passages.join(' '));
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await page.evaluate(() => {
+		(
+			window as unknown as {
+				__voicebookTtsDelayMs: number;
+			}
+		).__voicebookTtsDelayMs = 100;
+	});
+
+	await page.getByRole('button', { name: 'Play', exact: true }).click();
+	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+	await expect(page.locator('.speech-segment.active')).toContainText(passages[0]);
+	await expect
+		.poll(() =>
+			page.evaluate(() =>
+				(
+					window as unknown as {
+						__voicebookTtsMessages: Array<{ type: string; text?: string }>;
+					}
+				).__voicebookTtsMessages
+					.filter((message) => message.type === 'synthesize')
+					.map((message) => message.text)
+			)
+		)
+		.toEqual(passages);
+	await expect(page.locator('.speech-segment.active')).toContainText(passages[0]);
+});
+
 test('import → install → play → seek → bookmark → reload → offline reopen', async ({
 	page,
 	context
