@@ -158,6 +158,11 @@ export interface PlaybackPosition {
 	updatedAt: number;
 }
 
+export interface ListenedRange {
+	start: number;
+	end: number;
+}
+
 export interface Bookmark {
 	id: string;
 	documentId: string;
@@ -185,6 +190,7 @@ export interface NormalizedDocument {
 	outline: OutlineEntry[];
 	bookmarks: Bookmark[];
 	playback?: PlaybackPosition;
+	listened?: Record<string, ListenedRange[]>;
 	warnings: string[];
 	includeCode: boolean;
 	sourcePath?: string;

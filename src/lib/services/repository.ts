@@ -197,6 +197,25 @@ export async function getAudio(key: string): Promise<{ meta: StoredAudio; blob: 
 	return { meta, blob };
 }
 
+export async function listAudioVariants(documentId: string): Promise<AudioVariantMeta[]> {
+	const records = await (await database()).getAllFromIndex('audio', 'documentId', documentId);
+	return records.map((record) => ({
+		key: record.key,
+		documentId: record.documentId,
+		segmentId: record.segmentId,
+		modelId: record.modelId,
+		modelRevision: record.modelRevision,
+		voiceId: record.voiceId,
+		generationSteps: record.generationSteps,
+		backend: record.backend,
+		dtype: record.dtype,
+		duration: record.duration,
+		mimeType: record.mimeType,
+		timing: record.timing,
+		createdAt: record.createdAt
+	}));
+}
+
 export async function clearGeneratedAudio(documentId?: string): Promise<void> {
 	const db = await database();
 	const records = documentId

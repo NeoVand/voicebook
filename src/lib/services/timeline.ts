@@ -1,3 +1,5 @@
+import type { ListenedRange } from '$lib/domain/types';
+
 export interface TimelinePosition {
 	index: number;
 	offset: number;
@@ -43,4 +45,40 @@ export function locateTimelinePosition(
 		remaining -= duration;
 	}
 	return { index: durations.length - 1, offset: safeDuration(durations.at(-1) ?? 0) };
+}
+
+export function mergeListenedRange(
+	ranges: ListenedRange[],
+	start: number,
+	end: number,
+	joinDistance = 0.2
+): ListenedRange[] {
+	const nextStart = safeDuration(Math.min(start, end));
+	const nextEnd = safeDuration(Math.max(start, end));
+	const candidates =
+		nextEnd > nextStart ? [...ranges, { start: nextStart, end: nextEnd }] : [...ranges];
+	const ordered = candidates
+		.map((range) => ({
+			start: safeDuration(Math.min(range.start, range.end)),
+			end: safeDuration(Math.max(range.start, range.end))
+		}))
+		.filter((range) => range.end > range.start)
+		.sort((left, right) => left.start - right.start);
+	const merged: ListenedRange[] = [];
+	for (const range of ordered) {
+		const previous = merged.at(-1);
+		if (previous && range.start <= previous.end + Math.max(0, joinDistance))
+			previous.end = Math.max(previous.end, range.end);
+		else merged.push({ ...range });
+	}
+	return merged;
+}
+
+export function listenedDuration(ranges: ListenedRange[], duration: number): number {
+	const limit = safeDuration(duration);
+	return mergeListenedRange(ranges, 0, 0).reduce((total, range) => {
+		const start = Math.min(limit, range.start);
+		const end = Math.min(limit, range.end);
+		return total + Math.max(0, end - start);
+	}, 0);
 }

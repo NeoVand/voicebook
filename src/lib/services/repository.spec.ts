@@ -10,6 +10,7 @@ import {
 	getDocumentByFingerprint,
 	getSetting,
 	getSource,
+	listAudioVariants,
 	listDocuments,
 	putAudio,
 	putDocument,
@@ -132,6 +133,10 @@ describe('local repository', () => {
 		const stored = await putAudio(audioMeta(document.id), blob);
 		expect(stored).toMatchObject({ storage: 'idb', path: undefined });
 		expect((await getAudio(stored.key))?.blob).toEqual(blob);
+		expect(await listAudioVariants(document.id)).toEqual([
+			expect.objectContaining({ key: stored.key, documentId: document.id, voiceId: 'F1' })
+		]);
+		expect(await listAudioVariants('another-document')).toEqual([]);
 		await clearGeneratedAudio(document.id);
 		expect(await getAudio(stored.key)).toBeNull();
 		await deleteDocument(document.id);
