@@ -15,6 +15,7 @@
 		List,
 		ListMusic,
 		Maximize2,
+		Menu,
 		Minimize2,
 		Moon,
 		PanelLeftClose,
@@ -63,6 +64,7 @@
 	let sidebarCollapsed = $state(
 		browser && window.localStorage.getItem(sidebarStorageKey) === 'true'
 	);
+	let mobileSidebarOpen = $state(false);
 	let theme = $state<ThemeId>(
 		normalizeTheme(browser ? document.documentElement.dataset.theme : undefined)
 	);
@@ -110,6 +112,11 @@
 		window.localStorage.setItem(sidebarStorageKey, String(sidebarCollapsed));
 	}
 
+	function closeNavigation(): void {
+		mobileSidebarOpen = false;
+		readerChrome.closeTransientPanels();
+	}
+
 	function toggleTheme(): void {
 		theme = nextTheme;
 		document.documentElement.dataset.theme = theme;
@@ -139,16 +146,22 @@
 
 <header class="app-header" class:sidebar-collapsed={sidebarCollapsed} aria-label="Voicebook header">
 	<div class="app-brand-slot">
-		<a
-			class="brand"
-			href={homeHref}
-			aria-label="Voicebook library"
-			onclick={() => readerChrome.closeTransientPanels()}
-		>
+		<a class="brand" href={homeHref} aria-label="Voicebook library" onclick={closeNavigation}>
 			<span class="brand-mark" aria-hidden="true"><BookOpenText size={18} strokeWidth={1.8} /></span
 			>
 			<span class="brand-name">Voicebook</span>
 		</a>
+		<button
+			class="mobile-nav-toggle icon-button"
+			type="button"
+			aria-label={mobileSidebarOpen ? 'Close navigation' : 'Open navigation'}
+			aria-controls="voicebook-navigation"
+			aria-expanded={mobileSidebarOpen}
+			title={mobileSidebarOpen ? 'Close navigation' : 'Open navigation'}
+			onclick={() => (mobileSidebarOpen = !mobileSidebarOpen)}
+		>
+			{#if mobileSidebarOpen}<X size={17} />{:else}<Menu size={17} />{/if}
+		</button>
 	</div>
 
 	{#if isReader && readerBook}
@@ -295,8 +308,22 @@
 	{/if}
 </header>
 
+{#if mobileSidebarOpen}
+	<button
+		class="mobile-nav-scrim"
+		type="button"
+		aria-label="Close navigation"
+		onclick={() => (mobileSidebarOpen = false)}
+	></button>
+{/if}
+
 <div class="app-shell" class:sidebar-collapsed={sidebarCollapsed} class:reader-mode={isReader}>
-	<aside class="app-sidebar" aria-label="Voicebook navigation">
+	<aside
+		id="voicebook-navigation"
+		class="app-sidebar"
+		class:mobile-open={mobileSidebarOpen}
+		aria-label="Voicebook navigation"
+	>
 		<div class="sidebar-head">
 			<div class="library-nav-group">
 				<a
@@ -306,13 +333,13 @@
 					aria-label="Library"
 					aria-current={page.url.pathname === homeHref ? 'page' : undefined}
 					data-tooltip="Library"
-					onclick={() => readerChrome.closeTransientPanels()}
+					onclick={closeNavigation}
 				>
 					<Library size={17} />
 					<span>Library</span>
 				</a>
 
-				{#if sidebarCollapsed && appState.documents.length}
+				{#if sidebarCollapsed && !mobileSidebarOpen && appState.documents.length}
 					<div class="library-flyout" aria-label="Recent documents">
 						<strong>Recent documents</strong>
 						{#each appState.documents.slice(0, 7) as document (document.id)}
@@ -320,7 +347,7 @@
 								class:active={activeReaderDocumentId === document.id}
 								href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
 								aria-current={activeReaderDocumentId === document.id ? 'page' : undefined}
-								onclick={() => readerChrome.closeTransientPanels()}
+								onclick={closeNavigation}
 							>
 								<DocumentKindIcon kind={document.sourceKind} size={14} />
 								<span>{document.title}</span>
@@ -347,7 +374,7 @@
 		</div>
 
 		<div id="primary-navigation" class="sidebar-main">
-			{#if !sidebarCollapsed}
+			{#if !sidebarCollapsed || mobileSidebarOpen}
 				<div class="sidebar-documents">
 					<span class="sidebar-section-label">Recent</span>
 					{#if appState.documents.length}
@@ -358,7 +385,7 @@
 									href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
 									aria-current={activeReaderDocumentId === document.id ? 'page' : undefined}
 									title={document.title}
-									onclick={() => readerChrome.closeTransientPanels()}
+									onclick={closeNavigation}
 								>
 									<DocumentKindIcon kind={document.sourceKind} size={14} />
 									<span>{document.title}</span>
@@ -382,7 +409,7 @@
 					? 'page'
 					: undefined}
 				data-tooltip="Voice"
-				onclick={() => readerChrome.closeTransientPanels()}
+				onclick={closeNavigation}
 			>
 				<Cpu size={17} />
 				<span>Voice</span>
@@ -396,7 +423,7 @@
 					? 'page'
 					: undefined}
 				data-tooltip="Storage"
-				onclick={() => readerChrome.closeTransientPanels()}
+				onclick={closeNavigation}
 			>
 				<HardDrive size={17} />
 				<span>Storage</span>
@@ -410,7 +437,7 @@
 					? 'page'
 					: undefined}
 				data-tooltip="System"
-				onclick={() => readerChrome.closeTransientPanels()}
+				onclick={closeNavigation}
 			>
 				<Settings2 size={17} />
 				<span>System</span>

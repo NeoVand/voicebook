@@ -30,6 +30,7 @@
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
 	import PlayerActionsMenu from '$lib/components/PlayerActionsMenu.svelte';
 	import SafeHtml from '$lib/components/SafeHtml.svelte';
+	import VolumeControl from '$lib/components/VolumeControl.svelte';
 	import type {
 		DocumentBlock,
 		InlineRun,
@@ -963,22 +964,26 @@
 
 		<footer class="player-bar" aria-label="Playback controls">
 			<div class="generation-options" role="group" aria-label="Speech generation settings">
-				<CompactSelect
-					label="Voice"
-					value={appState.selectedVoiceId}
-					options={voiceOptions}
-					onChange={changeVoice}
-					triggerWidth="106px"
-					menuWidth="148px"
-				/>
-				<CompactSelect
-					label="Generation quality"
-					value={String(appState.generationSteps)}
-					options={generationQualityOptions}
-					onChange={changeGenerationQuality}
-					triggerWidth="86px"
-					menuWidth="96px"
-				/>
+				<div class="generation-control voice-control">
+					<CompactSelect
+						label="Voice"
+						value={appState.selectedVoiceId}
+						options={voiceOptions}
+						onChange={changeVoice}
+						triggerWidth="106px"
+						menuWidth="148px"
+					/>
+				</div>
+				<div class="generation-control quality-control">
+					<CompactSelect
+						label="Generation quality"
+						value={String(appState.generationSteps)}
+						options={generationQualityOptions}
+						onChange={changeGenerationQuality}
+						triggerWidth="86px"
+						menuWidth="96px"
+					/>
+				</div>
 				<button
 					class="generate-all icon-button"
 					class:active={player.isGeneratingAll}
@@ -1135,38 +1140,29 @@
 			</div>
 
 			<div class="player-options" role="group" aria-label="Playback settings">
-				<CompactSelect
-					label="Playback speed"
-					value={String(player.rate)}
-					options={playbackSpeedOptions}
-					onChange={(value) => player.setRate(Number(value))}
-					triggerWidth="58px"
-					menuWidth="86px"
-					align="end"
-				/>
-				<label class="player-volume">
-					<span class="sr-only">Volume</span>
-					<Volume2 size={16} aria-hidden="true" />
-					<input
-						aria-label="Volume"
-						type="range"
-						min="0"
-						max="1"
-						step="0.05"
-						value={player.volume}
-						style:--volume-progress={`${Math.round(player.volume * 100)}%`}
-						oninput={(event) =>
-							player.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
+				<div class="speed-control">
+					<CompactSelect
+						label="Playback speed"
+						value={String(player.rate)}
+						options={playbackSpeedOptions}
+						onChange={(value) => player.setRate(Number(value))}
+						triggerWidth="58px"
+						menuWidth="86px"
+						align="end"
 					/>
-				</label>
+				</div>
+				<VolumeControl volume={player.volume} onChange={(volume) => player.setVolume(volume)} />
 				<PlayerActionsMenu
 					canDownload={player.isDocumentPrepared}
 					canClear={player.hasDocumentAudioState}
 					downloading={downloadingAudio}
 					clearing={clearingAudio}
 					{downloadProgress}
+					generationSteps={appState.generationSteps}
+					generationStepOptions={GENERATION_STEP_OPTIONS}
 					onDownload={downloadDocumentAudio}
 					onClear={clearCachedAudio}
+					onGenerationStepsChange={(steps) => changeGenerationQuality(String(steps))}
 				/>
 				<span class="sr-only" aria-live="polite">{audioMenuAnnouncement}</span>
 			</div>
@@ -2045,6 +2041,11 @@
 		gap: 4px;
 	}
 
+	.generation-control,
+	.speed-control {
+		display: contents;
+	}
+
 	.generate-all {
 		position: relative;
 		width: 36px;
@@ -2515,7 +2516,7 @@
 
 	@media (max-width: 560px) {
 		.reader-shell {
-			--player-height: calc(88px + env(safe-area-inset-bottom));
+			--player-height: calc(126px + env(safe-area-inset-bottom));
 		}
 
 		.outline-panel {
@@ -2523,16 +2524,33 @@
 		}
 
 		.player-bar {
-			grid-template-columns: minmax(0, 1fr);
-			padding: 3px 12px env(safe-area-inset-bottom);
+			grid-template-columns: minmax(0, 1fr) auto;
+			grid-template-rows: 78px 44px;
+			grid-template-areas:
+				'transport transport'
+				'generation options';
+			gap: 0 6px;
+			padding: 2px 12px env(safe-area-inset-bottom);
 		}
 
-		.generation-options,
+		.generation-options {
+			grid-area: generation;
+			gap: 2px;
+		}
+
 		.player-options {
+			display: flex;
+			width: auto;
+			grid-area: options;
+			gap: 0;
+		}
+
+		.quality-control {
 			display: none;
 		}
 
 		.transport {
+			grid-area: transport;
 			grid-template-columns: minmax(0, 1fr);
 			grid-template-rows: 32px 44px;
 			gap: 1px;

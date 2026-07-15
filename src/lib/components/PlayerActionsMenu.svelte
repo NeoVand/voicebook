@@ -1,5 +1,11 @@
 <script lang="ts">
-	import { Download, EllipsisVertical, LoaderCircle, Trash2 } from '@lucide/svelte';
+	import {
+		Download,
+		EllipsisVertical,
+		LoaderCircle,
+		SlidersHorizontal,
+		Trash2
+	} from '@lucide/svelte';
 	import { tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
@@ -10,8 +16,11 @@
 		downloading: boolean;
 		clearing: boolean;
 		downloadProgress: number;
+		generationSteps: number;
+		generationStepOptions: readonly number[];
 		onDownload: () => void | Promise<void>;
 		onClear: () => void | Promise<void>;
+		onGenerationStepsChange: (steps: number) => void | Promise<void>;
 	}
 
 	let {
@@ -20,8 +29,11 @@
 		downloading,
 		clearing,
 		downloadProgress,
+		generationSteps,
+		generationStepOptions,
 		onDownload,
-		onClear
+		onClear,
+		onGenerationStepsChange
 	}: Props = $props();
 	const uid = $props.id();
 	let open = $state(false);
@@ -51,9 +63,9 @@
 	};
 
 	function menuItems(): HTMLButtonElement[] {
-		return Array.from(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []).filter(
-			(item) => !item.disabled
-		);
+		return Array.from(
+			menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"], [role="menuitemradio"]') ?? []
+		).filter((item) => !item.disabled);
 	}
 
 	async function openMenu(): Promise<void> {
@@ -114,6 +126,12 @@
 		await onDownload();
 		trigger?.focus();
 	}
+
+	async function changeGenerationSteps(steps: number): Promise<void> {
+		closeMenu();
+		await onGenerationStepsChange(steps);
+		trigger?.focus();
+	}
 </script>
 
 <svelte:window onpointerdown={handleWindowPointerDown} />
@@ -151,6 +169,28 @@
 			transition:fly={{ y: 5, duration: 120 }}
 			{@attach trackMenu}
 		>
+			<div class="mobile-quality-menu" role="group" aria-label="Generation quality">
+				<div class="menu-heading">
+					<SlidersHorizontal size={14} strokeWidth={1.8} aria-hidden="true" />
+					<span>
+						<strong>Generation quality</strong>
+						<small>{generationSteps} steps</small>
+					</span>
+				</div>
+				<div class="quality-options">
+					{#each generationStepOptions as steps (steps)}
+						<button
+							class:selected={steps === generationSteps}
+							type="button"
+							role="menuitemradio"
+							aria-checked={steps === generationSteps}
+							onclick={() => void changeGenerationSteps(steps)}
+						>
+							{steps}
+						</button>
+					{/each}
+				</div>
+			</div>
 			<button
 				class="menu-item"
 				type="button"
@@ -237,6 +277,10 @@
 		box-shadow: 0 14px 42px rgba(0, 0, 0, 0.48);
 	}
 
+	.mobile-quality-menu {
+		display: none;
+	}
+
 	.menu-item {
 		display: grid;
 		width: 100%;
@@ -308,6 +352,71 @@
 	@media (prefers-reduced-motion: reduce) {
 		.spinner {
 			animation: none;
+		}
+	}
+
+	@media (max-width: 560px) {
+		.actions-trigger {
+			width: 40px;
+			height: 40px;
+		}
+
+		.actions-menu {
+			width: min(230px, calc(100vw - 24px));
+			max-height: min(430px, calc(100dvh - 170px));
+			overflow-y: auto;
+		}
+
+		.mobile-quality-menu {
+			display: grid;
+			gap: 7px;
+			padding: 8px 8px 10px;
+			border-bottom: 1px solid var(--line);
+		}
+
+		.menu-heading {
+			display: grid;
+			grid-template-columns: 18px minmax(0, 1fr);
+			align-items: center;
+			gap: 7px;
+			color: var(--muted);
+		}
+
+		.menu-heading span,
+		.menu-heading strong,
+		.menu-heading small {
+			display: block;
+		}
+
+		.menu-heading strong {
+			font-size: 10px;
+		}
+
+		.menu-heading small {
+			margin-top: 2px;
+			color: var(--faint);
+			font-size: 8px;
+		}
+
+		.quality-options {
+			display: grid;
+			grid-template-columns: repeat(4, 1fr);
+			gap: 3px;
+		}
+
+		.quality-options button {
+			height: 32px;
+			padding: 0;
+			border: 0;
+			border-radius: 4px;
+			background: var(--control);
+			color: var(--muted);
+			font-size: 10px;
+		}
+
+		.quality-options button.selected {
+			background: var(--primary-soft);
+			color: var(--primary);
 		}
 	}
 </style>
