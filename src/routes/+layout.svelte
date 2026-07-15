@@ -85,6 +85,24 @@
 	onMount(() => {
 		readerChrome.hydratePreferences();
 		void appState.initialize();
+
+		if (!('serviceWorker' in navigator)) return;
+		const hadController = Boolean(navigator.serviceWorker.controller);
+		let reloading = false;
+		const activateUpdate = () => {
+			if (!hadController || reloading) return;
+			reloading = true;
+			window.location.reload();
+		};
+		const checkForUpdate = () =>
+			void navigator.serviceWorker.ready.then((worker) => worker.update());
+		navigator.serviceWorker.addEventListener('controllerchange', activateUpdate);
+		window.addEventListener('focus', checkForUpdate);
+		checkForUpdate();
+		return () => {
+			navigator.serviceWorker.removeEventListener('controllerchange', activateUpdate);
+			window.removeEventListener('focus', checkForUpdate);
+		};
 	});
 
 	function toggleSidebar(): void {
@@ -141,7 +159,7 @@
 
 			<div class="reader-commandbar-actions">
 				<button
-					class="icon-button"
+					class="icon-button mobile-reader-hidden"
 					class:active={readerChrome.outlineOpen}
 					type="button"
 					aria-label={readerChrome.outlineOpen ? 'Close document outline' : 'Open document outline'}

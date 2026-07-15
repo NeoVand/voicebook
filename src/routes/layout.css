@@ -1165,6 +1165,16 @@ textarea {
 	.shell-content {
 		grid-column: auto;
 	}
+
+	.reader-commandbar .mobile-reader-hidden,
+	.reader-commandbar .document-zoom,
+	.reader-commandbar .commandbar-divider {
+		display: none;
+	}
+
+	.reader-commandbar {
+		padding-right: max(6px, env(safe-area-inset-right));
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {

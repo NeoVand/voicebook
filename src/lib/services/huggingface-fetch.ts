@@ -1,4 +1,4 @@
-import { downloadFile } from '@huggingface/hub';
+import { downloadFile, pathsInfo } from '@huggingface/hub';
 
 interface HuggingFaceAsset {
 	repository: string;
@@ -36,6 +36,62 @@ function requestRange(input: RequestInfo | URL, init?: RequestInit): [number, nu
 	return [Number(match[1]), match[2] ? Number(match[2]) : undefined];
 }
 
+function isMissingSizeError(error: unknown): boolean {
+	return error instanceof Error && error.message.includes('Expected size information');
+}
+
+async function downloadHubAsset(
+	asset: HuggingFaceAsset,
+	hubFetch: typeof fetch
+): Promise<Blob | null> {
+	const parameters = {
+		repo: { type: 'model' as const, name: asset.repository },
+		path: asset.path,
+		revision: asset.revision
+	};
+	try {
+		return await downloadFile({ ...parameters, fetch: hubFetch });
+	} catch (error) {
+		if (!isMissingSizeError(error)) throw error;
+
+		// Some mobile WebKit versions do not expose Content-Range on the Hub's
+		// one-byte metadata probe. Recover the immutable size from the Hub API,
+		// then repair only that probe so the actual artifact remains streaming.
+		const [pathInfo] = await pathsInfo({
+			repo: parameters.repo,
+			paths: [asset.path],
+			revision: asset.revision,
+			fetch: hubFetch
+		});
+		if (!pathInfo || !Number.isFinite(pathInfo.size)) throw error;
+
+		const metadataFetch: typeof fetch = async (input, init) => {
+			const response = await hubFetch(input, init);
+			const range = requestRange(input, init);
+			if (!range || range[0] !== 0 || range[1] !== 0 || response.headers.has('content-range')) {
+				return response;
+			}
+
+			void response.body?.cancel();
+			const headers = new Headers(response.headers);
+			headers.set('content-type', 'application/octet-stream');
+			headers.set('content-length', '1');
+			headers.set('content-range', `bytes 0-0/${pathInfo.size}`);
+			if (!headers.has('etag') && !headers.has('x-linked-etag')) {
+				headers.set(
+					'x-linked-etag',
+					pathInfo.xetHash ?? pathInfo.lfs?.oid ?? pathInfo.oid ?? `${asset.revision}:${asset.path}`
+				);
+			}
+			const repaired = new Response(null, { status: 206, statusText: 'Partial Content', headers });
+			Object.defineProperty(repaired, 'url', { value: response.url });
+			return repaired;
+		};
+
+		return downloadFile({ ...parameters, fetch: metadataFetch, xet: false });
+	}
+}
+
 /**
  * Fetches Hub assets through the browser Xet reader instead of following the
  * legacy CAS redirect. Some Xet-backed public files currently return a 403 at
@@ -52,12 +108,7 @@ export function createHuggingFaceFetch(nativeFetch: typeof fetch): typeof fetch 
 		const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
 		const hubFetch: typeof fetch = (hubInput, hubInit) =>
 			nativeFetch(hubInput, { ...hubInit, signal: signal ?? hubInit?.signal });
-		const blob = await downloadFile({
-			repo: { type: 'model', name: asset.repository },
-			path: asset.path,
-			revision: asset.revision,
-			fetch: hubFetch
-		});
+		const blob = await downloadHubAsset(asset, hubFetch);
 		if (!blob) return new Response(null, { status: 404, statusText: 'Not Found' });
 
 		const range = requestRange(input, init);

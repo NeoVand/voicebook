@@ -320,16 +320,28 @@ test('whole-document preparation fills cache coverage and preserves read-along t
 	await page.getByRole('button', { name: 'Prepare whole document audio' }).click();
 	await expect(page.getByRole('button', { name: /Stop preparing whole document/ })).toBeVisible();
 	await expect(page.locator('.timeline-band.generating').first()).toBeVisible();
+	await expect(page.locator('.timeline-band.generating').first()).not.toHaveCSS(
+		'background-image',
+		'none'
+	);
 	const ready = page.getByRole('button', { name: 'Whole document audio is ready' });
 	await expect(ready).toBeVisible();
 	await expect(ready).toBeDisabled();
 	await expect(page.locator('.timeline-band.cached')).toHaveCount(6);
+	await expect(page.locator('.timeline-band.cached').first()).not.toHaveCSS(
+		'background-color',
+		'rgba(0, 0, 0, 0)'
+	);
 	await expect(page.locator('#timeline-coverage-summary')).toContainText('100% audio cached');
 
 	await page.getByRole('button', { name: 'Play', exact: true }).click();
 	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
 	await expect(page.locator('.active-word').first()).toBeVisible();
 	await expect(page.locator('.timeline-band.listened').first()).toBeVisible();
+	await expect(page.locator('.timeline-band.listened').first()).not.toHaveCSS(
+		'background-color',
+		'rgba(0, 0, 0, 0)'
+	);
 	await expect(page.locator('#timeline-coverage-summary')).not.toContainText('0% listened');
 
 	await page.getByRole('button', { name: 'Document audio options' }).click();
@@ -389,6 +401,39 @@ test('whole-document preparation fills cache coverage and preserves read-along t
 	await page.getByRole('button', { name: 'Play', exact: true }).click();
 	await expect(page.locator('.timeline-band.listened').first()).toBeVisible();
 	await expect(page.locator('#timeline-coverage-summary')).not.toContainText('0% listened');
+});
+
+test('keeps the phone reader focused on content and a compact transport', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.goto('./');
+	await page.getByRole('button', { name: 'Paste text' }).click();
+	await page.getByLabel('Title').fill('Pocket reader');
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill('The phone reader keeps the document and essential playback controls in view.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+
+	await expect(page.getByRole('complementary', { name: 'Document outline' })).toBeHidden();
+	await expect(page.getByRole('button', { name: 'Close document outline' })).toBeHidden();
+	await expect(page.getByRole('group', { name: 'Document zoom' })).toBeHidden();
+	await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toBeHidden();
+	await expect(page.getByRole('group', { name: 'Speech generation settings' })).toBeHidden();
+	await expect(page.getByRole('group', { name: 'Playback settings' })).toBeHidden();
+	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Back 10 seconds' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Forward 10 seconds' })).toBeVisible();
+	await expect(page.getByRole('slider', { name: 'Reading position' })).toBeVisible();
+
+	const geometry = await page.locator('.player-bar').evaluate((playerBar) => {
+		const reader = document.querySelector<HTMLElement>('.reader-stage');
+		const bounds = playerBar.getBoundingClientRect();
+		return {
+			playerWidth: bounds.width,
+			playerHeight: bounds.height,
+			readerWidth: reader?.getBoundingClientRect().width
+		};
+	});
+	expect(geometry).toEqual({ playerWidth: 390, playerHeight: 88, readerWidth: 390 });
 });
 
 test('keeps the desktop player settings inside the playback dock', async ({ page }) => {
