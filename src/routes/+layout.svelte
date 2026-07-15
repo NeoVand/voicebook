@@ -10,7 +10,6 @@
 		CloudRain,
 		CloudSun,
 		Cpu,
-		FileText,
 		HardDrive,
 		Library,
 		List,
@@ -28,6 +27,7 @@
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
+	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import GitHubOutline from '$lib/components/GitHubOutline.svelte';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
@@ -302,7 +302,7 @@
 								href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
 								onclick={() => readerChrome.closeTransientPanels()}
 							>
-								<FileText size={14} />
+								<DocumentKindIcon kind={document.sourceKind} size={14} />
 								<span>{document.title}</span>
 							</a>
 						{/each}
@@ -339,7 +339,7 @@
 									title={document.title}
 									onclick={() => readerChrome.closeTransientPanels()}
 								>
-									<FileText size={13} />
+									<DocumentKindIcon kind={document.sourceKind} size={13} />
 									<span>{document.title}</span>
 								</a>
 							{/each}

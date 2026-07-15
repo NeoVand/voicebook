@@ -1141,6 +1141,8 @@
 		min-height: 0;
 		grid-row: 1;
 		background: var(--chrome-surface);
+		-webkit-backdrop-filter: var(--chrome-backdrop);
+		backdrop-filter: var(--chrome-backdrop);
 		flex-direction: column;
 		padding-top: var(--app-header-height);
 	}
@@ -1932,8 +1934,8 @@
 		border-top: 1px solid var(--line);
 		background: var(--chrome-surface);
 		box-shadow: none;
-		-webkit-backdrop-filter: blur(22px) saturate(1.35);
-		backdrop-filter: blur(22px) saturate(1.35);
+		-webkit-backdrop-filter: var(--chrome-backdrop);
+		backdrop-filter: var(--chrome-backdrop);
 		isolation: isolate;
 	}
 

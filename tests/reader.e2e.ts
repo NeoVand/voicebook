@@ -119,6 +119,12 @@ test('import → install → play → seek → bookmark → reload → offline r
 				chrome: [header, sidebar, outline, bookmarks, playerBar].map(
 					(element) => getComputedStyle(element).backgroundColor
 				),
+				chromeBackdrop: [header, sidebar, outline, bookmarks, playerBar].map((element) => {
+					const style = getComputedStyle(element);
+					return style.backdropFilter && style.backdropFilter !== 'none'
+						? style.backdropFilter
+						: style.getPropertyValue('-webkit-backdrop-filter');
+				}),
 				document: [readerStage, readingCanvas].map(
 					(element) => getComputedStyle(element).backgroundColor
 				)
@@ -129,6 +135,11 @@ test('import → install → play → seek → bookmark → reload → offline r
 		await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 		const surfaces = await readerSurfaceColors();
 		expect(new Set(surfaces.chrome).size, `${theme} chrome surfaces should match`).toBe(1);
+		expect(surfaces.chrome[0], `${theme} chrome should remain translucent`).toContain('rgba');
+		expect(
+			surfaces.chromeBackdrop,
+			`${theme} chrome surfaces should share the frosted backdrop`
+		).toEqual(Array(5).fill('blur(22px) saturate(1.35)'));
 		expect(new Set(surfaces.document).size, `${theme} document surfaces should match`).toBe(1);
 		await readerThemeButton.click();
 	}

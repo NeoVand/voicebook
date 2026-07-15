@@ -5,15 +5,13 @@
 		ArrowRight,
 		BookOpenText,
 		Clock3,
-		FileCode,
-		FileScan,
 		FileText,
-		FileType,
 		FileUp,
 		Plus,
 		Trash2,
 		X
 	} from '@lucide/svelte';
+	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import type { DocumentKind, NormalizedDocument } from '$lib/domain/types';
 	import { appState } from '$lib/state/app-state.svelte';
 
@@ -181,15 +179,7 @@
 							aria-label={'Open ' + document.title}
 						>
 							<span class="file-kind" aria-hidden="true">
-								{#if document.sourceKind === 'pdf'}
-									<FileScan size={20} strokeWidth={1.7} />
-								{:else if document.sourceKind === 'docx'}
-									<FileType size={20} strokeWidth={1.7} />
-								{:else if document.sourceKind === 'markdown'}
-									<FileCode size={20} strokeWidth={1.7} />
-								{:else}
-									<FileText size={20} strokeWidth={1.7} />
-								{/if}
+								<DocumentKindIcon kind={document.sourceKind} />
 								<small>{fileKindLabel(document.sourceKind)}</small>
 							</span>
 							<span class="document-copy">

@@ -13,7 +13,8 @@
 	--sidebar-width: 216px;
 	--sidebar-collapsed-width: var(--chrome-size);
 	--bg: #0b0c0f;
-	--chrome-surface: #101115;
+	--chrome-surface: rgba(16, 17, 21, 0.84);
+	--chrome-backdrop: blur(22px) saturate(1.35);
 	--surface: #14161b;
 	--surface-overlay: #1b1d23;
 	--surface-hover: #191b21;
@@ -80,7 +81,7 @@
 :root[data-theme='light'] {
 	color-scheme: light;
 	--bg: #edf1f3;
-	--chrome-surface: #e7ecef;
+	--chrome-surface: rgba(231, 236, 239, 0.84);
 	--surface: #f7f9fa;
 	--surface-overlay: #ffffff;
 	--surface-hover: #eef2f4;
@@ -142,7 +143,7 @@
 :root[data-theme='sunny'] {
 	color-scheme: light;
 	--bg: #f4efe6;
-	--chrome-surface: #eee7dc;
+	--chrome-surface: rgba(238, 231, 220, 0.84);
 	--surface: #faf6ef;
 	--surface-overlay: #fffdf8;
 	--surface-hover: #f3ece1;
@@ -204,7 +205,7 @@
 :root[data-theme='rainy'] {
 	color-scheme: dark;
 	--bg: #101820;
-	--chrome-surface: #131c25;
+	--chrome-surface: rgba(19, 28, 37, 0.84);
 	--surface: #17222c;
 	--surface-overlay: #202e39;
 	--surface-hover: #1c2934;
@@ -350,8 +351,8 @@ h3 {
 	border-bottom: 1px solid var(--line);
 	background: var(--chrome-surface);
 	box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 18%, transparent);
-	backdrop-filter: blur(22px) saturate(1.35);
-	-webkit-backdrop-filter: blur(22px) saturate(1.35);
+	-webkit-backdrop-filter: var(--chrome-backdrop);
+	backdrop-filter: var(--chrome-backdrop);
 	isolation: isolate;
 	pointer-events: none;
 }
@@ -518,6 +519,8 @@ h3 {
 	padding: 8px 8px 12px;
 	border-right: 1px solid var(--line);
 	background: var(--chrome-surface);
+	-webkit-backdrop-filter: var(--chrome-backdrop);
+	backdrop-filter: var(--chrome-backdrop);
 	flex-direction: column;
 }
 
