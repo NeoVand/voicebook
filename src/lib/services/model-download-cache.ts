@@ -134,11 +134,44 @@ async function cacheChunk(
 	}
 }
 
+async function fetchChunkBytes(
+	fetcher: typeof fetch,
+	url: string,
+	start: number,
+	end: number,
+	onProgress?: (loaded: number) => void
+): Promise<Uint8Array> {
+	const expectedSize = end - start + 1;
+	const response = await fetcher(url, { headers: { Range: `bytes=${start}-${end}` } });
+	if (!response.ok) throw new Error(`Could not download a model chunk (${response.status}).`);
+	return readResponse(response, expectedSize, onProgress);
+}
+
+async function storeChunkBytes(cache: Cache, request: Request, bytes: Uint8Array): Promise<void> {
+	const headers = new Headers({
+		'content-length': String(bytes.byteLength),
+		'content-type': 'application/octet-stream',
+		'x-voicebook-model-chunk': 'v1'
+	});
+	try {
+		await cache.put(request, new Response(new Uint8Array(bytes).buffer, { status: 200, headers }));
+	} catch (error) {
+		if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+			throw new Error(
+				'This device does not have enough browser storage for the voice model. Free some device storage, then retry.',
+				{ cause: error }
+			);
+		}
+		throw error;
+	}
+}
+
 async function readCachedChunks(
 	cache: Cache,
 	url: string,
 	total: number,
 	chunkBytes: number,
+	fetcher: typeof fetch,
 	onProgress?: (progress: ModelDownloadProgress) => void
 ): Promise<Uint8Array> {
 	const bytes = new Uint8Array(total);
@@ -149,13 +182,17 @@ async function readCachedChunks(
 		const expected = Math.min(chunkBytes, total - start);
 		const request = chunkRequest(url, index, chunkBytes);
 		const response = await cache.match(request);
-		if (!response || !cachedChunkIsValid(response, expected)) {
-			throw new Error('A cached model chunk is missing. Retry the installation to repair it.');
+		let chunk: Uint8Array | undefined;
+		if (cachedChunkIsValid(response, expected)) {
+			chunk = new Uint8Array(await response!.arrayBuffer());
 		}
-		const chunk = new Uint8Array(await response.arrayBuffer());
-		if (chunk.byteLength !== expected) {
+		if (!chunk || chunk.byteLength !== expected) {
 			await cache.delete(request);
-			throw new Error('A cached model chunk is incomplete. Retry the installation to repair it.');
+			const end = start + expected - 1;
+			chunk = await fetchChunkBytes(fetcher, url, start, end, (loaded) =>
+				onProgress?.({ loaded: restored + loaded, total, phase: 'download' })
+			);
+			await storeChunkBytes(cache, request, chunk);
 		}
 		bytes.set(chunk, start);
 		restored += chunk.byteLength;
@@ -232,5 +269,5 @@ export async function downloadModelBytes({
 		completed += expected;
 	}
 
-	return readCachedChunks(cache, url, total, chunkBytes, onProgress);
+	return readCachedChunks(cache, url, total, chunkBytes, fetcher, onProgress);
 }

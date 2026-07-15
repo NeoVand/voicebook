@@ -118,7 +118,11 @@ export class TtsClient {
 			this.modelId = response.modelId;
 			this.backend = response.backend;
 			this.dtype = response.dtype;
-			finishRuntimeOperation(operationId, 'completed');
+			finishRuntimeOperation(
+				operationId,
+				'completed',
+				`${response.backend.toUpperCase()} · ${response.dtype}`
+			);
 		} catch (error) {
 			finishRuntimeOperation(
 				operationId,

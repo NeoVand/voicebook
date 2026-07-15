@@ -3,6 +3,7 @@
 import { getModel } from '$lib/domain/model-catalog';
 import type { DeviceCapabilities, TimingMap } from '$lib/domain/types';
 import { createHuggingFaceFetch } from './huggingface-fetch';
+import { currentSpeechRuntimePolicy } from './runtime-policy';
 import { SupertonicAdapter } from './supertonic-adapter';
 import type { TtsWorkerRequest, TtsWorkerResponse } from './tts-messages';
 
@@ -29,10 +30,11 @@ function send(message: TtsWorkerResponse, transfer: Transferable[] = []): void {
 }
 
 async function capabilities(): Promise<DeviceCapabilities> {
+	const policy = currentSpeechRuntimePolicy();
 	let webgpu = false;
 	let shaderF16 = false;
 	try {
-		if (navigator.gpu) {
+		if (policy.allowWebGpu && navigator.gpu) {
 			const adapter = await navigator.gpu.requestAdapter();
 			webgpu = Boolean(adapter);
 			shaderF16 = adapter?.features.has('shader-f16') ?? false;
@@ -119,7 +121,7 @@ async function loadModel(message: Extract<TtsWorkerRequest, { type: 'load' }>): 
 		});
 	};
 
-	supertonic = new SupertonicAdapter(descriptor, hubFetch);
+	supertonic = new SupertonicAdapter(descriptor, hubFetch, currentSpeechRuntimePolicy());
 	await supertonic.load(backend, progress);
 	activeModel = message.modelId;
 	send({

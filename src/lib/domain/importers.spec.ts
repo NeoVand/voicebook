@@ -631,4 +631,25 @@ describe('document importers', () => {
 		expect(untitled).toMatchObject({ title: 'Untitled', mimeType: 'application/octet-stream' });
 		expect(documentFromText('Named', 'Text.').sourceName).toBe('Named.txt');
 	});
+
+	it('detects pasted Markdown and sends it through the structured Markdown parser', () => {
+		const pasted = documentFromText(
+			'',
+			'# Pasted handbook\n\n1. First step\n2. Second step\n\n```ts\nconst local = true;\n```'
+		);
+
+		expect(pasted).toMatchObject({
+			title: 'Pasted handbook',
+			sourceName: 'Pasted handbook.md',
+			sourceKind: 'markdown',
+			mimeType: 'text/markdown'
+		});
+		expect(pasted.outline).toEqual([
+			expect.objectContaining({ title: 'Pasted handbook', level: 1 })
+		]);
+		expect(pasted.blocks.map((block) => block.kind)).toEqual(
+			expect.arrayContaining(['heading', 'list', 'list-item', 'code'])
+		);
+		expect(pasted.blocks.some((block) => block.text.includes('```'))).toBe(false);
+	});
 });

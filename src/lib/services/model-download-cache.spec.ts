@@ -3,6 +3,7 @@ import { downloadModelBytes } from './model-download-cache';
 
 function memoryCacheStorage(): {
 	storage: CacheStorage;
+	cache: Cache;
 	entries: Map<string, { bytes: Uint8Array; headers: Headers }>;
 } {
 	const entries = new Map<string, { bytes: Uint8Array; headers: Headers }>();
@@ -25,6 +26,7 @@ function memoryCacheStorage(): {
 	} as unknown as Cache;
 	return {
 		storage: { open: vi.fn(async () => cache) } as unknown as CacheStorage,
+		cache,
 		entries
 	};
 }
@@ -108,5 +110,48 @@ describe('downloadModelBytes', () => {
 		expect(requestedRanges).not.toContain('bytes=0-3');
 		expect(requestedRanges).toContain('bytes=4-7');
 		expect(requestedRanges).toContain('bytes=8-11');
+	});
+
+	it('repairs a chunk evicted between validation and final assembly', async () => {
+		const source = Uint8Array.from({ length: 12 }, (_, index) => index + 20);
+		const { storage, cache, entries } = memoryCacheStorage();
+		const url = 'https://huggingface.co/org/model/resolve/revision/onnx/model.onnx';
+
+		await downloadModelBytes({
+			url,
+			fetcher: rangeFetcher(source),
+			cacheName: 'models',
+			chunkBytes: 4,
+			cacheStorage: storage
+		});
+
+		const originalMatch = vi.mocked(cache.match).getMockImplementation()!;
+		let targetMatches = 0;
+		vi.mocked(cache.match).mockImplementation(async (request, options) => {
+			const requestUrl = request instanceof Request ? request.url : request.toString();
+			if (requestUrl.includes('voicebook-model-chunk=v1-4-1')) {
+				targetMatches += 1;
+				if (targetMatches === 2) {
+					entries.delete(requestUrl);
+					return undefined;
+				}
+			}
+			return originalMatch(request, options);
+		});
+
+		const retry = rangeFetcher(source);
+		const result = await downloadModelBytes({
+			url,
+			fetcher: retry,
+			cacheName: 'models',
+			chunkBytes: 4,
+			cacheStorage: storage
+		});
+
+		expect(result).toEqual(source);
+		expect(
+			vi.mocked(retry).mock.calls.map(([, init]) => new Headers(init?.headers).get('range'))
+		).toContain('bytes=4-7');
+		expect(entries.size).toBe(3);
 	});
 });
