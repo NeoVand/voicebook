@@ -317,16 +317,27 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 	const headerBox = await header.boundingBox();
 	const sidebarBox = await sidebar.boundingBox();
 	const collapseBox = await page.getByRole('button', { name: 'Collapse sidebar' }).boundingBox();
-	await expect(sidebar.getByRole('link', { name: 'Library' })).toBeVisible();
+	const libraryLink = sidebar.getByRole('link', { name: 'Library' });
+	await expect(libraryLink).toBeVisible();
+	await expect(libraryLink.locator('span')).toHaveText('Library');
+	const libraryBox = await libraryLink.boundingBox();
 	await expect(sidebar.getByText('Local only', { exact: true })).toHaveCount(0);
 	expect(headerBox).not.toBeNull();
 	expect(sidebarBox).not.toBeNull();
 	expect(collapseBox).not.toBeNull();
+	expect(libraryBox).not.toBeNull();
 	expect(sidebarBox?.y).toBeGreaterThanOrEqual((headerBox?.y ?? 0) + (headerBox?.height ?? 0) - 1);
 	expect(collapseBox?.y).toBeLessThan((sidebarBox?.y ?? 0) + 52);
+	expect(libraryBox?.x).toBeLessThan(collapseBox?.x ?? 0);
+	expect(
+		(sidebarBox?.x ?? 0) +
+			(sidebarBox?.width ?? 0) -
+			((collapseBox?.x ?? 0) + (collapseBox?.width ?? 0))
+	).toBeLessThanOrEqual(9);
 	const expandedWidth = (await sidebar.boundingBox())?.width ?? 0;
 	await page.getByRole('button', { name: 'Collapse sidebar' }).click();
 	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
+	await expect(libraryLink.locator('span')).toBeHidden();
 	await expect(header.getByRole('link', { name: 'Voicebook library' })).toBeVisible();
 	await expect(header.locator('.brand > span:last-child')).toHaveText('Voicebook');
 	await expect(header.locator('.brand > span:last-child')).toBeVisible();

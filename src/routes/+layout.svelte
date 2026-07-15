@@ -279,21 +279,6 @@
 <div class="app-shell" class:sidebar-collapsed={sidebarCollapsed} class:reader-mode={isReader}>
 	<aside class="app-sidebar" aria-label="Voicebook navigation">
 		<div class="sidebar-head">
-			<button
-				class="sidebar-toggle"
-				type="button"
-				aria-controls="primary-navigation"
-				aria-expanded={!sidebarCollapsed}
-				aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-				title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-				onclick={toggleSidebar}
-			>
-				{#if sidebarCollapsed}
-					<PanelLeftOpen size={17} />
-				{:else}
-					<PanelLeftClose size={17} />
-				{/if}
-			</button>
 			<div class="library-nav-group">
 				<a
 					class="sidebar-library-link"
@@ -305,6 +290,7 @@
 					onclick={() => readerChrome.closeTransientPanels()}
 				>
 					<Library size={17} />
+					<span>Library</span>
 				</a>
 
 				{#if sidebarCollapsed && appState.documents.length}
@@ -323,6 +309,21 @@
 					</div>
 				{/if}
 			</div>
+			<button
+				class="sidebar-toggle"
+				type="button"
+				aria-controls="primary-navigation"
+				aria-expanded={!sidebarCollapsed}
+				aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+				title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+				onclick={toggleSidebar}
+			>
+				{#if sidebarCollapsed}
+					<PanelLeftOpen size={17} />
+				{:else}
+					<PanelLeftClose size={17} />
+				{/if}
+			</button>
 		</div>
 
 		<div id="primary-navigation" class="sidebar-main">
