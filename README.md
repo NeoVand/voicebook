@@ -1,39 +1,108 @@
-# Voicebook
+<p align="center">
+  <img src="./src/lib/assets/favicon.svg" width="88" height="88" alt="Voicebook logo" />
+</p>
 
-[![CI](https://github.com/NeoVand/voicebook/actions/workflows/ci.yml/badge.svg)](https://github.com/NeoVand/voicebook/actions/workflows/ci.yml)
-[![Pages](https://github.com/NeoVand/voicebook/actions/workflows/pages.yml/badge.svg)](https://github.com/NeoVand/voicebook/actions/workflows/pages.yml)
-[![CodeQL](https://github.com/NeoVand/voicebook/actions/workflows/codeql.yml/badge.svg)](https://github.com/NeoVand/voicebook/actions/workflows/codeql.yml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/NeoVand/voicebook/badge)](https://securityscorecards.dev/viewer/?uri=github.com/NeoVand/voicebook)
-[![License: MIT](https://img.shields.io/badge/license-MIT-9e91ff.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/NeoVand/voicebook?display_name=tag&sort=semver)](https://github.com/NeoVand/voicebook/releases)
-[![Stars](https://img.shields.io/github/stars/NeoVand/voicebook?style=flat)](https://github.com/NeoVand/voicebook/stargazers)
+<h1 align="center">Voicebook</h1>
 
-Voicebook is a private, local-first document reader that turns PDF, DOCX, Markdown, and text files into expressive speech in the browser. There is no account, backend, telemetry, or document upload. Initial model downloads contact Hugging Face; documents, bookmarks, generated audio, and voice choices remain on the device.
+<p align="center">
+  Turn documents into expressive, private speech—entirely in your browser.
+</p>
 
-> Voicebook is pre-release software. The repository is production-shaped, but the `v1.0.0` release is intentionally held until real-model WebGPU benchmarks and the live Pages recovery matrix pass on the documented reference machine.
+<p align="center">
+  <a href="https://neovand.github.io/voicebook/"><strong>Open Voicebook</strong></a>
+  ·
+  <a href="#what-you-can-do">Features</a>
+  ·
+  <a href="#run-it-locally">Run locally</a>
+</p>
 
-## What works
+<p align="center">
+  <a href="https://github.com/NeoVand/voicebook/actions/workflows/ci.yml"><img src="https://github.com/NeoVand/voicebook/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+  <a href="https://github.com/NeoVand/voicebook/actions/workflows/pages.yml"><img src="https://github.com/NeoVand/voicebook/actions/workflows/pages.yml/badge.svg" alt="Deployment status" /></a>
+  <a href="https://github.com/NeoVand/voicebook/releases"><img src="https://img.shields.io/github/v/release/NeoVand/voicebook?display_name=tag&sort=semver" alt="Latest release" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-78a98f.svg" alt="MIT license" /></a>
+</p>
 
-- Semantic import for text PDFs, DOCX, GFM Markdown, TXT, and pasted text.
-- A persistent IndexedDB + OPFS library with SHA-256 duplicate detection and storage repair.
-- Explicit Supertonic 3 installation with a pinned revision, license disclosure, WebGPU capability checks, and WASM fallback.
-- Ten built-in voices and 31 supported languages through the official browser runtime.
-- Dedicated-worker synthesis, cancellation, GPU-loss recovery, current-first generation, and a rolling three-segment buffer.
-- 0.5–3× pitch-preserving playback, ±10-second seek, semantic bookmarks, resume, keyboard controls, Media Session integration, and sentence/word read-along.
-- An app-shell service worker that keeps documents and audio out of Cache Storage while supporting offline reopening.
+Voicebook is a local-first document reader for people who would rather listen. Add a PDF, Word document, Markdown file, plain-text file, or pasted text and Voicebook turns it into a persistent listening experience with natural speech, precise read-along highlighting, bookmarks, and full playback controls.
 
-Scanned PDF OCR, legacy `.doc`, EPUB/HTML, voice cloning, cloud sync, mobile support, and PDF layout reproduction are deliberately outside v1.
+There is no account and no Voicebook server. Your documents and generated audio stay on your device.
 
-## Run locally
+## Get started
 
-Requirements: Node.js 24+, npm, and current desktop Chrome or Edge for the supported WebGPU path.
+1. Open the [live app](https://neovand.github.io/voicebook/) in a modern browser.
+2. Review the Supertonic model terms and download the voice engine once.
+3. Add a document or paste text into your library.
+4. Choose a voice, press play, and continue from where you left off whenever you return.
+
+WebGPU provides the best experience. Voicebook can use a compatibility fallback on supported devices, but generation will be slower.
+
+## What you can do
+
+- Keep a private library of documents and reading progress across sessions.
+- Listen with ten built-in voices across the languages supported by Supertonic 3.
+- Change playback speed from 0.5× to 3× without chipmunk-style pitch shifting.
+- Jump backward or forward ten seconds, seek through the document, or start from selected text.
+- Follow narration with sentence and word highlighting, or scroll independently and return to the narrator.
+- Add semantic bookmarks that survive voice changes and regenerated audio.
+- Prepare an entire document for uninterrupted listening and export completed audio as MP3.
+- Use keyboard shortcuts, Media Session controls, fullscreen reading, document zoom, and four reading themes.
+- Reopen previously prepared documents while offline.
+
+## Document support
+
+| Source      | Support                                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------- |
+| PDF         | Text extraction, paragraph cleanup, repeated header/footer removal, and page anchors                          |
+| DOCX        | Headings, paragraphs, lists, links, quotes, tables, and other semantic content                                |
+| Markdown    | GFM, task lists, alerts, tables, syntax-highlighted code, KaTeX math, Mermaid diagrams, images, and safe HTML |
+| TXT         | BOM-aware UTF-8 text import                                                                                   |
+| Pasted text | Plain text or automatically detected Markdown                                                                 |
+
+Scanned PDFs need OCR and are reported clearly instead of producing an empty or garbled document.
+
+## The reader
+
+The desktop reader keeps the document at the center, its outline beside it, and a compact playback strip along the bottom. The timeline shows what has been listened to, what audio is already cached, and what Voicebook is currently preparing. On smaller screens the same controls are reorganized into a phone-friendly player and navigation drawer.
+
+Useful shortcuts:
+
+| Key                         | Action                      |
+| --------------------------- | --------------------------- |
+| <kbd>Space</kbd>            | Play or pause               |
+| <kbd>J</kbd> / <kbd>L</kbd> | Back or forward ten seconds |
+| <kbd>B</kbd>                | Add or remove a bookmark    |
+| <kbd>[</kbd> / <kbd>]</kbd> | Previous or next passage    |
+
+## Local speech
+
+Voicebook uses **Supertonic 3** through ONNX Runtime in a dedicated browser worker. The model is downloaded from Hugging Face only after you accept its OpenRAIL-M terms. Once installed, speech generation runs locally with WebGPU acceleration when available.
+
+Generation quality is adjustable from 2 to 16 steps, with 10 steps as the default. Voicebook generates the current passage first, buffers upcoming passages, and stores generated audio locally so it does not need to repeat work.
+
+## Private by design
+
+- Documents are processed in the browser and are never uploaded to Voicebook.
+- Books, bookmarks, settings, and progress are stored in IndexedDB.
+- Original files and generated audio use browser-managed on-device storage.
+- Model installation contacts Hugging Face; normal reading does not require a Voicebook backend.
+- There is no account, analytics, advertising, or telemetry.
+
+Everything Voicebook stores can be reviewed and removed from the app’s settings.
+
+## Run it locally
+
+Voicebook requires Node.js 24 or newer and npm.
 
 ```bash
+git clone https://github.com/NeoVand/voicebook.git
+cd voicebook
 npm ci
 npm run dev
 ```
 
-Quality gates:
+Then open the local URL printed by Vite.
+
+To run the project checks:
 
 ```bash
 npm run quality
@@ -41,7 +110,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-To reproduce the GitHub Pages mount locally:
+To reproduce the GitHub Pages base path locally:
 
 ```bash
 BASE_PATH=/voicebook npm run build
@@ -50,39 +119,10 @@ npm run preview:pages
 
 Open `http://127.0.0.1:4173/voicebook/`.
 
-## Architecture
+## Current limitations
 
-```mermaid
-flowchart LR
-  A["PDF · DOCX · Markdown · TXT"] --> B["Semantic import + source anchors"]
-  B --> C["IndexedDB metadata + OPFS files/audio"]
-  C --> D["Current-first synthesis planner"]
-  D --> E["Dedicated ONNX Runtime Web worker"]
-  E --> F["Opus/WebM or WAV cache"]
-  F --> G["SoundTouch AudioWorklet + read-along timeline"]
-```
+Voicebook is under active development. OCR for scanned documents, legacy `.doc`, EPUB and HTML import, cloud sync, and voice cloning are not available yet. Large local models are demanding on memory, so phones and older computers may generate speech more slowly than desktop WebGPU systems.
 
-The stable contracts live in `src/lib/domain/types.ts`. The model catalog pins repository commits, so an upstream `main` update cannot silently change Voicebook’s runtime. Read [the architecture notes](docs/architecture.md) and [model decision record](docs/model-decision.md) for the tradeoffs.
+## License
 
-## Model policy
-
-| Engine       | Role        | License                             | Languages    | Timing                       |
-| ------------ | ----------- | ----------------------------------- | ------------ | ---------------------------- |
-| Supertonic 3 | Only engine | OpenRAIL-M; acknowledgment required | 31 languages | Duration-normalized estimate |
-
-Noncommercial models are excluded. Voice cloning is tracked as a later, opt-in local capability using the official Transformers.js Chatterbox architecture after memory and latency benchmarking.
-
-## Privacy and security
-
-- Document contents are never sent to Voicebook or a Voicebook server—there is no server.
-- Installing a model downloads pinned files from `huggingface.co` into the browser-managed model cache.
-- Imported originals and generated speech use namespaced on-device storage and never enter the service-worker cache.
-- No remote fonts, analytics, telemetry, or third-party document processing are used.
-
-Please report vulnerabilities through the process in [SECURITY.md](SECURITY.md), not a public issue.
-
-## Contributing
-
-Useful bug reports, parsing fixtures, accessibility improvements, benchmark results, and model-adapter work are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), follow the [Code of Conduct](CODE_OF_CONDUCT.md), and keep changes covered by tests.
-
-The project is MIT licensed. Mediabunny and SoundTouch remain MPL-2.0; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Voicebook is available under the [MIT License](./LICENSE). Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
