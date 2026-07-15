@@ -811,6 +811,7 @@ main {
 
 .button.primary:hover:not(:disabled) {
 	background: var(--primary-hover);
+	color: var(--primary-ink);
 }
 
 .button.ghost {

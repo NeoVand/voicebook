@@ -40,6 +40,34 @@ test('presents one intentional empty-library import surface', async ({ page }) =
 	expect(await emptyState.boundingBox()).toEqual(emptyBeforeDrag);
 	await page.locator('.library-page').dispatchEvent('dragleave');
 	await expect(page.getByText('Drop to add to your library', { exact: true })).toHaveCount(0);
+
+	const themeButton = page.getByRole('button', { name: /^Theme:/ });
+	for (const theme of ['midnight', 'sunny', 'cloudy', 'rainy']) {
+		await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+		await addDocument.hover();
+		await expect
+			.poll(
+				() =>
+					addDocument.evaluate((button) => {
+						const expected = document.createElement('span');
+						expected.style.color = 'var(--primary-ink)';
+						expected.style.backgroundColor = 'var(--primary-hover)';
+						document.body.append(expected);
+						const buttonStyle = getComputedStyle(button);
+						const expectedStyle = getComputedStyle(expected);
+						const colorsMatch = {
+							text: buttonStyle.color === expectedStyle.color,
+							background: buttonStyle.backgroundColor === expectedStyle.backgroundColor
+						};
+						expected.remove();
+						return colorsMatch;
+					}),
+				{ message: `${theme} primary hover should use theme-aware colors` }
+			)
+			.toEqual({ text: true, background: true });
+		await themeButton.click();
+	}
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
 });
 
 test('import → install → play → seek → bookmark → reload → offline reopen', async ({
