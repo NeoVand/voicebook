@@ -357,6 +357,13 @@ export class VoicebookState {
 			message: 'Preparing model files…'
 		};
 		try {
+			// Ask while this method is still reached from the user's install gesture.
+			// Unsupported browsers simply continue with their normal origin quota.
+			try {
+				if (!(await navigator.storage.persisted())) await requestPersistentStorage();
+			} catch {
+				// Persistence is an optimization; resumable chunks still work without it.
+			}
 			await ttsClient.load(modelId, backend, (update) => {
 				onProgress?.(update);
 				this.modelProgress[modelId] = {
@@ -378,6 +385,7 @@ export class VoicebookState {
 			};
 			onProgress?.({ status: 'Saving the local installation…', progress: 100 });
 			await setSetting('installed-models', [...this.installedModels]);
+			this.storage = await storageSnapshot();
 			onProgress?.({ status: 'Voice engine ready.', progress: 100 });
 		} catch (error) {
 			if (error instanceof DOMException && error.name === 'AbortError') {
@@ -392,6 +400,12 @@ export class VoicebookState {
 				message: error instanceof Error ? error.message : 'The model could not be installed.'
 			};
 			throw error;
+		} finally {
+			try {
+				this.storage = await storageSnapshot();
+			} catch {
+				// Keep the original install result if a browser cannot estimate storage.
+			}
 		}
 	}
 

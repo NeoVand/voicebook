@@ -44,6 +44,16 @@ describe('createHuggingFaceFetch', () => {
 		expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([9, 10]);
 	});
 
+	it('reuses one lazy Hub asset descriptor across resumable byte ranges', async () => {
+		const fetcher = createHuggingFaceFetch(vi.fn<typeof fetch>());
+		const url = 'https://huggingface.co/org/model/resolve/abcdef/onnx/model.onnx';
+
+		await (await fetcher(url, { headers: { Range: 'bytes=0-1' } })).arrayBuffer();
+		await (await fetcher(url, { headers: { Range: 'bytes=2-3' } })).arrayBuffer();
+
+		expect(hubMocks.downloadFile).toHaveBeenCalledOnce();
+	});
+
 	it('leaves non-Hub requests alone', async () => {
 		const expected = new Response('ok');
 		const nativeFetch = vi.fn<typeof fetch>().mockResolvedValue(expected);

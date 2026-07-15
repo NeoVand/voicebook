@@ -91,13 +91,25 @@
 		if (!('serviceWorker' in navigator)) return;
 		const hadController = Boolean(navigator.serviceWorker.controller);
 		let reloading = false;
+		let reloadDeferredForModelInstall = false;
+		const modelInstallActive = () =>
+			Object.values(appState.modelProgress).some((progress) => progress.status === 'loading');
 		const activateUpdate = () => {
 			if (!hadController || reloading) return;
+			if (modelInstallActive()) {
+				reloadDeferredForModelInstall = true;
+				return;
+			}
 			reloading = true;
 			window.location.reload();
 		};
-		const checkForUpdate = () =>
+		const checkForUpdate = () => {
+			if (reloadDeferredForModelInstall && !modelInstallActive()) {
+				activateUpdate();
+				return;
+			}
 			void navigator.serviceWorker.ready.then((worker) => worker.update());
+		};
 		navigator.serviceWorker.addEventListener('controllerchange', activateUpdate);
 		window.addEventListener('focus', checkForUpdate);
 		checkForUpdate();
