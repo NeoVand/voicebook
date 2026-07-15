@@ -1181,15 +1181,18 @@
 
 	.outline-heading strong,
 	.bookmarks-panel header strong {
-		font-size: 13px;
-		font-weight: 650;
+		font-family: var(--font-display);
+		font-size: 15px;
+		font-variation-settings: 'opsz' 18;
+		font-weight: 560;
+		letter-spacing: -0.015em;
 	}
 
 	.outline-heading > span,
 	.bookmarks-panel header span {
 		margin-top: 3px;
 		color: var(--faint);
-		font-size: 9px;
+		font-size: 9.5px;
 	}
 
 	.outline-legend {
@@ -1197,7 +1200,7 @@
 		align-items: center;
 		gap: 8px;
 		color: var(--faint);
-		font-size: 8px;
+		font-size: 9px;
 	}
 
 	.outline-legend span {
@@ -1247,8 +1250,9 @@
 		border-radius: 6px;
 		background: transparent;
 		color: var(--muted);
-		font-size: 12.5px;
-		line-height: 1.3;
+		font-size: 13px;
+		font-weight: 470;
+		line-height: 1.32;
 		text-align: left;
 		transition:
 			background 140ms var(--ease),
@@ -1274,7 +1278,7 @@
 
 	.outline-panel nav button.narration-current .outline-label {
 		color: var(--primary);
-		font-weight: 610;
+		font-weight: 620;
 	}
 
 	.outline-state {
@@ -1432,7 +1436,7 @@
 	.document-heading > span,
 	.document-heading > p {
 		color: var(--faint);
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 8px;
 		letter-spacing: 0.07em;
 		text-transform: uppercase;
@@ -1496,7 +1500,7 @@
 	.document-section h4,
 	.document-section h5,
 	.document-section h6 {
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.82em;
 		font-weight: 690;
 		letter-spacing: 0.035em;
@@ -1508,7 +1512,7 @@
 		display: block;
 		margin-bottom: 7px;
 		color: var(--faint);
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 8px;
 		font-weight: 650;
 		letter-spacing: 0.1em;
@@ -1562,7 +1566,7 @@
 		gap: 0.55em;
 		margin-bottom: 0.55em;
 		color: var(--alert-color);
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.68em;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
@@ -1585,7 +1589,7 @@
 		padding: 0.7em 0;
 		color: var(--reader-ink-strong);
 		cursor: pointer;
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.78em;
 		font-weight: 650;
 	}
@@ -1624,7 +1628,7 @@
 	}
 
 	.document-footnote > span {
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.72em;
 		font-weight: 700;
 	}
@@ -1658,7 +1662,7 @@
 		padding: 10px 0;
 		color: var(--reader-quiet);
 		cursor: pointer;
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.68em;
 		font-weight: 630;
 		letter-spacing: 0.04em;
@@ -1691,7 +1695,7 @@
 
 	.document-list li::marker {
 		color: color-mix(in srgb, var(--primary) 72%, var(--reader-ink));
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.78em;
 		font-weight: 680;
 	}
@@ -1717,7 +1721,7 @@
 		border: 1px solid color-mix(in srgb, var(--reader-quiet) 58%, transparent);
 		border-radius: 0.2em;
 		color: var(--primary);
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.72em;
 		font-style: normal;
 		line-height: 1;
@@ -1733,7 +1737,7 @@
 	.table-region table {
 		width: 100%;
 		border-collapse: collapse;
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.73em;
 		line-height: 1.55;
 	}
@@ -1810,7 +1814,7 @@
 		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.26);
 		color: var(--reader);
 		cursor: pointer;
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 10px;
 		font-weight: 680;
 		letter-spacing: 0.01em;

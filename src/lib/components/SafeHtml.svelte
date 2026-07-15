@@ -150,7 +150,7 @@
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.76em;
 	}
 

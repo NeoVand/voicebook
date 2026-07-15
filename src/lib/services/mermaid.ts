@@ -32,7 +32,7 @@ function initializeForContainer(mermaid: Mermaid, container: HTMLElement): void 
 		securityLevel: 'strict',
 		suppressErrorRendering: true,
 		theme: 'base',
-		fontFamily: 'Inter Variable, Inter, ui-sans-serif, system-ui, sans-serif',
+		fontFamily: 'Instrument Sans Variable, Instrument Sans, ui-sans-serif, system-ui, sans-serif',
 		flowchart: { htmlLabels: false, useMaxWidth: false },
 		sequence: { useMaxWidth: false },
 		themeVariables: {

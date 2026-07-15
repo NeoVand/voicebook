@@ -113,7 +113,7 @@
 		margin: 2.2em 0;
 		border-top: 1px solid var(--reader-rule);
 		border-bottom: 1px solid var(--reader-rule);
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 	}
 
 	figcaption {

@@ -174,7 +174,7 @@
 		border: 1px dashed var(--reader-rule);
 		border-radius: 4px;
 		color: var(--reader-quiet);
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.76em;
 	}
 

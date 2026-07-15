@@ -80,7 +80,7 @@
 		padding: 10px 0;
 		color: var(--reader-quiet);
 		cursor: pointer;
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 		font-size: 0.62em;
 		font-weight: 620;
 	}

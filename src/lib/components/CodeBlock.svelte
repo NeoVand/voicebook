@@ -115,7 +115,7 @@
 		border: 1px solid var(--reader-rule);
 		border-radius: 6px;
 		background: color-mix(in srgb, var(--reader) 94%, var(--text));
-		font-family: 'Inter Variable', sans-serif;
+		font-family: var(--font-ui);
 	}
 
 	figcaption {
