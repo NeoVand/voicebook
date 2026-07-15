@@ -694,9 +694,18 @@ h3 {
 
 .sidebar-documents a span,
 .library-flyout a span {
+	min-width: 0;
+	flex: 1;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.sidebar-documents a > svg,
+.library-flyout a > svg {
+	width: 14px;
+	height: 14px;
+	flex: 0 0 14px;
 }
 
 .sidebar-documents a:hover,

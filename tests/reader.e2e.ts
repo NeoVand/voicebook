@@ -73,16 +73,23 @@ test('presents one intentional empty-library import surface', async ({ page }) =
 test('highlights only the document currently open in the reader', async ({ page }) => {
 	await page.goto('./');
 	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
-	await page.getByLabel('Title').fill('A Quiet Sidebar');
+	const title = 'A Quiet Sidebar With a Deliberately Long Document Title';
+	await page.getByLabel('Title').fill(title);
 	await page.getByRole('textbox', { name: 'Text' }).fill('The active state belongs to the reader.');
 	await page.getByRole('button', { name: 'Add to library' }).click();
 
 	const recentDocuments = page.getByRole('navigation', { name: 'Recent documents' });
-	const currentDocument = recentDocuments.getByRole('link', { name: 'A Quiet Sidebar' });
+	const currentDocument = recentDocuments.getByRole('link', { name: title });
 	await expect(currentDocument).toHaveAttribute('aria-current', 'page');
 	await expect(currentDocument).toHaveClass(/\bactive\b/);
 	await expect(currentDocument.locator('svg')).toHaveAttribute('width', '14');
 	await expect(currentDocument.locator('svg')).toHaveAttribute('height', '14');
+	expect(
+		await currentDocument.locator('svg').evaluate((icon) => {
+			const bounds = icon.getBoundingClientRect();
+			return { width: bounds.width, height: bounds.height };
+		})
+	).toEqual({ width: 14, height: 14 });
 
 	await page.getByRole('link', { name: 'Voicebook library' }).click();
 	await expect(currentDocument).not.toHaveAttribute('aria-current', 'page');
