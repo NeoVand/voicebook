@@ -370,10 +370,12 @@
 
 	.page-heading h1 {
 		margin: 0;
-		font-size: 2.25rem;
-		font-weight: 660;
-		letter-spacing: -0.05em;
-		line-height: 1;
+		font-family: var(--font-display);
+		font-size: 2.55rem;
+		font-variation-settings: 'opsz' 40;
+		font-weight: 560;
+		letter-spacing: -0.04em;
+		line-height: 0.98;
 	}
 
 	.subtitle {
@@ -491,8 +493,11 @@
 	}
 
 	.document-copy strong {
-		font-size: 12px;
-		font-weight: 620;
+		font-family: var(--font-display);
+		font-size: 14px;
+		font-variation-settings: 'opsz' 18;
+		font-weight: 560;
+		letter-spacing: -0.012em;
 	}
 
 	.document-copy small {
@@ -585,8 +590,10 @@
 	.empty-library h2 {
 		margin: 0;
 		color: var(--text);
-		font-size: clamp(1.45rem, 2.2vw, 2rem);
-		font-weight: 650;
+		font-family: var(--font-display);
+		font-size: clamp(1.7rem, 2.4vw, 2.2rem);
+		font-variation-settings: 'opsz' 36;
+		font-weight: 560;
 		letter-spacing: -0.035em;
 		line-height: 1.15;
 	}
@@ -698,8 +705,10 @@
 	.paste-dialog h2,
 	.duplicate-dialog h2 {
 		margin: 0;
-		font-size: 17px;
-		font-weight: 650;
+		font-family: var(--font-display);
+		font-size: 21px;
+		font-variation-settings: 'opsz' 24;
+		font-weight: 560;
 		letter-spacing: -0.025em;
 	}
 

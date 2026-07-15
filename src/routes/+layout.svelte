@@ -1,5 +1,5 @@
 <script lang="ts">
-	import '@fontsource-variable/inter/index.css';
+	import '@fontsource-variable/instrument-sans/index.css';
 	import '@fontsource-variable/newsreader/index.css';
 	import { browser } from '$app/environment';
 	import { page } from '$app/state';
@@ -129,7 +129,7 @@
 		>
 			<span class="brand-mark" aria-hidden="true"><BookOpenText size={18} strokeWidth={1.8} /></span
 			>
-			<span>Voicebook</span>
+			<span class="brand-name">Voicebook</span>
 		</a>
 	</div>
 
