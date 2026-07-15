@@ -10,7 +10,6 @@
 		CloudRain,
 		CloudSun,
 		Cpu,
-		FileText,
 		HardDrive,
 		Library,
 		List,
@@ -28,6 +27,7 @@
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
+	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import GitHubOutline from '$lib/components/GitHubOutline.svelte';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
@@ -72,6 +72,7 @@
 	let isReader = $derived(page.url.pathname.startsWith(resolve('/read')));
 	let settingsSection = $derived(page.url.searchParams.get('section') ?? 'models');
 	let readerDocumentId = $derived(page.url.searchParams.get('document'));
+	let activeReaderDocumentId = $derived(isReader ? readerDocumentId : null);
 	let readerBook = $derived(
 		isReader ? appState.documents.find((document) => document.id === readerDocumentId) : undefined
 	);
@@ -298,11 +299,12 @@
 						<strong>Recent documents</strong>
 						{#each appState.documents.slice(0, 7) as document (document.id)}
 							<a
-								class:active={readerDocumentId === document.id}
+								class:active={activeReaderDocumentId === document.id}
 								href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
+								aria-current={activeReaderDocumentId === document.id ? 'page' : undefined}
 								onclick={() => readerChrome.closeTransientPanels()}
 							>
-								<FileText size={14} />
+								<DocumentKindIcon kind={document.sourceKind} size={14} />
 								<span>{document.title}</span>
 							</a>
 						{/each}
@@ -334,12 +336,13 @@
 						<nav aria-label="Recent documents">
 							{#each appState.documents as document (document.id)}
 								<a
-									class:active={readerDocumentId === document.id}
+									class:active={activeReaderDocumentId === document.id}
 									href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
+									aria-current={activeReaderDocumentId === document.id ? 'page' : undefined}
 									title={document.title}
 									onclick={() => readerChrome.closeTransientPanels()}
 								>
-									<FileText size={13} />
+									<DocumentKindIcon kind={document.sourceKind} size={14} />
 									<span>{document.title}</span>
 								</a>
 							{/each}

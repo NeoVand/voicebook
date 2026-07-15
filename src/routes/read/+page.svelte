@@ -1140,7 +1140,9 @@
 		min-width: 0;
 		min-height: 0;
 		grid-row: 1;
-		background: var(--sidebar);
+		background: var(--chrome-surface);
+		-webkit-backdrop-filter: var(--chrome-backdrop);
+		backdrop-filter: var(--chrome-backdrop);
 		flex-direction: column;
 		padding-top: var(--app-header-height);
 	}
@@ -1148,7 +1150,6 @@
 	.outline-panel {
 		grid-column: 1;
 		border-right: 1px solid var(--line);
-		background: var(--outline-surface);
 	}
 
 	.bookmarks-panel {
@@ -1302,7 +1303,7 @@
 		grid-column: 2;
 		overflow: hidden;
 		padding: 0 18px;
-		background: var(--reader-stage);
+		background: var(--reader);
 		flex-direction: column;
 	}
 
@@ -1387,7 +1388,7 @@
 		padding: calc(var(--app-header-height) + 58px) clamp(48px, 7vw, 92px)
 			calc(var(--player-height) + 40px);
 		scroll-padding-block: calc(var(--app-header-height) + 70px) calc(var(--player-height) + 32px);
-		border-radius: 7px 7px 0 0;
+		border-radius: 0;
 		background: var(--reader);
 		color: var(--reader-ink);
 		font-family: var(--font-reading);
@@ -1931,10 +1932,10 @@
 		gap: 10px;
 		padding: 1px 16px 0;
 		border-top: 1px solid var(--line);
-		background: color-mix(in srgb, var(--bg) 68%, transparent);
+		background: var(--chrome-surface);
 		box-shadow: none;
-		-webkit-backdrop-filter: blur(22px) saturate(1.35);
-		backdrop-filter: blur(22px) saturate(1.35);
+		-webkit-backdrop-filter: var(--chrome-backdrop);
+		backdrop-filter: var(--chrome-backdrop);
 		isolation: isolate;
 	}
 

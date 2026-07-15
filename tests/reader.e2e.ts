@@ -6,6 +6,96 @@ test.beforeEach(async ({ page }) => {
 	await installFakeTts(page);
 });
 
+test('presents one intentional empty-library import surface', async ({ page }) => {
+	await page.goto('./');
+	const emptyState = page.getByRole('region', { name: 'What would you like to listen to?' });
+	await expect(emptyState).toBeVisible();
+	await expect(page.getByText('Your library is empty', { exact: true })).toHaveCount(0);
+	await expect(page.locator('.import-strip')).toHaveCount(0);
+
+	const addDocument = page.getByRole('button', { name: 'Add document', exact: true });
+	const pasteText = page.getByRole('button', { name: 'Paste text', exact: true });
+	await expect(addDocument).toHaveCount(1);
+	await expect(pasteText).toHaveCount(1);
+	const [addBox, pasteBox] = await Promise.all([
+		addDocument.boundingBox(),
+		pasteText.boundingBox()
+	]);
+	expect(addBox).not.toBeNull();
+	expect(pasteBox).not.toBeNull();
+	expect(addBox?.width).toBe(pasteBox?.width);
+	expect(addBox?.height).toBe(44);
+	expect(pasteBox?.height).toBe(44);
+	await expect(emptyState).toHaveCSS('border-radius', '14px');
+
+	const emptyBeforeDrag = await emptyState.boundingBox();
+	await page.locator('.library-page').evaluate((library) => {
+		const transfer = new DataTransfer();
+		transfer.items.add(new File(['A short local document.'], 'local.txt', { type: 'text/plain' }));
+		library.dispatchEvent(
+			new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: transfer })
+		);
+	});
+	await expect(page.getByText('Drop to add to your library', { exact: true })).toBeVisible();
+	expect(await emptyState.boundingBox()).toEqual(emptyBeforeDrag);
+	await page.locator('.library-page').dispatchEvent('dragleave');
+	await expect(page.getByText('Drop to add to your library', { exact: true })).toHaveCount(0);
+
+	const themeButton = page.getByRole('button', { name: /^Theme:/ });
+	for (const theme of ['midnight', 'sunny', 'cloudy', 'rainy']) {
+		await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+		await addDocument.hover();
+		await expect
+			.poll(
+				() =>
+					addDocument.evaluate((button) => {
+						const expected = document.createElement('span');
+						expected.style.color = 'var(--primary-ink)';
+						expected.style.backgroundColor = 'var(--primary-hover)';
+						document.body.append(expected);
+						const buttonStyle = getComputedStyle(button);
+						const expectedStyle = getComputedStyle(expected);
+						const colorsMatch = {
+							text: buttonStyle.color === expectedStyle.color,
+							background: buttonStyle.backgroundColor === expectedStyle.backgroundColor
+						};
+						expected.remove();
+						return colorsMatch;
+					}),
+				{ message: `${theme} primary hover should use theme-aware colors` }
+			)
+			.toEqual({ text: true, background: true });
+		await themeButton.click();
+	}
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
+});
+
+test('highlights only the document currently open in the reader', async ({ page }) => {
+	await page.goto('./');
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	const title = 'A Quiet Sidebar With a Deliberately Long Document Title';
+	await page.getByLabel('Title').fill(title);
+	await page.getByRole('textbox', { name: 'Text' }).fill('The active state belongs to the reader.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+
+	const recentDocuments = page.getByRole('navigation', { name: 'Recent documents' });
+	const currentDocument = recentDocuments.getByRole('link', { name: title });
+	await expect(currentDocument).toHaveAttribute('aria-current', 'page');
+	await expect(currentDocument).toHaveClass(/\bactive\b/);
+	await expect(currentDocument.locator('svg')).toHaveAttribute('width', '14');
+	await expect(currentDocument.locator('svg')).toHaveAttribute('height', '14');
+	expect(
+		await currentDocument.locator('svg').evaluate((icon) => {
+			const bounds = icon.getBoundingClientRect();
+			return { width: bounds.width, height: bounds.height };
+		})
+	).toEqual({ width: 14, height: 14 });
+
+	await page.getByRole('link', { name: 'Voicebook library' }).click();
+	await expect(currentDocument).not.toHaveAttribute('aria-current', 'page');
+	await expect(currentDocument).not.toHaveClass(/\bactive\b/);
+});
+
 test('import → install → play → seek → bookmark → reload → offline reopen', async ({
 	page,
 	context
@@ -31,39 +121,59 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await page.getByRole('button', { name: 'Add to library' }).click();
 	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
 	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
-	const surfaceBrightness = () =>
+	await page.getByRole('button', { name: 'Open bookmarks' }).click();
+	const readerSurfaceColors = () =>
 		page.evaluate(() => {
-			const luminance = (value: string) => {
-				const channels =
-					value
-						.match(/[\d.]+/g)
-						?.slice(0, 3)
-						.map(Number) ?? [];
-				return channels.reduce((sum, channel) => sum + channel, 0);
-			};
+			const header = document.querySelector<HTMLElement>('.app-header');
 			const sidebar = document.querySelector<HTMLElement>('.app-sidebar');
 			const outline = document.querySelector<HTMLElement>('.outline-panel');
-			if (!sidebar || !outline) throw new Error('Reader surfaces are unavailable');
+			const bookmarks = document.querySelector<HTMLElement>('.bookmarks-panel');
+			const playerBar = document.querySelector<HTMLElement>('.player-bar');
+			const readerStage = document.querySelector<HTMLElement>('.reader-stage');
+			const readingCanvas = document.querySelector<HTMLElement>('.reading-canvas');
+			if (
+				!header ||
+				!sidebar ||
+				!outline ||
+				!bookmarks ||
+				!playerBar ||
+				!readerStage ||
+				!readingCanvas
+			)
+				throw new Error('Reader surfaces are unavailable');
 			return {
-				sidebar: luminance(getComputedStyle(sidebar).backgroundColor),
-				outline: luminance(getComputedStyle(outline).backgroundColor)
+				chrome: [header, sidebar, outline, bookmarks, playerBar].map(
+					(element) => getComputedStyle(element).backgroundColor
+				),
+				chromeBackdrop: [header, sidebar, outline, bookmarks, playerBar].map((element) => {
+					const style = getComputedStyle(element);
+					return style.backdropFilter && style.backdropFilter !== 'none'
+						? style.backdropFilter
+						: style.getPropertyValue('-webkit-backdrop-filter');
+				}),
+				document: [readerStage, readingCanvas].map(
+					(element) => getComputedStyle(element).backgroundColor
+				)
 			};
 		});
-	const midnightSurfaces = await surfaceBrightness();
-	expect(midnightSurfaces.outline).toBeLessThan(midnightSurfaces.sidebar);
 	const readerThemeButton = page.getByRole('button', { name: /^Theme:/ });
-	await readerThemeButton.click();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
-	const sunnySurfaces = await surfaceBrightness();
-	expect(sunnySurfaces.outline).toBeGreaterThan(sunnySurfaces.sidebar);
-	expect(sunnySurfaces.outline - sunnySurfaces.sidebar).toBeLessThan(20);
-	await readerThemeButton.click();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'cloudy');
-	const cloudySurfaces = await surfaceBrightness();
-	expect(cloudySurfaces.outline).toBeGreaterThan(cloudySurfaces.sidebar);
-	expect(cloudySurfaces.outline - cloudySurfaces.sidebar).toBeLessThan(20);
-	for (let index = 0; index < 2; index += 1) await readerThemeButton.click();
+	for (const theme of ['midnight', 'sunny', 'cloudy', 'rainy']) {
+		await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+		const surfaces = await readerSurfaceColors();
+		expect(new Set(surfaces.chrome).size, `${theme} chrome surfaces should match`).toBe(1);
+		expect(surfaces.chrome[0], `${theme} chrome should remain translucent`).toContain('rgba');
+		expect(
+			surfaces.chromeBackdrop,
+			`${theme} chrome surfaces should share the frosted backdrop`
+		).toEqual(Array(5).fill('blur(22px) saturate(1.35)'));
+		expect(new Set(surfaces.document).size, `${theme} document surfaces should match`).toBe(1);
+		await readerThemeButton.click();
+	}
 	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
+	await page
+		.getByRole('complementary', { name: 'Bookmarks' })
+		.getByRole('button', { name: 'Close bookmarks' })
+		.click();
 	await expect(page.getByRole('banner', { name: 'Voicebook header' })).toHaveCount(1);
 	await expect(page.locator('.reader-header')).toHaveCount(0);
 	await expect(

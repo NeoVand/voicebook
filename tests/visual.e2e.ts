@@ -66,3 +66,24 @@ test('reader workspace visual baseline', async ({ page }, testInfo) => {
 		animations: 'disabled'
 	});
 });
+
+test('populated library visual baseline', async ({ page }, testInfo) => {
+	await installFakeTts(page);
+	await page.goto('./');
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByLabel('Title').fill('The Quiet Machine');
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill(
+			'A deliberate reading about calm interfaces, private documents, and a listening experience that stays out of the way.'
+		);
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await page.getByRole('link', { name: 'Voicebook library' }).click();
+	await expect(page.getByRole('heading', { name: 'Documents', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Add document', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Paste text', exact: true })).toBeVisible();
+	await expect(page).toHaveScreenshot(`library-populated-${testInfo.project.name}.png`, {
+		fullPage: true,
+		animations: 'disabled'
+	});
+});
