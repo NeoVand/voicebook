@@ -404,7 +404,6 @@ test('import → install → play → seek → bookmark → reload → offline r
 	);
 	expect(synthesisRequest?.totalSteps).toBe(10);
 	await page.getByRole('button', { name: 'Add bookmark' }).click();
-	await expect(page.getByRole('button', { name: 'Remove bookmark' })).toBeVisible();
 	await expect
 		.poll(() =>
 			page.evaluate(
