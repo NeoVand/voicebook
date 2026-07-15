@@ -28,6 +28,7 @@
 	import InlineText from '$lib/components/InlineText.svelte';
 	import MathFormula from '$lib/components/MathFormula.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
+	import PlayerActionsMenu from '$lib/components/PlayerActionsMenu.svelte';
 	import SafeHtml from '$lib/components/SafeHtml.svelte';
 	import type {
 		DocumentBlock,
@@ -43,6 +44,8 @@
 
 	let book = $state<NormalizedDocument | null>(null);
 	let installing = $state(false);
+	let clearingAudio = $state(false);
+	let audioMenuAnnouncement = $state('');
 	let activeOutlineBlockId = $state<string>();
 	let outlineAnnouncement = $state('');
 	let readingCanvas = $state<HTMLElement>();
@@ -494,6 +497,17 @@
 
 	async function changeGenerationQuality(value: string): Promise<void> {
 		await player.chooseGenerationSteps(Number(value));
+	}
+
+	async function clearCachedAudio(): Promise<void> {
+		if (clearingAudio) return;
+		clearingAudio = true;
+		audioMenuAnnouncement = '';
+		const cleared = await player.clearDocumentAudio();
+		audioMenuAnnouncement = cleared
+			? 'Cached audio and listening history cleared for this document.'
+			: 'Cached audio could not be cleared.';
+		clearingAudio = false;
 	}
 
 	function handleKeydown(event: KeyboardEvent): void {
@@ -1119,6 +1133,12 @@
 							player.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
 					/>
 				</label>
+				<PlayerActionsMenu
+					canClear={player.hasDocumentAudioState}
+					clearing={clearingAudio}
+					onClear={clearCachedAudio}
+				/>
+				<span class="sr-only" aria-live="polite">{audioMenuAnnouncement}</span>
 			</div>
 
 			{#if player.errorMessage}
@@ -1976,7 +1996,7 @@
 		display: grid;
 		height: var(--player-height);
 		min-width: 0;
-		grid-template-columns: 236px minmax(280px, 1fr) 168px;
+		grid-template-columns: 236px minmax(260px, 1fr) 208px;
 		align-items: center;
 		gap: 10px;
 		padding: 1px 16px 0;
@@ -2334,7 +2354,7 @@
 
 	.player-options {
 		display: flex;
-		width: 168px;
+		width: 208px;
 		min-width: 0;
 		align-items: center;
 		justify-self: end;
@@ -2413,7 +2433,7 @@
 		}
 
 		.player-bar {
-			grid-template-columns: 236px minmax(270px, 1fr) 168px;
+			grid-template-columns: 236px minmax(230px, 1fr) 208px;
 			gap: 8px;
 			padding-right: 20px;
 			padding-left: 20px;

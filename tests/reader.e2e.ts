@@ -331,6 +331,19 @@ test('whole-document preparation fills cache coverage and preserves read-along t
 	await expect(page.locator('.active-word').first()).toBeVisible();
 	await expect(page.locator('.timeline-band.listened').first()).toBeVisible();
 	await expect(page.locator('#timeline-coverage-summary')).not.toContainText('0% listened');
+
+	await page.getByRole('button', { name: 'Document audio options' }).click();
+	await page.getByRole('menuitem', { name: 'Clear cached audio This document' }).click();
+	await expect(page.locator('.timeline-band.cached')).toHaveCount(0);
+	await expect(page.locator('.timeline-band.listened')).toHaveCount(0);
+	await expect(page.locator('#timeline-coverage-summary')).toContainText('0% audio cached');
+	await expect(page.locator('#timeline-coverage-summary')).toContainText('0% listened');
+	await expect(page.getByRole('button', { name: 'Prepare whole document audio' })).toBeEnabled();
+
+	await page.reload();
+	await expect(page.getByRole('heading', { name: 'Prepared Without Pressure' })).toBeVisible();
+	await expect(page.locator('#timeline-coverage-summary')).toContainText('0% audio cached');
+	await expect(page.locator('#timeline-coverage-summary')).toContainText('0% listened');
 });
 
 test('keeps the desktop player settings inside the playback dock', async ({ page }) => {

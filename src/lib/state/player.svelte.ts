@@ -34,6 +34,7 @@ interface GeneratedSegment {
 	sampleRate: number;
 	meta: Omit<AudioVariantMeta, 'mimeType'>;
 	signal: AbortSignal;
+	version: number;
 }
 
 export interface TimelineSegmentVisual {
@@ -86,6 +87,7 @@ export class VoicebookPlayer {
 	private persistenceBySegment = new SvelteMap<number, Promise<boolean>>();
 	private cachedSegments = new SvelteSet<number>();
 	private generationBySegment = new SvelteMap<number, number>();
+	private hasCachedAudioVariants = $state(false);
 	private abortControllers = new SvelteMap<number, AbortController>();
 	private lastSavedAt = 0;
 	private cancellationVersion = 0;
@@ -170,6 +172,15 @@ export class VoicebookPlayer {
 		return Boolean(this.book?.segments.length) && this.cachedProgress >= 0.9999;
 	}
 
+	get hasDocumentAudioState(): boolean {
+		return (
+			this.hasCachedAudioVariants ||
+			this.audioCache.size > 0 ||
+			this.listenedProgress > 0 ||
+			this.generationBySegment.size > 0
+		);
+	}
+
 	get runtimeLabel(): string {
 		if (!this.engineBackend) return 'Engine warming';
 		return `${this.engineBackend === 'webgpu' ? 'WebGPU' : 'WASM'} · ${this.engineDtype}`;
@@ -192,6 +203,7 @@ export class VoicebookPlayer {
 		this.persistenceBySegment.clear();
 		this.cachedSegments.clear();
 		this.generationBySegment.clear();
+		this.hasCachedAudioVariants = false;
 		this.cacheCoverageSignature = '';
 		this.isBuffering = false;
 		this.isGeneratingAll = false;
@@ -252,6 +264,7 @@ export class VoicebookPlayer {
 		const documentId = this.book.id;
 		const variants = await listAudioVariants(documentId);
 		if (!this.book || this.book.id !== documentId || signature !== this.variantSignature()) return;
+		this.hasCachedAudioVariants = variants.length > 0;
 		this.cachedSegments.clear();
 		const indexes = new SvelteMap(this.book.segments.map((segment, index) => [segment.id, index]));
 		for (const variant of variants) {
@@ -434,6 +447,7 @@ export class VoicebookPlayer {
 		const documentId = this.book.id;
 		const model = appState.selectedModel;
 		const controller = new AbortController();
+		const version = this.cancellationVersion;
 		let completed = false;
 		this.abortControllers.set(index, controller);
 		this.generationBySegment.set(index, 0.02);
@@ -474,7 +488,8 @@ export class VoicebookPlayer {
 					timing: generated.timing,
 					createdAt: Date.now()
 				},
-				signal: controller.signal
+				signal: controller.signal,
+				version
 			};
 		} finally {
 			if (this.abortControllers.get(index) === controller) this.abortControllers.delete(index);
@@ -486,11 +501,12 @@ export class VoicebookPlayer {
 		meta: Omit<AudioVariantMeta, 'mimeType'>,
 		audio: Float32Array,
 		sampleRate: number,
-		signal: AbortSignal
+		signal: AbortSignal,
+		version: number
 	): Promise<boolean> {
 		try {
 			const encoded = await encodeAudio(audio, sampleRate);
-			if (signal.aborted) return false;
+			if (signal.aborted || version !== this.cancellationVersion) return false;
 			await putAudio({ ...meta, mimeType: encoded.mimeType }, encoded.blob);
 			return true;
 		} catch {
@@ -505,7 +521,8 @@ export class VoicebookPlayer {
 			generated.meta,
 			generated.audio,
 			generated.sampleRate,
-			generated.signal
+			generated.signal,
+			generated.version
 		)
 			.then((saved) => {
 				if (
@@ -514,6 +531,7 @@ export class VoicebookPlayer {
 					this.matchesCurrentVariant({ ...generated.meta, mimeType: '' })
 				)
 					this.cachedSegments.add(index);
+				if (saved) this.hasCachedAudioVariants = true;
 				this.generationProgress = this.cachedProgress * 100;
 				return saved;
 			})
@@ -975,6 +993,46 @@ export class VoicebookPlayer {
 				this.isGeneratingAll = false;
 				this.generationProgress = this.cachedProgress * 100;
 			}
+		}
+	}
+
+	async clearDocumentAudio(): Promise<boolean> {
+		if (!this.book) return false;
+		const document = this.book;
+		const pending = [
+			...this.queue.values(),
+			...this.cacheQueue.values(),
+			...this.persistenceBySegment.values()
+		];
+		this.stopPlayback(false);
+		this.cancellationVersion += 1;
+		this.reprioritize();
+		ttsClient.cancelAll();
+		this.isBuffering = false;
+		this.isGeneratingAll = false;
+		this.generationBySegment.clear();
+		this.cacheQueue.clear();
+		this.bufferingStage = 'Preparing this passage…';
+		this.errorMessage = '';
+
+		try {
+			await Promise.allSettled(pending);
+			await appState.clearAudio(document.id);
+			this.audioCache.clear();
+			this.preparedBySegment.clear();
+			this.persistenceBySegment.clear();
+			this.cachedSegments.clear();
+			this.hasCachedAudioVariants = false;
+			this.cacheCoverageSignature = '';
+			this.generationProgress = 0;
+			document.listened = {};
+			await appState.saveDocument(document);
+			return true;
+		} catch (error) {
+			this.errorMessage =
+				error instanceof Error ? error.message : 'Cached audio could not be cleared.';
+			await this.refreshCacheCoverage(true);
+			return false;
 		}
 	}
 
