@@ -700,15 +700,19 @@ h3 {
 }
 
 .sidebar-documents a:hover,
-.sidebar-documents a.active,
-.library-flyout a:hover,
-.library-flyout a.active {
+.library-flyout a:hover {
 	background: var(--hover);
 	color: var(--text-soft);
 }
 
 .sidebar-documents a.active,
 .library-flyout a.active {
+	background: color-mix(in srgb, var(--primary-soft) 58%, transparent);
+	color: var(--text-soft);
+}
+
+.sidebar-documents a.active svg,
+.library-flyout a.active svg {
 	color: var(--primary);
 }
 

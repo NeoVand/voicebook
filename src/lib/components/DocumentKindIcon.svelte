@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FileCode, FileScan, FileText, FileType } from '@lucide/svelte';
+	import { FileCode, FileImage, FileText, FileType } from '@lucide/svelte';
 	import type { DocumentKind } from '$lib/domain/types';
 
 	let {
@@ -10,7 +10,7 @@
 </script>
 
 {#if kind === 'pdf'}
-	<FileScan {size} {strokeWidth} aria-hidden="true" />
+	<FileImage {size} {strokeWidth} aria-hidden="true" />
 {:else if kind === 'docx'}
 	<FileType {size} {strokeWidth} aria-hidden="true" />
 {:else if kind === 'markdown'}

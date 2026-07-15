@@ -70,6 +70,25 @@ test('presents one intentional empty-library import surface', async ({ page }) =
 	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
 });
 
+test('highlights only the document currently open in the reader', async ({ page }) => {
+	await page.goto('./');
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByLabel('Title').fill('A Quiet Sidebar');
+	await page.getByRole('textbox', { name: 'Text' }).fill('The active state belongs to the reader.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+
+	const recentDocuments = page.getByRole('navigation', { name: 'Recent documents' });
+	const currentDocument = recentDocuments.getByRole('link', { name: 'A Quiet Sidebar' });
+	await expect(currentDocument).toHaveAttribute('aria-current', 'page');
+	await expect(currentDocument).toHaveClass(/\bactive\b/);
+	await expect(currentDocument.locator('svg')).toHaveAttribute('width', '14');
+	await expect(currentDocument.locator('svg')).toHaveAttribute('height', '14');
+
+	await page.getByRole('link', { name: 'Voicebook library' }).click();
+	await expect(currentDocument).not.toHaveAttribute('aria-current', 'page');
+	await expect(currentDocument).not.toHaveClass(/\bactive\b/);
+});
+
 test('import → install → play → seek → bookmark → reload → offline reopen', async ({
 	page,
 	context

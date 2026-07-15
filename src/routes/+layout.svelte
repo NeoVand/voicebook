@@ -72,6 +72,7 @@
 	let isReader = $derived(page.url.pathname.startsWith(resolve('/read')));
 	let settingsSection = $derived(page.url.searchParams.get('section') ?? 'models');
 	let readerDocumentId = $derived(page.url.searchParams.get('document'));
+	let activeReaderDocumentId = $derived(isReader ? readerDocumentId : null);
 	let readerBook = $derived(
 		isReader ? appState.documents.find((document) => document.id === readerDocumentId) : undefined
 	);
@@ -298,8 +299,9 @@
 						<strong>Recent documents</strong>
 						{#each appState.documents.slice(0, 7) as document (document.id)}
 							<a
-								class:active={readerDocumentId === document.id}
+								class:active={activeReaderDocumentId === document.id}
 								href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
+								aria-current={activeReaderDocumentId === document.id ? 'page' : undefined}
 								onclick={() => readerChrome.closeTransientPanels()}
 							>
 								<DocumentKindIcon kind={document.sourceKind} size={14} />
@@ -334,12 +336,13 @@
 						<nav aria-label="Recent documents">
 							{#each appState.documents as document (document.id)}
 								<a
-									class:active={readerDocumentId === document.id}
+									class:active={activeReaderDocumentId === document.id}
 									href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
+									aria-current={activeReaderDocumentId === document.id ? 'page' : undefined}
 									title={document.title}
 									onclick={() => readerChrome.closeTransientPanels()}
 								>
-									<DocumentKindIcon kind={document.sourceKind} size={13} />
+									<DocumentKindIcon kind={document.sourceKind} size={14} />
 									<span>{document.title}</span>
 								</a>
 							{/each}
