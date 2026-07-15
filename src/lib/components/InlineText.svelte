@@ -111,14 +111,14 @@
 
 	.active-word {
 		box-decoration-break: clone;
-		background: var(--active-word-bg, rgba(168, 157, 246, 0.34));
-		box-shadow: 0 0 0 0.12em var(--active-word-bg, rgba(168, 157, 246, 0.34));
+		background: var(--active-word-bg, rgba(112, 176, 143, 0.34));
+		box-shadow: 0 0 0 0.12em var(--active-word-bg, rgba(112, 176, 143, 0.34));
 		color: var(--active-word-ink, var(--reader-ink-strong, #f7f4ed));
 		-webkit-box-decoration-break: clone;
 	}
 
 	a {
-		color: var(--reader-link, #a89df6);
+		color: var(--reader-link, #9fcdb5);
 		text-decoration-color: color-mix(in srgb, currentColor 48%, transparent);
 		text-decoration-thickness: 0.08em;
 		text-underline-offset: 0.16em;

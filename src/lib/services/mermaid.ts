@@ -17,11 +17,11 @@ function initializeForContainer(mermaid: Mermaid, container: HTMLElement): void 
 	const style = getComputedStyle(container);
 	const background = token(style, '--reader', '#18191d');
 	const node = token(style, '--diagram-node', '#25262c');
-	const nodeAlt = token(style, '--diagram-node-alt', '#302d45');
+	const nodeAlt = token(style, '--diagram-node-alt', '#24372f');
 	const nodeMuted = token(style, '--diagram-node-muted', '#1d1e23');
-	const border = token(style, '--diagram-border', '#716aa6');
-	const borderAlt = token(style, '--diagram-border-alt', '#9188d4');
-	const line = token(style, '--diagram-line', '#aaa2e3');
+	const border = token(style, '--diagram-border', '#557e6a');
+	const borderAlt = token(style, '--diagram-border-alt', '#78a68f');
+	const line = token(style, '--diagram-line', '#9ac6af');
 	const text = token(style, '--diagram-text', '#f4f4f2');
 	const quiet = token(style, '--reader-quiet', '#8f919b');
 	const note = token(style, '--diagram-note', '#29261f');

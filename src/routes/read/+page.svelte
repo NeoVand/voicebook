@@ -1221,7 +1221,7 @@
 
 	.outline-legend .voice-key {
 		background: var(--primary);
-		box-shadow: 0 0 0 2px rgba(168, 157, 246, 0.12);
+		box-shadow: 0 0 0 2px var(--primary-soft);
 	}
 
 	.outline-panel nav {
