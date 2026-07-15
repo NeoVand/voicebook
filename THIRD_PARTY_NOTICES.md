@@ -4,13 +4,15 @@ Voicebook's original source is licensed under MIT. Its dependency lockfile recor
 
 The following runtime components require prominent source and license notices:
 
-## Mediabunny
+## Mediabunny and its MP3 encoder extension
 
-- Purpose: WebCodecs-backed mono Opus/WebM encoding.
+- Purpose: WebCodecs-backed mono Opus/WebM encoding and whole-document MP3 export.
 - Version: 1.50.8.
 - Source: <https://github.com/Vanilagy/mediabunny>
 - License: Mozilla Public License 2.0, <https://www.mozilla.org/MPL/2.0/>.
 - Voicebook modifications: none; consumed as an npm dependency.
+
+The `@mediabunny/mp3-encoder` extension includes a WebAssembly build of LAME 3.100. LAME is licensed under the GNU Lesser General Public License; source and license information are available at <https://lame.sourceforge.io/>.
 
 ## SoundTouchJS AudioWorklet
 

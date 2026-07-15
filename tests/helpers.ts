@@ -105,6 +105,14 @@ export async function installFakeTts(page: Page): Promise<void> {
 			terminate(): void {}
 		}
 
-		Object.defineProperty(window, 'Worker', { value: FakeSpeechWorker, configurable: true });
+		const NativeWorker = window.Worker;
+		const RoutedWorker = new Proxy(NativeWorker, {
+			construct(target, argumentsList) {
+				const workerUrl = String(argumentsList[0] ?? '');
+				if (workerUrl.includes('tts.worker')) return new FakeSpeechWorker() as unknown as Worker;
+				return Reflect.construct(target, argumentsList);
+			}
+		});
+		Object.defineProperty(window, 'Worker', { value: RoutedWorker, configurable: true });
 	});
 }

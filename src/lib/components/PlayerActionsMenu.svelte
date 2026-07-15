@@ -1,21 +1,33 @@
 <script lang="ts">
-	import { EllipsisVertical, LoaderCircle, Trash2 } from '@lucide/svelte';
+	import { Download, EllipsisVertical, LoaderCircle, Trash2 } from '@lucide/svelte';
 	import { tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
 
 	interface Props {
+		canDownload: boolean;
 		canClear: boolean;
+		downloading: boolean;
 		clearing: boolean;
+		downloadProgress: number;
+		onDownload: () => void | Promise<void>;
 		onClear: () => void | Promise<void>;
 	}
 
-	let { canClear, clearing, onClear }: Props = $props();
+	let {
+		canDownload,
+		canClear,
+		downloading,
+		clearing,
+		downloadProgress,
+		onDownload,
+		onClear
+	}: Props = $props();
 	const uid = $props.id();
 	let open = $state(false);
 	let root = $state<HTMLDivElement>();
 	let trigger = $state<HTMLButtonElement>();
-	let clearItem = $state<HTMLButtonElement>();
+	let menu = $state<HTMLDivElement>();
 
 	const trackRoot: Attachment<HTMLDivElement> = (element) => {
 		root = element;
@@ -31,17 +43,23 @@
 		};
 	};
 
-	const trackClearItem: Attachment<HTMLButtonElement> = (element) => {
-		clearItem = element;
+	const trackMenu: Attachment<HTMLDivElement> = (element) => {
+		menu = element;
 		return () => {
-			if (clearItem === element) clearItem = undefined;
+			if (menu === element) menu = undefined;
 		};
 	};
+
+	function menuItems(): HTMLButtonElement[] {
+		return Array.from(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []).filter(
+			(item) => !item.disabled
+		);
+	}
 
 	async function openMenu(): Promise<void> {
 		open = true;
 		await tick();
-		clearItem?.focus();
+		menuItems()[0]?.focus();
 	}
 
 	function closeMenu(restoreFocus = false): void {
@@ -67,7 +85,15 @@
 			closeMenu();
 		} else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
 			event.preventDefault();
-			clearItem?.focus();
+			const items = menuItems();
+			if (!items.length) return;
+			if (event.key === 'Home') items[0]?.focus();
+			else if (event.key === 'End') items.at(-1)?.focus();
+			else {
+				const current = Math.max(0, items.indexOf(document.activeElement as HTMLButtonElement));
+				const direction = event.key === 'ArrowDown' ? 1 : -1;
+				items[(current + direction + items.length) % items.length]?.focus();
+			}
 		}
 	}
 
@@ -76,9 +102,16 @@
 	}
 
 	async function clearAudio(): Promise<void> {
-		if (!canClear || clearing) return;
+		if (!canClear || clearing || downloading) return;
 		closeMenu();
 		await onClear();
+		trigger?.focus();
+	}
+
+	async function downloadAudio(): Promise<void> {
+		if (!canDownload || downloading || clearing) return;
+		closeMenu();
+		await onDownload();
 		trigger?.focus();
 	}
 </script>
@@ -94,13 +127,13 @@
 		aria-controls={`${uid}-menu`}
 		aria-expanded={open}
 		aria-haspopup="menu"
-		aria-busy={clearing}
+		aria-busy={clearing || downloading}
 		title="Document audio options"
 		onclick={() => (open ? closeMenu() : void openMenu())}
 		onkeydown={handleTriggerKeydown}
 		{@attach trackTrigger}
 	>
-		{#if clearing}
+		{#if clearing || downloading}
 			<span class="spinner"><LoaderCircle size={16} aria-hidden="true" /></span>
 		{:else}
 			<EllipsisVertical size={17} strokeWidth={1.8} aria-hidden="true" />
@@ -116,15 +149,37 @@
 			tabindex="-1"
 			onkeydown={handleMenuKeydown}
 			transition:fly={{ y: 5, duration: 120 }}
+			{@attach trackMenu}
 		>
+			<button
+				class="menu-item"
+				type="button"
+				role="menuitem"
+				disabled={!canDownload || downloading || clearing}
+				aria-busy={downloading}
+				onclick={() => void downloadAudio()}
+			>
+				{#if downloading}
+					<span class="spinner"><LoaderCircle size={15} aria-hidden="true" /></span>
+				{:else}
+					<Download size={15} strokeWidth={1.8} aria-hidden="true" />
+				{/if}
+				<span>
+					<strong
+						>{downloading
+							? `Creating MP3 · ${Math.round(downloadProgress)}%`
+							: 'Download MP3'}</strong
+					>
+					<small>{canDownload ? 'Whole document' : 'Prepare the document first'}</small>
+				</span>
+			</button>
 			<button
 				class="menu-item danger"
 				type="button"
 				role="menuitem"
-				disabled={!canClear || clearing}
+				disabled={!canClear || clearing || downloading}
 				aria-busy={clearing}
 				onclick={() => void clearAudio()}
-				{@attach trackClearItem}
 			>
 				{#if clearing}
 					<span class="spinner"><LoaderCircle size={15} aria-hidden="true" /></span>
@@ -202,6 +257,12 @@
 
 	.menu-item:hover:not(:disabled),
 	.menu-item:focus-visible:not(:disabled) {
+		background: var(--hover);
+		color: var(--text);
+	}
+
+	.menu-item.danger:hover:not(:disabled),
+	.menu-item.danger:focus-visible:not(:disabled) {
 		background: var(--danger-surface);
 		color: var(--danger-text);
 	}

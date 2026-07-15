@@ -45,6 +45,8 @@
 	let book = $state<NormalizedDocument | null>(null);
 	let installing = $state(false);
 	let clearingAudio = $state(false);
+	let downloadingAudio = $state(false);
+	let downloadProgress = $state(0);
 	let audioMenuAnnouncement = $state('');
 	let activeOutlineBlockId = $state<string>();
 	let outlineAnnouncement = $state('');
@@ -500,7 +502,7 @@
 	}
 
 	async function clearCachedAudio(): Promise<void> {
-		if (clearingAudio) return;
+		if (clearingAudio || downloadingAudio) return;
 		clearingAudio = true;
 		audioMenuAnnouncement = '';
 		const cleared = await player.clearDocumentAudio();
@@ -508,6 +510,30 @@
 			? 'Cached audio and listening history cleared for this document.'
 			: 'Cached audio could not be cleared.';
 		clearingAudio = false;
+	}
+
+	async function downloadDocumentAudio(): Promise<void> {
+		if (downloadingAudio || clearingAudio || !player.isDocumentPrepared) return;
+		downloadingAudio = true;
+		downloadProgress = 0;
+		audioMenuAnnouncement = 'Creating the document MP3.';
+		try {
+			const { blob, filename } = await player.exportDocumentMp3((progress) => {
+				downloadProgress = progress * 100;
+			});
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = filename;
+			link.click();
+			setTimeout(() => URL.revokeObjectURL(url), 1_000);
+			audioMenuAnnouncement = 'The document MP3 is ready to download.';
+		} catch (error) {
+			audioMenuAnnouncement =
+				error instanceof Error ? error.message : 'The document MP3 could not be created.';
+		} finally {
+			downloadingAudio = false;
+		}
 	}
 
 	function handleKeydown(event: KeyboardEvent): void {
@@ -1134,8 +1160,12 @@
 					/>
 				</label>
 				<PlayerActionsMenu
+					canDownload={player.isDocumentPrepared}
 					canClear={player.hasDocumentAudioState}
+					downloading={downloadingAudio}
 					clearing={clearingAudio}
+					{downloadProgress}
+					onDownload={downloadDocumentAudio}
 					onClear={clearCachedAudio}
 				/>
 				<span class="sr-only" aria-live="polite">{audioMenuAnnouncement}</span>
