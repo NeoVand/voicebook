@@ -6,6 +6,42 @@ test.beforeEach(async ({ page }) => {
 	await installFakeTts(page);
 });
 
+test('presents one intentional empty-library import surface', async ({ page }) => {
+	await page.goto('./');
+	const emptyState = page.getByRole('region', { name: 'What would you like to listen to?' });
+	await expect(emptyState).toBeVisible();
+	await expect(page.getByText('Your library is empty', { exact: true })).toHaveCount(0);
+	await expect(page.locator('.import-strip')).toHaveCount(0);
+
+	const addDocument = page.getByRole('button', { name: 'Add document', exact: true });
+	const pasteText = page.getByRole('button', { name: 'Paste text', exact: true });
+	await expect(addDocument).toHaveCount(1);
+	await expect(pasteText).toHaveCount(1);
+	const [addBox, pasteBox] = await Promise.all([
+		addDocument.boundingBox(),
+		pasteText.boundingBox()
+	]);
+	expect(addBox).not.toBeNull();
+	expect(pasteBox).not.toBeNull();
+	expect(addBox?.width).toBe(pasteBox?.width);
+	expect(addBox?.height).toBe(44);
+	expect(pasteBox?.height).toBe(44);
+	await expect(emptyState).toHaveCSS('border-radius', '14px');
+
+	const emptyBeforeDrag = await emptyState.boundingBox();
+	await page.locator('.library-page').evaluate((library) => {
+		const transfer = new DataTransfer();
+		transfer.items.add(new File(['A short local document.'], 'local.txt', { type: 'text/plain' }));
+		library.dispatchEvent(
+			new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: transfer })
+		);
+	});
+	await expect(page.getByText('Drop to add to your library', { exact: true })).toBeVisible();
+	expect(await emptyState.boundingBox()).toEqual(emptyBeforeDrag);
+	await page.locator('.library-page').dispatchEvent('dragleave');
+	await expect(page.getByText('Drop to add to your library', { exact: true })).toHaveCount(0);
+});
+
 test('import → install → play → seek → bookmark → reload → offline reopen', async ({
 	page,
 	context

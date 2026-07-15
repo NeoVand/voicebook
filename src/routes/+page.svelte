@@ -16,6 +16,7 @@
 
 	let fileInput: HTMLInputElement | undefined;
 	let dragging = $state(false);
+	let dragDepth = 0;
 	let pasteOpen = $state(false);
 	let pasteTitle = $state('');
 	let pasteText = $state('');
@@ -58,8 +59,28 @@
 
 	async function onDrop(event: DragEvent): Promise<void> {
 		event.preventDefault();
+		dragDepth = 0;
 		dragging = false;
 		await acceptFiles(Array.from(event.dataTransfer?.files ?? []));
+	}
+
+	function onDragEnter(event: DragEvent): void {
+		if (!event.dataTransfer?.types.includes('Files')) return;
+		event.preventDefault();
+		dragDepth += 1;
+		dragging = true;
+	}
+
+	function onDragOver(event: DragEvent): void {
+		if (!event.dataTransfer?.types.includes('Files')) return;
+		event.preventDefault();
+		event.dataTransfer.dropEffect = 'copy';
+	}
+
+	function onDragLeave(event: DragEvent): void {
+		event.preventDefault();
+		dragDepth = Math.max(0, dragDepth - 1);
+		if (dragDepth === 0) dragging = false;
 	}
 
 	async function savePaste(): Promise<void> {
@@ -81,113 +102,155 @@
 	<title>Library — Voicebook</title>
 </svelte:head>
 
-<div class="workspace-page library-page">
+<div
+	class="workspace-page library-page"
+	class:dragging
+	role="region"
+	aria-label="Document library workspace"
+	ondragenter={onDragEnter}
+	ondragover={onDragOver}
+	ondragleave={onDragLeave}
+	ondrop={onDrop}
+>
 	<header class="page-heading">
 		<div>
-			<p class="eyebrow">Your workspace</p>
+			<p class="eyebrow">Local library</p>
 			<h1>Library</h1>
-			<p class="subtitle">Read and listen without sending a document anywhere.</p>
+			<p class="subtitle">Everything you add stays private on this device.</p>
 		</div>
-		<div class="heading-actions">
-			<button class="button" type="button" onclick={() => (pasteOpen = true)}>
-				<FileText size={15} /> Paste text
-			</button>
-			<button class="button primary" type="button" onclick={() => fileInput?.click()}>
-				<Plus size={16} /> Add document
-			</button>
-		</div>
+		{#if appState.initialized && appState.documents.length}
+			<div class="library-actions heading-actions">
+				<button class="button library-action" type="button" onclick={() => (pasteOpen = true)}>
+					<FileText size={16} /> Paste text
+				</button>
+				<button
+					class="button primary library-action"
+					type="button"
+					onclick={() => fileInput?.click()}
+				>
+					<Plus size={16} /> Add document
+				</button>
+			</div>
+		{/if}
 	</header>
 
-	<label
-		class="import-strip"
-		class:dragging
-		class:busy={appState.importing}
-		for="document-upload"
-		ondragover={(event) => {
-			event.preventDefault();
-			dragging = true;
-		}}
-		ondragleave={() => (dragging = false)}
-		ondrop={onDrop}
-	>
-		<span class="import-icon"><FileUp size={20} /></span>
-		<span class="import-copy">
-			<strong>{appState.importing ? appState.statusMessage : 'Drop a document here'}</strong>
-			<small>PDF, DOCX, Markdown, or text · processed in this browser</small>
-		</span>
-		<span class="button">Choose file</span>
-	</label>
 	<input
 		id="document-upload"
 		class="visually-hidden"
 		type="file"
 		multiple
+		aria-label="Choose documents to import"
 		accept=".pdf,.docx,.md,.markdown,.txt,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 		{@attach captureFileInput}
 		onchange={onFileChange}
 	/>
 
-	<div class="library-meta">
-		<div>
-			<h2>Documents</h2>
-			<span>
-				{appState.documents.length}
-				{appState.documents.length === 1 ? 'item' : 'items'}
-			</span>
-		</div>
-	</div>
-
-	<section class="document-table" aria-label="Documents">
-		{#if !appState.initialized}
-			<div class="loading-row">Opening your local library…</div>
-		{:else if appState.documents.length}
-			{#each appState.documents as document (document.id)}
-				<article class="document-row">
-					<a
-						class="document-link"
-						href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
-						aria-label={'Open ' + document.title}
-					>
-						<span class="file-kind">
-							<FileText size={16} />
-							<small>{document.sourceKind}</small>
-						</span>
-						<span class="document-copy">
-							<strong>{document.title}</strong>
-							<small>{document.segments[0]?.text ?? 'Ready to listen.'}</small>
-						</span>
-						<span class="document-time"><Clock3 size={13} /> {readingMinutes(document)} min</span>
-						<span class="document-progress">
-							<span>{Math.round(progressFor(document))}%</span>
-							<i><b style:width={progressFor(document) + '%'}></b></i>
-						</span>
-						<span class="row-arrow"><ArrowRight size={16} /></span>
-					</a>
-					<button
-						class="icon-button remove-document"
-						type="button"
-						aria-label={'Remove ' + document.title}
-						onclick={() => removeDocument(document)}
-					>
-						<Trash2 size={15} />
-					</button>
-				</article>
-			{/each}
-		{:else}
-			<div class="empty-library">
-				<span class="empty-icon"><BookOpenText size={28} /></span>
+	{#if !appState.initialized}
+		<div class="loading-row">Opening your local library…</div>
+	{:else if appState.documents.length}
+		<section class="library-collection" aria-labelledby="documents-heading">
+			<header class="library-meta">
 				<div>
-					<h3>Your library is empty</h3>
-					<p>
-						Drop in a document and Voicebook will turn it into a clean, listenable reading view.
-					</p>
+					<h2 id="documents-heading">Documents</h2>
+					<span>
+						{appState.documents.length}
+						{appState.documents.length === 1 ? 'item' : 'items'}
+					</span>
 				</div>
-				<button class="button primary" type="button" onclick={() => fileInput?.click()}>
-					Add your first document
-				</button>
+				<p>Drop files anywhere in the library to add them.</p>
+			</header>
+
+			<div class="document-table">
+				{#each appState.documents as document (document.id)}
+					<article class="document-row">
+						<a
+							class="document-link"
+							href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
+							aria-label={'Open ' + document.title}
+						>
+							<span class="file-kind">
+								<FileText size={16} />
+								<small>{document.sourceKind}</small>
+							</span>
+							<span class="document-copy">
+								<strong>{document.title}</strong>
+								<small>{document.segments[0]?.text ?? 'Ready to listen.'}</small>
+							</span>
+							<span class="document-time"><Clock3 size={13} /> {readingMinutes(document)} min</span>
+							<span class="document-progress">
+								<span>{Math.round(progressFor(document))}%</span>
+								<i><b style:width={progressFor(document) + '%'}></b></i>
+							</span>
+							<span class="row-arrow"><ArrowRight size={16} /></span>
+						</a>
+						<button
+							class="icon-button remove-document"
+							type="button"
+							aria-label={'Remove ' + document.title}
+							onclick={() => removeDocument(document)}
+						>
+							<Trash2 size={15} />
+						</button>
+					</article>
+				{/each}
 			</div>
-		{/if}
-	</section>
+		</section>
+	{:else}
+		<section
+			class="empty-library"
+			aria-labelledby="empty-library-title"
+			aria-busy={appState.importing}
+		>
+			<div class="empty-library-content">
+				<span class="empty-icon" aria-hidden="true">
+					{#if appState.importing}
+						<span class="importing-icon"><FileUp size={24} /></span>
+					{:else}
+						<BookOpenText size={25} />
+					{/if}
+				</span>
+				<h2 id="empty-library-title">
+					{appState.importing ? 'Adding your document…' : 'What would you like to listen to?'}
+				</h2>
+				<p>
+					{appState.importing
+						? appState.statusMessage
+						: 'Drop a PDF, DOCX, Markdown, or text file here to turn it into a calm reading experience.'}
+				</p>
+				<div class="library-actions empty-actions">
+					<button
+						class="button primary library-action"
+						type="button"
+						disabled={appState.importing}
+						onclick={() => fileInput?.click()}
+					>
+						<Plus size={16} /> Add document
+					</button>
+					<button
+						class="button library-action"
+						type="button"
+						disabled={appState.importing}
+						onclick={() => (pasteOpen = true)}
+					>
+						<FileText size={16} /> Paste text
+					</button>
+				</div>
+				<div class="empty-library-note">
+					<span>PDF · DOCX · Markdown · TXT</span>
+					<span aria-hidden="true">·</span>
+					<span>Processed locally</span>
+				</div>
+			</div>
+		</section>
+	{/if}
+
+	{#if dragging}
+		<div class="library-drop-overlay" aria-hidden="true">
+			<span><FileUp size={24} /></span>
+			<strong>Drop to add to your library</strong>
+			<small>Release the files to import them locally</small>
+		</div>
+	{/if}
 </div>
 
 {#if pasteOpen}
@@ -273,12 +336,17 @@
 		white-space: nowrap;
 	}
 
+	.library-page {
+		position: relative;
+		min-height: calc(100dvh - var(--app-header-height));
+	}
+
 	.page-heading {
 		display: flex;
-		align-items: flex-end;
+		align-items: center;
 		justify-content: space-between;
-		gap: 24px;
-		margin-bottom: 28px;
+		gap: 32px;
+		margin-bottom: 44px;
 	}
 
 	.eyebrow {
@@ -292,80 +360,42 @@
 
 	.page-heading h1 {
 		margin: 0;
-		font-size: 2rem;
+		font-size: 2.25rem;
 		font-weight: 660;
-		letter-spacing: -0.045em;
+		letter-spacing: -0.05em;
+		line-height: 1;
 	}
 
 	.subtitle {
-		margin: 6px 0 0;
+		margin: 10px 0 0;
 		color: var(--muted);
-		font-size: 11px;
+		font-size: 12px;
+		line-height: 1.5;
 	}
 
-	.heading-actions {
+	.library-actions {
 		display: flex;
 		gap: 8px;
 	}
 
-	.import-strip {
-		display: grid;
-		grid-template-columns: auto 1fr auto;
-		align-items: center;
-		gap: 14px;
-		min-height: 88px;
-		padding: 18px 4px;
-		border-top: 1px solid var(--line);
-		border-bottom: 1px solid var(--line);
-		background: transparent;
-		transition:
-			background 150ms var(--ease),
-			color 150ms var(--ease);
+	.library-action {
+		width: 148px;
+		height: 44px;
+		padding: 0 16px;
+		font-size: 11px;
+		white-space: nowrap;
 	}
 
-	.import-strip:hover,
-	.import-strip.dragging {
-		background: var(--hover);
-	}
-
-	.import-strip.busy {
-		pointer-events: none;
-		opacity: 0.65;
-	}
-
-	.import-icon {
-		display: grid;
-		width: 38px;
-		height: 38px;
-		place-items: center;
-		border-radius: 6px;
-		background: var(--primary-soft);
-		color: var(--primary);
-	}
-
-	.import-copy strong,
-	.import-copy small {
-		display: block;
-	}
-
-	.import-copy strong {
-		font-size: 12px;
-		font-weight: 640;
-	}
-
-	.import-copy small {
-		margin-top: 5px;
-		color: var(--faint);
-		font-size: 9px;
+	.library-collection {
+		margin-top: 8px;
 	}
 
 	.library-meta {
 		display: flex;
-		align-items: flex-end;
+		align-items: center;
 		justify-content: space-between;
-		gap: 16px;
-		margin-top: 42px;
-		padding-bottom: 12px;
+		gap: 24px;
+		padding-bottom: 14px;
 		border-bottom: 1px solid var(--line-strong);
 	}
 
@@ -377,13 +407,19 @@
 
 	.library-meta h2 {
 		margin: 0;
-		font-size: 13px;
+		font-size: 14px;
 		font-weight: 650;
 	}
 
 	.library-meta span {
 		color: var(--faint);
-		font-size: 9px;
+		font-size: 10px;
+	}
+
+	.library-meta p {
+		margin: 0;
+		color: var(--faint);
+		font-size: 10px;
 	}
 
 	.document-table {
@@ -397,12 +433,15 @@
 
 	.document-link {
 		display: grid;
-		min-height: 78px;
-		grid-template-columns: 40px minmax(0, 1fr) 76px 112px 24px;
+		min-height: 86px;
+		grid-template-columns: 44px minmax(0, 1fr) 84px 120px 24px;
 		align-items: center;
-		gap: 14px;
-		padding: 10px 52px 10px 4px;
-		transition: background 150ms var(--ease);
+		gap: 16px;
+		padding: 12px 52px 12px 8px;
+		border-radius: 8px;
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease);
 	}
 
 	.document-link:hover {
@@ -411,10 +450,10 @@
 
 	.file-kind {
 		display: grid;
-		width: 36px;
-		height: 44px;
+		width: 40px;
+		height: 48px;
 		place-items: center;
-		border-radius: 5px;
+		border-radius: 8px;
 		background: var(--surface);
 		color: var(--primary);
 	}
@@ -442,14 +481,14 @@
 	}
 
 	.document-copy strong {
-		font-size: 11px;
+		font-size: 12px;
 		font-weight: 620;
 	}
 
 	.document-copy small {
-		margin-top: 5px;
+		margin-top: 6px;
 		color: var(--faint);
-		font-size: 9px;
+		font-size: 10px;
 	}
 
 	.document-time {
@@ -457,14 +496,14 @@
 		align-items: center;
 		gap: 5px;
 		color: var(--muted);
-		font-size: 9px;
+		font-size: 10px;
 	}
 
 	.document-progress {
 		display: grid;
 		gap: 6px;
 		color: var(--faint);
-		font-size: 8px;
+		font-size: 9px;
 	}
 
 	.document-progress i {
@@ -486,40 +525,134 @@
 
 	.remove-document {
 		position: absolute;
-		top: 19px;
+		top: 25px;
 		right: 4px;
 		width: 36px;
 		height: 36px;
 	}
 
 	.loading-row {
-		padding: 48px 4px;
+		padding: 72px 4px;
 		color: var(--muted);
-		font-size: 11px;
+		font-size: 12px;
 	}
 
 	.empty-library {
-		display: grid;
-		max-width: 620px;
-		grid-template-columns: auto 1fr auto;
+		display: flex;
+		min-height: min(480px, calc(100dvh - 230px));
 		align-items: center;
-		gap: 18px;
-		margin: 56px auto 0;
+		justify-content: center;
+		padding: 56px 32px;
+		border: 1px solid var(--line-strong);
+		border-radius: 14px;
+		background: linear-gradient(145deg, var(--primary-soft), transparent 42%), var(--surface);
+		transition:
+			border-color 150ms var(--ease),
+			background 150ms var(--ease),
+			box-shadow 150ms var(--ease);
+	}
+
+	.empty-library-content {
+		display: flex;
+		max-width: 560px;
+		align-items: center;
+		flex-direction: column;
+		text-align: center;
+	}
+
+	.empty-icon {
+		display: grid;
+		width: 52px;
+		height: 52px;
+		margin-bottom: 22px;
+		place-items: center;
+		border: 1px solid var(--line-strong);
+		border-radius: 14px;
+		background: var(--control-strong);
 		color: var(--primary);
 	}
 
-	.empty-library h3 {
+	.empty-library h2 {
 		margin: 0;
 		color: var(--text);
-		font-size: 13px;
+		font-size: clamp(1.45rem, 2.2vw, 2rem);
 		font-weight: 650;
+		letter-spacing: -0.035em;
+		line-height: 1.15;
 	}
 
 	.empty-library p {
-		margin: 5px 0 0;
+		max-width: 480px;
+		margin: 12px 0 0;
+		color: var(--muted);
+		font-size: 12px;
+		line-height: 1.65;
+	}
+
+	.empty-actions {
+		margin-top: 28px;
+	}
+
+	.empty-library-note {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 9px;
+		margin-top: 24px;
+		color: var(--faint);
+		font-size: 9px;
+		letter-spacing: 0.01em;
+	}
+
+	.importing-icon {
+		animation: importing-pulse 1.1s ease-in-out infinite;
+	}
+
+	.library-drop-overlay {
+		position: absolute;
+		inset: 20px 0 52px;
+		z-index: 10;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border: 1px solid var(--primary);
+		border-radius: 16px;
+		background: color-mix(in srgb, var(--bg) 82%, transparent);
+		box-shadow: inset 0 0 0 4px var(--primary-soft);
+		backdrop-filter: blur(18px) saturate(1.2);
+		-webkit-backdrop-filter: blur(18px) saturate(1.2);
+		color: var(--primary);
+		flex-direction: column;
+		pointer-events: none;
+	}
+
+	.library-drop-overlay span {
+		display: grid;
+		width: 52px;
+		height: 52px;
+		margin-bottom: 18px;
+		place-items: center;
+		border-radius: 14px;
+		background: var(--primary-soft);
+	}
+
+	.library-drop-overlay strong {
+		color: var(--text);
+		font-size: 16px;
+		font-weight: 650;
+	}
+
+	.library-drop-overlay small {
+		margin-top: 7px;
 		color: var(--muted);
 		font-size: 10px;
-		line-height: 1.5;
+	}
+
+	@keyframes importing-pulse {
+		50% {
+			transform: translateY(-2px);
+			opacity: 0.55;
+		}
 	}
 
 	.modal-scrim {
@@ -603,7 +736,7 @@
 
 	@media (max-width: 900px) {
 		.document-link {
-			grid-template-columns: 40px minmax(0, 1fr) 90px 24px;
+			grid-template-columns: 44px minmax(0, 1fr) 100px 24px;
 		}
 
 		.document-time {
@@ -615,39 +748,57 @@
 		.page-heading {
 			align-items: flex-start;
 			flex-direction: column;
+			margin-bottom: 32px;
 		}
 
 		.heading-actions {
 			width: 100%;
 		}
 
-		.heading-actions .button {
+		.library-action {
+			width: auto;
 			flex: 1;
 		}
 
-		.import-strip {
-			grid-template-columns: auto 1fr;
-		}
-
-		.import-strip > .button {
+		.library-meta p {
 			display: none;
 		}
 
+		.empty-library {
+			min-height: 420px;
+			padding: 48px 24px;
+		}
+
 		.document-link {
-			grid-template-columns: 40px minmax(0, 1fr) 24px;
+			grid-template-columns: 44px minmax(0, 1fr) 24px;
 		}
 
 		.document-progress {
 			display: none;
 		}
 
-		.empty-library {
-			grid-template-columns: 1fr;
-			text-align: center;
+		.empty-actions {
+			width: min(100%, 280px);
+			flex-direction: column;
 		}
 
-		.empty-icon {
-			margin: auto;
+		.empty-actions .library-action {
+			width: 100%;
+			flex: none;
+		}
+
+		.empty-library-note {
+			flex-wrap: wrap;
+		}
+
+		.library-drop-overlay {
+			inset: 12px 0 36px;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.importing-icon {
+			animation: none;
 		}
 	}
 </style>
