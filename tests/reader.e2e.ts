@@ -10,19 +10,37 @@ test('completes voice setup before presenting the empty-library import surface',
 	page
 }) => {
 	await page.goto('./');
-	await expect(
-		page.getByRole('heading', { name: 'Listen privately, right in this browser.' })
-	).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Set up local listening.' })).toBeVisible();
+	const libraryShell = page.locator('.library-page');
+	const setupLogo = page.locator('.model-setup .brand-logo');
+	await expect(libraryShell).toBeVisible();
+	await expect(setupLogo).toBeVisible();
+	await expect(setupLogo).not.toHaveClass(/\bactive\b/);
+	await expect(page.locator('.setup-mark')).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Add document', exact: true })).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Paste text', exact: true })).toHaveCount(0);
 	const setupA11y = await new AxeBuilder({ page }).analyze();
 	expect(
 		setupA11y.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))
 	).toEqual([]);
-	await completeModelSetup(page);
+	await page.evaluate(() => {
+		(
+			window as unknown as {
+				__voicebookTtsLoadDelayMs: number;
+			}
+		).__voicebookTtsLoadDelayMs = 180;
+	});
+	await page.getByRole('checkbox', { name: /I agree to the Supertonic model terms/ }).check();
+	await page.getByRole('button', { name: 'Download voice engine' }).click();
+	await expect(setupLogo).toHaveClass(/\bactive\b/);
+	await page.getByRole('heading', { name: 'Set up local listening.' }).waitFor({ state: 'hidden' });
 
 	const emptyState = page.getByRole('region', { name: 'What would you like to listen to?' });
 	await expect(emptyState).toBeVisible();
+	await expect(libraryShell).toBeVisible();
+	const emptyLogo = emptyState.locator('.brand-logo');
+	await expect(emptyLogo).toBeVisible();
+	await expect(emptyLogo).not.toHaveClass(/\bactive\b/);
 	await expect(page.getByText('Your library is empty', { exact: true })).toHaveCount(0);
 	await expect(page.locator('.import-strip')).toHaveCount(0);
 
@@ -39,7 +57,7 @@ test('completes voice setup before presenting the empty-library import surface',
 	expect(addBox?.width).toBe(pasteBox?.width);
 	expect(addBox?.height).toBe(44);
 	expect(pasteBox?.height).toBe(44);
-	await expect(emptyState).toHaveCSS('border-radius', '14px');
+	await expect(emptyState).toHaveCSS('border-top-width', '0px');
 
 	const emptyBeforeDrag = await emptyState.boundingBox();
 	await page.locator('.library-page').evaluate((library) => {
@@ -81,6 +99,41 @@ test('completes voice setup before presenting the empty-library import surface',
 		await themeButton.click();
 	}
 	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
+});
+
+test('keeps the unified welcome flow stable on a phone viewport', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.goto('./');
+	const setupLogo = page.locator('.model-setup .brand-logo');
+	await expect(page.getByRole('heading', { name: 'Set up local listening.' })).toBeVisible();
+	await expect(setupLogo).toBeVisible();
+	const setupLogoBox = await setupLogo.boundingBox();
+	expect(setupLogoBox).not.toBeNull();
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= document.documentElement.clientWidth
+		)
+	).toBe(true);
+
+	await completeModelSetup(page);
+	const emptyState = page.getByRole('region', { name: 'What would you like to listen to?' });
+	const emptyLogo = emptyState.locator('.brand-logo');
+	await expect(emptyLogo).toBeVisible();
+	const emptyLogoBox = await emptyLogo.boundingBox();
+	expect(emptyLogoBox).not.toBeNull();
+	expect(
+		Math.abs(
+			(setupLogoBox?.x ?? 0) +
+				(setupLogoBox?.width ?? 0) / 2 -
+				((emptyLogoBox?.x ?? 0) + (emptyLogoBox?.width ?? 0) / 2)
+		)
+	).toBeLessThanOrEqual(1);
+	expect(Math.abs((setupLogoBox?.y ?? 0) - (emptyLogoBox?.y ?? 0))).toBeLessThanOrEqual(1);
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= document.documentElement.clientWidth
+		)
+	).toBe(true);
 });
 
 test('highlights only the document currently open in the reader', async ({ page }) => {
@@ -173,7 +226,9 @@ test('import → install → play → seek → bookmark → reload → offline r
 }) => {
 	await page.goto('./');
 	await completeModelSetup(page);
-	await expect(page.getByRole('heading', { name: 'Library', exact: true })).toBeVisible();
+	await expect(
+		page.getByRole('region', { name: 'What would you like to listen to?' })
+	).toBeVisible();
 	const emptyA11y = await new AxeBuilder({ page }).analyze();
 	expect(
 		emptyA11y.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))
@@ -282,7 +337,7 @@ test('import → install → play → seek → bookmark → reload → offline r
 		};
 		return [fill('.headphones'), fill('.paper'), fill('.wave-bar'), fill('.wave-bar:nth-child(2)')];
 	});
-	expect(new Set(brandPalette).size).toBe(4);
+	expect(new Set(brandPalette).size).toBe(3);
 	const readerTypography = await page.evaluate(() => {
 		const title = document.querySelector<HTMLElement>('.reader-commandbar-title strong');
 		const outlineItem = document.querySelector<HTMLElement>('.outline-panel nav button');

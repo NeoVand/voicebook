@@ -11,6 +11,7 @@
 		Trash2,
 		X
 	} from '@lucide/svelte';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
 	import type { DocumentKind, NormalizedDocument } from '$lib/domain/types';
@@ -73,6 +74,7 @@
 		event.preventDefault();
 		dragDepth = 0;
 		dragging = false;
+		if (!modelInstalled) return;
 		await acceptFiles(Array.from(event.dataTransfer?.files ?? []));
 	}
 
@@ -118,8 +120,6 @@
 	<div class="workspace-page library-page" aria-busy="true">
 		<div class="loading-row">Opening your private library…</div>
 	</div>
-{:else if !modelInstalled}
-	<ModelInstallPrompt />
 {:else}
 	<div
 		class="workspace-page library-page"
@@ -131,13 +131,13 @@
 		ondragleave={onDragLeave}
 		ondrop={onDrop}
 	>
-		<header class="page-heading">
-			<div>
-				<p class="eyebrow">Local library</p>
-				<h1>Library</h1>
-				<p class="subtitle">Everything you add stays private on this device.</p>
-			</div>
-			{#if appState.initialized && appState.documents.length}
+		{#if modelInstalled && appState.documents.length}
+			<header class="page-heading">
+				<div>
+					<p class="eyebrow">Local library</p>
+					<h1>Library</h1>
+					<p class="subtitle">Everything you add stays private on this device.</p>
+				</div>
 				<div class="library-actions heading-actions">
 					<button class="button library-action" type="button" onclick={() => (pasteOpen = true)}>
 						<FileText size={16} /> Paste text
@@ -150,8 +150,8 @@
 						<Plus size={16} /> Add document
 					</button>
 				</div>
-			{/if}
-		</header>
+			</header>
+		{/if}
 
 		<input
 			id="document-upload"
@@ -164,8 +164,10 @@
 			onchange={onFileChange}
 		/>
 
-		{#if !appState.initialized}
-			<div class="loading-row">Opening your local library…</div>
+		{#if !modelInstalled}
+			<div class="library-welcome setup-welcome">
+				<ModelInstallPrompt />
+			</div>
 		{:else if appState.documents.length}
 			<section class="library-collection" aria-labelledby="documents-heading">
 				<header class="library-meta">
@@ -218,25 +220,21 @@
 			</section>
 		{:else}
 			<section
-				class="empty-library"
+				class="library-welcome empty-library"
 				aria-labelledby="empty-library-title"
 				aria-busy={appState.importing}
 			>
 				<div class="empty-library-content">
-					<span class="empty-icon" aria-hidden="true">
-						{#if appState.importing}
-							<span class="importing-icon"><FileUp size={24} /></span>
-						{:else}
-							<BookOpenText size={25} />
-						{/if}
-					</span>
+					<div class="empty-mark" aria-hidden="true">
+						<BrandMark size={72} active={appState.importing} />
+					</div>
 					<h2 id="empty-library-title">
 						{appState.importing ? 'Adding your document…' : 'What would you like to listen to?'}
 					</h2>
 					<p>
 						{appState.importing
 							? appState.statusMessage
-							: 'Drop a PDF, DOCX, Markdown, or text file here to turn it into a calm reading experience.'}
+							: 'Add a document or paste text. Voicebook prepares everything here on this device.'}
 					</p>
 					<div class="library-actions empty-actions">
 						<button
@@ -257,9 +255,9 @@
 						</button>
 					</div>
 					<div class="empty-library-note">
-						<span>PDF · DOCX · Markdown · TXT</span>
+						<span>PDF · DOCX · MD · TXT</span>
 						<span aria-hidden="true">·</span>
-						<span>Processed locally</span>
+						<span>Never uploaded</span>
 					</div>
 				</div>
 			</section>
@@ -367,6 +365,14 @@
 	.library-page {
 		position: relative;
 		min-height: calc(100dvh - var(--app-header-height));
+	}
+
+	.library-welcome {
+		display: flex;
+		min-height: min(590px, calc(100dvh - var(--app-header-height) - 56px));
+		align-items: flex-start;
+		justify-content: center;
+		padding: clamp(64px, 10dvh, 96px) 32px 64px;
 	}
 
 	.page-heading {
@@ -570,21 +576,6 @@
 		font-size: 12px;
 	}
 
-	.empty-library {
-		display: flex;
-		min-height: min(480px, calc(100dvh - 230px));
-		align-items: center;
-		justify-content: center;
-		padding: 56px 32px;
-		border: 1px solid var(--line-strong);
-		border-radius: 14px;
-		background: linear-gradient(145deg, var(--primary-soft), transparent 42%), var(--surface);
-		transition:
-			border-color 150ms var(--ease),
-			background 150ms var(--ease),
-			box-shadow 150ms var(--ease);
-	}
-
 	.empty-library-content {
 		display: flex;
 		max-width: 560px;
@@ -593,16 +584,8 @@
 		text-align: center;
 	}
 
-	.empty-icon {
-		display: grid;
-		width: 52px;
-		height: 52px;
-		margin-bottom: 22px;
-		place-items: center;
-		border: 1px solid var(--line-strong);
-		border-radius: 14px;
-		background: var(--control-strong);
-		color: var(--primary);
+	.empty-mark {
+		margin-bottom: 26px;
 	}
 
 	.empty-library h2 {
@@ -637,10 +620,6 @@
 		color: var(--faint);
 		font-size: 9px;
 		letter-spacing: 0.01em;
-	}
-
-	.importing-icon {
-		animation: importing-pulse 1.1s ease-in-out infinite;
 	}
 
 	.library-drop-overlay {
@@ -681,13 +660,6 @@
 		margin-top: 7px;
 		color: var(--muted);
 		font-size: 10px;
-	}
-
-	@keyframes importing-pulse {
-		50% {
-			transform: translateY(-2px);
-			opacity: 0.55;
-		}
 	}
 
 	.modal-scrim {
@@ -801,9 +773,9 @@
 			display: none;
 		}
 
-		.empty-library {
-			min-height: 420px;
-			padding: 48px 24px;
+		.library-welcome {
+			min-height: calc(100dvh - var(--app-header-height) - 32px);
+			padding: 44px 20px;
 		}
 
 		.document-link {
@@ -830,12 +802,6 @@
 
 		.library-drop-overlay {
 			inset: 12px 0 36px;
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.importing-icon {
-			animation: none;
 		}
 	}
 </style>

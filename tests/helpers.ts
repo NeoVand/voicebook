@@ -93,8 +93,16 @@ export async function installFakeTts(page: Page): Promise<void> {
 						}
 					).__voicebookTtsDelayMs ?? 0
 				);
-				if (message.type === 'synthesize' && synthesisDelay > 0)
-					window.setTimeout(respond, synthesisDelay);
+				const loadDelay = Number(
+					(
+						window as unknown as {
+							__voicebookTtsLoadDelayMs?: number;
+						}
+					).__voicebookTtsLoadDelayMs ?? 0
+				);
+				const responseDelay =
+					message.type === 'synthesize' ? synthesisDelay : message.type === 'load' ? loadDelay : 0;
+				if (responseDelay > 0) window.setTimeout(respond, responseDelay);
 				else queueMicrotask(respond);
 			}
 
@@ -119,15 +127,18 @@ export async function installFakeTts(page: Page): Promise<void> {
 
 export async function completeModelSetup(page: Page): Promise<void> {
 	const setup = page.getByRole('heading', {
-		name: 'Listen privately, right in this browser.'
+		name: 'Set up local listening.'
 	});
-	const library = page.getByRole('heading', { name: 'Library', exact: true });
-	await Promise.race([setup.waitFor({ state: 'visible' }), library.waitFor({ state: 'visible' })]);
+	const readyLibrary = page.getByRole('button', { name: 'Add document', exact: true });
+	await Promise.race([
+		setup.waitFor({ state: 'visible' }),
+		readyLibrary.waitFor({ state: 'visible' })
+	]);
 	if (!(await setup.isVisible())) return;
-	await page.getByRole('checkbox', { name: /I have reviewed and agree/ }).check();
+	await page.getByRole('checkbox', { name: /I agree to the Supertonic model terms/ }).check();
 	await page.getByRole('button', { name: 'Download voice engine' }).click();
 	await setup.waitFor({ state: 'hidden' });
-	await library.waitFor({ state: 'visible' });
+	await readyLibrary.waitFor({ state: 'visible' });
 }
 
 export async function openReadyLibrary(page: Page): Promise<void> {

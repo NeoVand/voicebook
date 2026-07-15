@@ -64,21 +64,17 @@
 	}
 
 	.headphones {
-		fill: var(--brand-headphones, var(--text-soft));
+		fill: var(--brand-headphones, var(--primary));
 	}
 
 	.paper {
-		fill: var(--brand-paper, var(--primary));
+		fill: var(--brand-paper, var(--text-soft));
 	}
 
 	.wave-bar {
 		fill: var(--brand-wave, var(--primary));
 		transform-box: fill-box;
 		transform-origin: center;
-	}
-
-	.wave-bar:nth-child(2n) {
-		fill: var(--brand-wave-accent, var(--bookmark));
 	}
 
 	.active .wave-bar {
