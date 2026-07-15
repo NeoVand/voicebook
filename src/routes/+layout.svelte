@@ -6,7 +6,6 @@
 	import { resolve } from '$app/paths';
 	import {
 		Bookmark,
-		BookOpenText,
 		CloudRain,
 		CloudSun,
 		Cpu,
@@ -29,6 +28,7 @@
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import GitHubOutline from '$lib/components/GitHubOutline.svelte';
 	import { recordRuntimeEvent } from '$lib/services/runtime-diagnostics';
@@ -203,8 +203,9 @@
 <header class="app-header" class:sidebar-collapsed={sidebarCollapsed} aria-label="Voicebook header">
 	<div class="app-brand-slot">
 		<a class="brand" href={homeHref} aria-label="Voicebook library" onclick={closeNavigation}>
-			<span class="brand-mark" aria-hidden="true"><BookOpenText size={18} strokeWidth={1.8} /></span
-			>
+			<span class="brand-mark" aria-hidden="true">
+				<BrandMark active={player.isPlaying || player.isBuffering} />
+			</span>
 			<span class="brand-name">Voicebook</span>
 		</a>
 		<button
