@@ -1163,7 +1163,7 @@ textarea {
 		display: block;
 	}
 
-	.mobile-nav-toggle {
+	.mobile-nav-toggle.icon-button {
 		position: absolute;
 		top: 6px;
 		left: var(--sidebar-collapsed-width);
