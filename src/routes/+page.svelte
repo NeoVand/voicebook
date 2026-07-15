@@ -5,13 +5,16 @@
 		ArrowRight,
 		BookOpenText,
 		Clock3,
+		FileCode,
+		FileScan,
 		FileText,
+		FileType,
 		FileUp,
 		Plus,
 		Trash2,
 		X
 	} from '@lucide/svelte';
-	import type { NormalizedDocument } from '$lib/domain/types';
+	import type { DocumentKind, NormalizedDocument } from '$lib/domain/types';
 	import { appState } from '$lib/state/app-state.svelte';
 
 	let fileInput: HTMLInputElement | undefined;
@@ -43,6 +46,15 @@
 				document.segments.reduce((sum, segment) => sum + segment.estimatedDuration, 0) / 60
 			)
 		);
+	}
+
+	function fileKindLabel(kind: DocumentKind): string {
+		return {
+			pdf: 'PDF',
+			docx: 'DOCX',
+			markdown: 'MD',
+			text: 'TXT'
+		}[kind];
 	}
 
 	async function acceptFiles(files: File[]): Promise<void> {
@@ -168,9 +180,17 @@
 							href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
 							aria-label={'Open ' + document.title}
 						>
-							<span class="file-kind">
-								<FileText size={16} />
-								<small>{document.sourceKind}</small>
+							<span class="file-kind" aria-hidden="true">
+								{#if document.sourceKind === 'pdf'}
+									<FileScan size={20} strokeWidth={1.7} />
+								{:else if document.sourceKind === 'docx'}
+									<FileType size={20} strokeWidth={1.7} />
+								{:else if document.sourceKind === 'markdown'}
+									<FileCode size={20} strokeWidth={1.7} />
+								{:else}
+									<FileText size={20} strokeWidth={1.7} />
+								{/if}
+								<small>{fileKindLabel(document.sourceKind)}</small>
 							</span>
 							<span class="document-copy">
 								<strong>{document.title}</strong>
@@ -434,7 +454,7 @@
 	.document-link {
 		display: grid;
 		min-height: 86px;
-		grid-template-columns: 44px minmax(0, 1fr) 84px 120px 24px;
+		grid-template-columns: 30px minmax(0, 1fr) 84px 120px 24px;
 		align-items: center;
 		gap: 16px;
 		padding: 12px 52px 12px 8px;
@@ -449,20 +469,20 @@
 	}
 
 	.file-kind {
-		display: grid;
-		width: 40px;
-		height: 48px;
-		place-items: center;
-		border-radius: 8px;
-		background: var(--surface);
+		display: flex;
+		width: 30px;
+		align-items: center;
+		flex-direction: column;
+		gap: 4px;
 		color: var(--primary);
 	}
 
 	.file-kind small {
-		margin-top: -9px;
 		color: var(--faint);
-		font-size: 6px;
+		font-size: 7px;
 		font-weight: 720;
+		letter-spacing: 0.03em;
+		line-height: 1;
 		text-transform: uppercase;
 	}
 
@@ -736,7 +756,7 @@
 
 	@media (max-width: 900px) {
 		.document-link {
-			grid-template-columns: 44px minmax(0, 1fr) 100px 24px;
+			grid-template-columns: 30px minmax(0, 1fr) 100px 24px;
 		}
 
 		.document-time {
@@ -770,7 +790,7 @@
 		}
 
 		.document-link {
-			grid-template-columns: 44px minmax(0, 1fr) 24px;
+			grid-template-columns: 30px minmax(0, 1fr) 24px;
 		}
 
 		.document-progress {
