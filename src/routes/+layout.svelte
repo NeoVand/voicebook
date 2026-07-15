@@ -11,7 +11,6 @@
 		CloudSun,
 		Cpu,
 		FileText,
-		GitFork,
 		HardDrive,
 		Library,
 		List,
@@ -22,7 +21,6 @@
 		PanelLeftClose,
 		PanelLeftOpen,
 		Settings2,
-		ShieldCheck,
 		Sun,
 		ZoomIn,
 		ZoomOut,
@@ -30,6 +28,7 @@
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
+	import GitHubOutline from '$lib/components/GitHubOutline.svelte';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
@@ -141,7 +140,7 @@
 
 			<div class="reader-commandbar-actions">
 				<button
-					class="icon-button github-link"
+					class="icon-button"
 					class:active={readerChrome.outlineOpen}
 					type="button"
 					aria-label={readerChrome.outlineOpen ? 'Close document outline' : 'Open document outline'}
@@ -233,21 +232,21 @@
 					{/if}
 				</button>
 				<a
-					class="icon-button"
+					class="icon-button github-link"
 					href={repositoryHref}
 					target="_blank"
 					rel="noreferrer"
 					aria-label="Open Voicebook on GitHub"
 					title="Open Voicebook on GitHub"
 				>
-					<GitFork size={16} />
+					<GitHubOutline size={16} />
 				</a>
 			</div>
 		</div>
 	{:else}
 		<div class="global-commandbar">
 			<button
-				class="icon-button github-link"
+				class="icon-button"
 				type="button"
 				aria-label={`Theme: ${themeLabels[theme]}. Switch to ${themeLabels[nextTheme]} theme`}
 				title={`${themeLabels[theme]} · next ${themeLabels[nextTheme]}`}
@@ -264,14 +263,14 @@
 				{/if}
 			</button>
 			<a
-				class="icon-button"
+				class="icon-button github-link"
 				href={repositoryHref}
 				target="_blank"
 				rel="noreferrer"
 				aria-label="Open Voicebook on GitHub"
 				title="Open Voicebook on GitHub"
 			>
-				<GitFork size={16} />
+				<GitHubOutline size={16} />
 			</a>
 		</div>
 	{/if}
@@ -295,24 +294,18 @@
 					<PanelLeftClose size={17} />
 				{/if}
 			</button>
-		</div>
-
-		<div class="sidebar-main">
 			<div class="library-nav-group">
-				<nav id="primary-navigation" class="primary-nav" aria-label="Primary navigation">
-					<a
-						class="nav-link"
-						class:active={page.url.pathname === homeHref}
-						href={homeHref}
-						aria-label="Library"
-						aria-current={page.url.pathname === homeHref ? 'page' : undefined}
-						data-tooltip={appState.documents.length ? undefined : 'Library'}
-						onclick={() => readerChrome.closeTransientPanels()}
-					>
-						<Library size={17} />
-						<span>Library</span>
-					</a>
-				</nav>
+				<a
+					class="sidebar-library-link"
+					class:active={page.url.pathname === homeHref}
+					href={homeHref}
+					aria-label="Library"
+					aria-current={page.url.pathname === homeHref ? 'page' : undefined}
+					data-tooltip="Library"
+					onclick={() => readerChrome.closeTransientPanels()}
+				>
+					<Library size={17} />
+				</a>
 
 				{#if sidebarCollapsed && appState.documents.length}
 					<div class="library-flyout" aria-label="Recent documents">
@@ -330,7 +323,9 @@
 					</div>
 				{/if}
 			</div>
+		</div>
 
+		<div id="primary-navigation" class="sidebar-main">
 			{#if !sidebarCollapsed}
 				<div class="sidebar-documents">
 					<span class="sidebar-section-label">Recent</span>
@@ -399,15 +394,6 @@
 				<span>System</span>
 			</a>
 		</nav>
-
-		<div class="sidebar-foot">
-			<span class="status-dot" aria-hidden="true"></span>
-			<div>
-				<strong>Local only</strong>
-				<small>{appState.capabilities.webgpu ? 'WebGPU available' : 'Compatibility mode'}</small>
-			</div>
-			<ShieldCheck size={15} />
-		</div>
 	</aside>
 
 	<div class="shell-content" class:reader-mode={isReader}>

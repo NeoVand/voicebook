@@ -1148,6 +1148,7 @@
 	.outline-panel {
 		grid-column: 1;
 		border-right: 1px solid var(--line);
+		background: var(--outline-surface);
 	}
 
 	.bookmarks-panel {

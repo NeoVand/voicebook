@@ -36,4 +36,11 @@ The following runtime components require prominent source and license notices:
 - License: MIT, <https://github.com/mermaid-js/mermaid/blob/develop/LICENSE>.
 - Voicebook modifications: none; loaded on demand as an npm dependency and rendered with Mermaid's strict security mode.
 
+## Tabler Icons
+
+- Purpose: outlined GitHub brand icon in the application header.
+- Source: <https://github.com/tabler/tabler-icons/blob/main/icons/outline/brand-github.svg>.
+- License: MIT, <https://github.com/tabler/tabler-icons/blob/main/LICENSE>.
+- Voicebook modifications: packaged as a small local Svelte component with configurable size and stroke width.
+
 Other important runtime projects include Transformers.js (Apache-2.0), PDF.js (Apache-2.0), Mammoth.js (BSD-2-Clause), Unified/remark (MIT), and idb (ISC). Model artifacts retain their own licenses and are not redistributed by this repository.

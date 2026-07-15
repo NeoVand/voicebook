@@ -31,6 +31,33 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await page.getByRole('button', { name: 'Add to library' }).click();
 	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
 	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
+	const surfaceBrightness = () =>
+		page.evaluate(() => {
+			const luminance = (value: string) => {
+				const channels =
+					value
+						.match(/[\d.]+/g)
+						?.slice(0, 3)
+						.map(Number) ?? [];
+				return channels.reduce((sum, channel) => sum + channel, 0);
+			};
+			const sidebar = document.querySelector<HTMLElement>('.app-sidebar');
+			const outline = document.querySelector<HTMLElement>('.outline-panel');
+			if (!sidebar || !outline) throw new Error('Reader surfaces are unavailable');
+			return {
+				sidebar: luminance(getComputedStyle(sidebar).backgroundColor),
+				outline: luminance(getComputedStyle(outline).backgroundColor)
+			};
+		});
+	const midnightSurfaces = await surfaceBrightness();
+	expect(midnightSurfaces.outline).toBeLessThan(midnightSurfaces.sidebar);
+	const readerThemeButton = page.getByRole('button', { name: /^Theme:/ });
+	await readerThemeButton.click();
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
+	const sunnySurfaces = await surfaceBrightness();
+	expect(sunnySurfaces.outline).toBeGreaterThan(sunnySurfaces.sidebar);
+	for (let index = 0; index < 3; index += 1) await readerThemeButton.click();
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
 	await expect(page.getByRole('banner', { name: 'Voicebook header' })).toHaveCount(1);
 	await expect(page.locator('.reader-header')).toHaveCount(0);
 	await expect(
@@ -59,7 +86,10 @@ test('import → install → play → seek → bookmark → reload → offline r
 		'href',
 		'https://github.com/NeoVand/voicebook'
 	);
-	await expect(page.locator('.github-link svg')).toHaveAttribute('fill', 'none');
+	await expect(page.locator('.github-link svg[data-icon="github-outline"]')).toHaveAttribute(
+		'fill',
+		'none'
+	);
 
 	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
 	await expect(page.getByRole('button', { name: 'Prepare whole document audio' })).toBeVisible();
@@ -254,10 +284,10 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		expect(geometry.position, `${width}px player overlays the reader`).toBe('absolute');
 		expect(geometry.backdropFilter, `${width}px player uses frosted glass`).toContain('blur(22px)');
 		expect(geometry.boxShadow, `${width}px player has no drop shadow`).toBe('none');
-		expect(geometry.chromeThickness, `${width}px chrome uses one 48px rhythm`).toEqual({
-			header: 48,
-			sidebar: 48,
-			player: 48
+		expect(geometry.chromeThickness, `${width}px chrome uses one 52px rhythm`).toEqual({
+			header: 52,
+			sidebar: 52,
+			player: 52
 		});
 		expect(geometry.playControl, `${width}px play target and visual circle`).toEqual({
 			target: 44,
@@ -287,6 +317,8 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 	const headerBox = await header.boundingBox();
 	const sidebarBox = await sidebar.boundingBox();
 	const collapseBox = await page.getByRole('button', { name: 'Collapse sidebar' }).boundingBox();
+	await expect(sidebar.getByRole('link', { name: 'Library' })).toBeVisible();
+	await expect(sidebar.getByText('Local only', { exact: true })).toHaveCount(0);
 	expect(headerBox).not.toBeNull();
 	expect(sidebarBox).not.toBeNull();
 	expect(collapseBox).not.toBeNull();
@@ -303,7 +335,7 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 
 	await page.reload();
 	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
-	await expect(sidebar).toHaveCSS('width', '48px');
+	await expect(sidebar).toHaveCSS('width', '52px');
 	await page.getByRole('button', { name: 'Expand sidebar' }).click();
 	await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
 
