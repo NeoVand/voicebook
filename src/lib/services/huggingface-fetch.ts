@@ -98,6 +98,7 @@ async function downloadHubAsset(
  * that redirect even though the repository and artifact are public.
  */
 export function createHuggingFaceFetch(nativeFetch: typeof fetch): typeof fetch {
+	const assets = new Map<string, Promise<Blob | null>>();
 	return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
 		const asset = assetFromUrl(input);
 		const method = (
@@ -108,7 +109,16 @@ export function createHuggingFaceFetch(nativeFetch: typeof fetch): typeof fetch 
 		const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
 		const hubFetch: typeof fetch = (hubInput, hubInit) =>
 			nativeFetch(hubInput, { ...hubInit, signal: signal ?? hubInit?.signal });
-		const blob = await downloadHubAsset(asset, hubFetch);
+		const assetKey = `${asset.repository}@${asset.revision}/${asset.path}`;
+		let download = assets.get(assetKey);
+		if (!download || signal) {
+			download = downloadHubAsset(asset, hubFetch);
+			if (!signal) {
+				assets.set(assetKey, download);
+				void download.catch(() => assets.delete(assetKey));
+			}
+		}
+		const blob = await download;
 		if (!blob) return new Response(null, { status: 404, statusText: 'Not Found' });
 
 		const range = requestRange(input, init);

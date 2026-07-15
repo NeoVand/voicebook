@@ -5,6 +5,7 @@ import * as ort from 'onnxruntime-web-supertone/webgpu';
 import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
 import type { ModelDescriptor } from '$lib/domain/types';
 import { MODEL_ASSET_CACHE } from './model-asset-cache';
+import { downloadModelBytes } from './model-download-cache';
 
 interface TtsConfig {
 	ttl: { latent_dim: number; chunk_compress_factor: number };
@@ -73,6 +74,17 @@ const MODEL_FILES = [
 	'vector_estimator.onnx',
 	'vocoder.onnx'
 ] as const;
+type ModelFile = (typeof MODEL_FILES)[number];
+
+// The vector estimator is roughly 257 MB. Loading it before the smaller
+// sessions keeps their resident weights out of the largest initialization
+// peak, which matters on memory-constrained mobile browser processes.
+const MODEL_LOAD_ORDER = [
+	'vector_estimator.onnx',
+	'text_encoder.onnx',
+	'vocoder.onnx',
+	'duration_predictor.onnx'
+] as const satisfies readonly ModelFile[];
 
 function flattenNumbers(value: number[][][]): Float32Array {
 	return new Float32Array(value.flat(2));
@@ -122,7 +134,7 @@ function chunkText(text: string, maxLength = 300): string[] {
 export class SupertonicAdapter {
 	private config?: TtsConfig;
 	private indexer?: number[];
-	private sessions: ort.InferenceSession[] = [];
+	private sessions = new Map<ModelFile, ort.InferenceSession>();
 	private styles = new Map<string, VoiceStyle>();
 
 	constructor(
@@ -160,33 +172,39 @@ export class SupertonicAdapter {
 		fileCount: number,
 		progress: ProgressCallback
 	): Promise<Uint8Array> {
-		const response = await this.response(path);
-		const total = Number(response.headers.get('content-length') ?? 0);
-		if (!response.body) return new Uint8Array(await response.arrayBuffer());
-		const reader = response.body.getReader();
-		const chunks: Uint8Array[] = [];
-		let loaded = 0;
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			chunks.push(value);
-			loaded += value.byteLength;
-			const fileProgress = total ? loaded / total : 0;
-			progress({
-				status: 'progress',
-				file: path,
-				progress: ((fileIndex + fileProgress) / fileCount) * 100,
-				loaded,
-				total: total || undefined
-			});
-		}
-		const result = new Uint8Array(loaded);
-		let offset = 0;
-		for (const chunk of chunks) {
-			result.set(chunk, offset);
-			offset += chunk.byteLength;
-		}
-		return result;
+		return downloadModelBytes({
+			url: this.assetUrl(path),
+			fetcher: this.fetcher,
+			cacheName: MODEL_ASSET_CACHE,
+			onProgress: ({ loaded, total, phase }) => {
+				// Once durable chunks are complete, assembling them for ONNX Runtime
+				// must not make the visible download percentage run backwards.
+				const fileProgress = phase === 'restore' ? 1 : total ? loaded / total : 0;
+				progress({
+					status: phase === 'download' ? 'progress' : 'loading',
+					file: phase === 'download' ? path : `Preparing ${path} from this device`,
+					progress: ((fileIndex + fileProgress) / fileCount) * 100,
+					loaded,
+					total
+				});
+			}
+		});
+	}
+
+	private async createSession(
+		file: ModelFile,
+		fileIndex: number,
+		options: ort.InferenceSession.SessionOptions,
+		progress: ProgressCallback
+	): Promise<ort.InferenceSession> {
+		const path = `onnx/${file}`;
+		const data = await this.bytes(path, fileIndex, MODEL_FILES.length, progress);
+		progress({
+			status: 'loading',
+			file: `Initializing ${file.replace('.onnx', '').replaceAll('_', ' ')}`,
+			progress: ((fileIndex + 1) / MODEL_FILES.length) * 100
+		});
+		return ort.InferenceSession.create(data, options);
 	}
 
 	async load(backend: Backend, progress: ProgressCallback): Promise<void> {
@@ -199,14 +217,17 @@ export class SupertonicAdapter {
 			executionProviders: [backend],
 			graphOptimizationLevel: 'all'
 		};
-		for (const [index, file] of MODEL_FILES.entries()) {
+		for (const [index, file] of MODEL_LOAD_ORDER.entries()) {
 			progress({
 				status: 'loading',
 				file: `Loading ${file.replace('.onnx', '').replaceAll('_', ' ')}`,
 				progress: (index / MODEL_FILES.length) * 100
 			});
-			const data = await this.bytes(`onnx/${file}`, index, MODEL_FILES.length, progress);
-			this.sessions.push(await ort.InferenceSession.create(data, options));
+			this.sessions.set(file, await this.createSession(file, index, options, progress));
+			// Give the browser a task boundary after ONNX Runtime has copied the
+			// model so the temporary JavaScript buffer can be reclaimed before the
+			// next session starts.
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
 		}
 		// The first WebGPU run includes shader and graph compilation. Supertone's
 		// official Space absorbs that cost before enabling Generate; do the same
@@ -280,10 +301,16 @@ export class SupertonicAdapter {
 		progress?: (step: number, total: number) => void,
 		totalSteps = DEFAULT_GENERATION_STEPS
 	): Promise<{ audio: Float32Array; duration: number }> {
-		if (!this.config || this.sessions.length !== 4)
+		if (!this.config || this.sessions.size !== MODEL_FILES.length)
 			throw new Error('Supertonic 3 is not loaded yet.');
 		totalSteps = normalizeGenerationSteps(totalSteps);
-		const [durationPredictor, textEncoder, vectorEstimator, vocoder] = this.sessions;
+		const durationPredictor = this.sessions.get('duration_predictor.onnx');
+		const textEncoder = this.sessions.get('text_encoder.onnx');
+		const vectorEstimator = this.sessions.get('vector_estimator.onnx');
+		const vocoder = this.sessions.get('vocoder.onnx');
+		if (!durationPredictor || !textEncoder || !vectorEstimator || !vocoder) {
+			throw new Error('Supertonic 3 is missing one or more inference sessions.');
+		}
 		const { ids, mask } = this.textInputs(text, language);
 		const durationOutput = await durationPredictor.run({
 			text_ids: ids,
@@ -355,8 +382,8 @@ export class SupertonicAdapter {
 	}
 
 	async dispose(): Promise<void> {
-		await Promise.all(this.sessions.map((session) => session.release()));
-		this.sessions = [];
+		await Promise.all(Array.from(this.sessions.values(), (session) => session.release()));
+		this.sessions.clear();
 		this.styles.clear();
 	}
 }
