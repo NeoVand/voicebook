@@ -67,39 +67,48 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await page.getByRole('button', { name: 'Add to library' }).click();
 	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
 	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
-	const surfaceBrightness = () =>
+	await page.getByRole('button', { name: 'Open bookmarks' }).click();
+	const readerSurfaceColors = () =>
 		page.evaluate(() => {
-			const luminance = (value: string) => {
-				const channels =
-					value
-						.match(/[\d.]+/g)
-						?.slice(0, 3)
-						.map(Number) ?? [];
-				return channels.reduce((sum, channel) => sum + channel, 0);
-			};
+			const header = document.querySelector<HTMLElement>('.app-header');
 			const sidebar = document.querySelector<HTMLElement>('.app-sidebar');
 			const outline = document.querySelector<HTMLElement>('.outline-panel');
-			if (!sidebar || !outline) throw new Error('Reader surfaces are unavailable');
+			const bookmarks = document.querySelector<HTMLElement>('.bookmarks-panel');
+			const playerBar = document.querySelector<HTMLElement>('.player-bar');
+			const readerStage = document.querySelector<HTMLElement>('.reader-stage');
+			const readingCanvas = document.querySelector<HTMLElement>('.reading-canvas');
+			if (
+				!header ||
+				!sidebar ||
+				!outline ||
+				!bookmarks ||
+				!playerBar ||
+				!readerStage ||
+				!readingCanvas
+			)
+				throw new Error('Reader surfaces are unavailable');
 			return {
-				sidebar: luminance(getComputedStyle(sidebar).backgroundColor),
-				outline: luminance(getComputedStyle(outline).backgroundColor)
+				chrome: [header, sidebar, outline, bookmarks, playerBar].map(
+					(element) => getComputedStyle(element).backgroundColor
+				),
+				document: [readerStage, readingCanvas].map(
+					(element) => getComputedStyle(element).backgroundColor
+				)
 			};
 		});
-	const midnightSurfaces = await surfaceBrightness();
-	expect(midnightSurfaces.outline).toBeLessThan(midnightSurfaces.sidebar);
 	const readerThemeButton = page.getByRole('button', { name: /^Theme:/ });
-	await readerThemeButton.click();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
-	const sunnySurfaces = await surfaceBrightness();
-	expect(sunnySurfaces.outline).toBeGreaterThan(sunnySurfaces.sidebar);
-	expect(sunnySurfaces.outline - sunnySurfaces.sidebar).toBeLessThan(20);
-	await readerThemeButton.click();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'cloudy');
-	const cloudySurfaces = await surfaceBrightness();
-	expect(cloudySurfaces.outline).toBeGreaterThan(cloudySurfaces.sidebar);
-	expect(cloudySurfaces.outline - cloudySurfaces.sidebar).toBeLessThan(20);
-	for (let index = 0; index < 2; index += 1) await readerThemeButton.click();
+	for (const theme of ['midnight', 'sunny', 'cloudy', 'rainy']) {
+		await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+		const surfaces = await readerSurfaceColors();
+		expect(new Set(surfaces.chrome).size, `${theme} chrome surfaces should match`).toBe(1);
+		expect(new Set(surfaces.document).size, `${theme} document surfaces should match`).toBe(1);
+		await readerThemeButton.click();
+	}
 	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
+	await page
+		.getByRole('complementary', { name: 'Bookmarks' })
+		.getByRole('button', { name: 'Close bookmarks' })
+		.click();
 	await expect(page.getByRole('banner', { name: 'Voicebook header' })).toHaveCount(1);
 	await expect(page.locator('.reader-header')).toHaveCount(0);
 	await expect(
