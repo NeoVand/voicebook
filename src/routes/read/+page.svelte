@@ -1000,11 +1000,11 @@
 						}}
 					>
 						{#if player.isBuffering}
-							<Square size={16} fill="currentColor" />
+							<Square size={14} fill="currentColor" />
 						{:else if player.isPlaying}
-							<Pause size={20} fill="currentColor" />
+							<Pause size={18} fill="currentColor" />
 						{:else}
-							<Play size={20} fill="currentColor" />
+							<Play size={18} fill="currentColor" />
 						{/if}
 					</button>
 					<button
@@ -1111,7 +1111,7 @@
 	}
 
 	.reader-shell {
-		--player-height: 72px;
+		--player-height: var(--chrome-size);
 		position: relative;
 		display: grid;
 		height: 100%;
@@ -1148,6 +1148,7 @@
 	.outline-panel {
 		grid-column: 1;
 		border-right: 1px solid var(--line);
+		background: var(--outline-surface);
 	}
 
 	.bookmarks-panel {
@@ -1928,7 +1929,7 @@
 		grid-template-columns: 236px minmax(280px, 1fr) 168px;
 		align-items: center;
 		gap: 10px;
-		padding: 8px 20px;
+		padding: 1px 16px 0;
 		border-top: 1px solid var(--line);
 		background: color-mix(in srgb, var(--bg) 68%, transparent);
 		box-shadow: none;
@@ -2033,18 +2034,37 @@
 		height: 44px;
 		margin: 0 4px;
 		border-radius: 50%;
-		background: var(--text);
+		background: transparent;
 		color: var(--primary-ink);
 	}
 
-	.play-button:hover {
+	.play-button::after {
+		position: absolute;
+		inset: 4px;
+		z-index: 0;
+		border-radius: 50%;
+		background: var(--text);
+		content: '';
+		transition: background 150ms var(--ease);
+	}
+
+	.play-button :global(svg) {
+		position: relative;
+		z-index: 1;
+	}
+
+	.play-button:hover::after {
 		background: var(--primary-hover);
+	}
+
+	.play-button:hover {
 		transform: translateY(-1px);
 	}
 
 	.play-button.loading::before {
 		position: absolute;
-		inset: 5px;
+		inset: 8px;
+		z-index: 2;
 		border: 2px solid color-mix(in srgb, var(--primary-ink) 18%, transparent);
 		border-top-color: var(--primary-ink);
 		border-right-color: var(--primary-ink);

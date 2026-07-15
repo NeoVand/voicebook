@@ -5,7 +5,6 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import {
-		ArrowLeft,
 		Bookmark,
 		BookOpenText,
 		CloudRain,
@@ -22,7 +21,6 @@
 		PanelLeftClose,
 		PanelLeftOpen,
 		Settings2,
-		ShieldCheck,
 		Sun,
 		ZoomIn,
 		ZoomOut,
@@ -30,6 +28,7 @@
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
+	import GitHubOutline from '$lib/components/GitHubOutline.svelte';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
@@ -39,6 +38,7 @@
 
 	const homeHref = resolve('/');
 	const settingsHref = resolve('/settings');
+	const repositoryHref = 'https://github.com/NeoVand/voicebook';
 	const sidebarStorageKey = 'voicebook:sidebar-collapsed';
 	const themeStorageKey = 'voicebook:theme';
 	type ThemeId = 'sunny' | 'cloudy' | 'rainy' | 'midnight';
@@ -139,15 +139,6 @@
 			</div>
 
 			<div class="reader-commandbar-actions">
-				<a
-					class="icon-button"
-					href={homeHref}
-					aria-label="Back to library"
-					title="Back to library"
-					onclick={() => readerChrome.closeTransientPanels()}
-				>
-					<ArrowLeft size={17} />
-				</a>
 				<button
 					class="icon-button"
 					class:active={readerChrome.outlineOpen}
@@ -190,6 +181,17 @@
 					>
 						<ZoomIn size={16} />
 					</button>
+					<span class="zoom-divider" aria-hidden="true"></span>
+					<button
+						class="icon-button"
+						class:active={isFullscreen}
+						type="button"
+						aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+						title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+						onclick={() => void toggleFullscreen()}
+					>
+						{#if isFullscreen}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
+					</button>
 				</div>
 				<button
 					class="icon-button"
@@ -229,16 +231,16 @@
 						<Moon size={16} />
 					{/if}
 				</button>
-				<button
-					class="icon-button"
-					class:active={isFullscreen}
-					type="button"
-					aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-					title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-					onclick={() => void toggleFullscreen()}
+				<a
+					class="icon-button github-link"
+					href={repositoryHref}
+					target="_blank"
+					rel="noreferrer"
+					aria-label="Open Voicebook on GitHub"
+					title="Open Voicebook on GitHub"
 				>
-					{#if isFullscreen}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
-				</button>
+					<GitHubOutline size={16} />
+				</a>
 			</div>
 		</div>
 	{:else}
@@ -260,16 +262,16 @@
 					<Moon size={16} />
 				{/if}
 			</button>
-			<button
-				class="icon-button"
-				class:active={isFullscreen}
-				type="button"
-				aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-				title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-				onclick={() => void toggleFullscreen()}
+			<a
+				class="icon-button github-link"
+				href={repositoryHref}
+				target="_blank"
+				rel="noreferrer"
+				aria-label="Open Voicebook on GitHub"
+				title="Open Voicebook on GitHub"
 			>
-				{#if isFullscreen}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
-			</button>
+				<GitHubOutline size={16} />
+			</a>
 		</div>
 	{/if}
 </header>
@@ -277,39 +279,19 @@
 <div class="app-shell" class:sidebar-collapsed={sidebarCollapsed} class:reader-mode={isReader}>
 	<aside class="app-sidebar" aria-label="Voicebook navigation">
 		<div class="sidebar-head">
-			<button
-				class="sidebar-toggle"
-				type="button"
-				aria-controls="primary-navigation"
-				aria-expanded={!sidebarCollapsed}
-				aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-				title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-				onclick={toggleSidebar}
-			>
-				{#if sidebarCollapsed}
-					<PanelLeftOpen size={17} />
-				{:else}
-					<PanelLeftClose size={17} />
-				{/if}
-			</button>
-		</div>
-
-		<div class="sidebar-main">
 			<div class="library-nav-group">
-				<nav id="primary-navigation" class="primary-nav" aria-label="Primary navigation">
-					<a
-						class="nav-link"
-						class:active={page.url.pathname === homeHref}
-						href={homeHref}
-						aria-label="Library"
-						aria-current={page.url.pathname === homeHref ? 'page' : undefined}
-						data-tooltip={appState.documents.length ? undefined : 'Library'}
-						onclick={() => readerChrome.closeTransientPanels()}
-					>
-						<Library size={17} />
-						<span>Library</span>
-					</a>
-				</nav>
+				<a
+					class="sidebar-library-link"
+					class:active={page.url.pathname === homeHref}
+					href={homeHref}
+					aria-label="Library"
+					aria-current={page.url.pathname === homeHref ? 'page' : undefined}
+					data-tooltip="Library"
+					onclick={() => readerChrome.closeTransientPanels()}
+				>
+					<Library size={17} />
+					<span>Library</span>
+				</a>
 
 				{#if sidebarCollapsed && appState.documents.length}
 					<div class="library-flyout" aria-label="Recent documents">
@@ -327,7 +309,24 @@
 					</div>
 				{/if}
 			</div>
+			<button
+				class="sidebar-toggle"
+				type="button"
+				aria-controls="primary-navigation"
+				aria-expanded={!sidebarCollapsed}
+				aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+				title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+				onclick={toggleSidebar}
+			>
+				{#if sidebarCollapsed}
+					<PanelLeftOpen size={17} />
+				{:else}
+					<PanelLeftClose size={17} />
+				{/if}
+			</button>
+		</div>
 
+		<div id="primary-navigation" class="sidebar-main">
 			{#if !sidebarCollapsed}
 				<div class="sidebar-documents">
 					<span class="sidebar-section-label">Recent</span>
@@ -396,15 +395,6 @@
 				<span>System</span>
 			</a>
 		</nav>
-
-		<div class="sidebar-foot">
-			<span class="status-dot" aria-hidden="true"></span>
-			<div>
-				<strong>Local only</strong>
-				<small>{appState.capabilities.webgpu ? 'WebGPU available' : 'Compatibility mode'}</small>
-			</div>
-			<ShieldCheck size={15} />
-		</div>
 	</aside>
 
 	<div class="shell-content" class:reader-mode={isReader}>
