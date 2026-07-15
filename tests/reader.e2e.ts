@@ -109,6 +109,23 @@ test('highlights only the document currently open in the reader', async ({ page 
 	await expect(currentDocument).not.toHaveClass(/\bactive\b/);
 });
 
+test('detects and renders pasted Markdown as structured document content', async ({ page }) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill('# Pasted handbook\n\n1. First step\n2. Second step\n\n```ts\nconst local = true;\n```');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+
+	const readingCanvas = page.getByRole('article', { name: 'Pasted handbook' });
+	await expect(
+		readingCanvas.getByRole('heading', { name: 'Pasted handbook', level: 1 })
+	).toBeVisible();
+	await expect(readingCanvas.locator('ol.document-list')).toContainText('First step');
+	await expect(readingCanvas.locator('figure.code-block')).toContainText('const local = true;');
+	await expect(readingCanvas).not.toContainText('```ts');
+});
+
 test('import → install → play → seek → bookmark → reload → offline reopen', async ({
 	page,
 	context

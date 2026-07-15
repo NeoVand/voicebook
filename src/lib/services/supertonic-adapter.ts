@@ -1,11 +1,11 @@
-// Match Supertone's browser demo and load the WebGPU-focused ORT bundle. It
-// still contains the WASM execution provider, but avoids pulling the generic
-// browser bundle into this dedicated inference worker.
-import * as ort from 'onnxruntime-web-supertone/webgpu';
+import type { InferenceSession, Tensor } from 'onnxruntime-common';
 import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
 import type { ModelDescriptor } from '$lib/domain/types';
 import { MODEL_ASSET_CACHE } from './model-asset-cache';
 import { downloadModelBytes } from './model-download-cache';
+import type { SpeechRuntimePolicy } from './runtime-policy';
+
+type OrtRuntime = typeof import('onnxruntime-web-supertone/wasm');
 
 interface TtsConfig {
 	ttl: { latent_dim: number; chunk_compress_factor: number };
@@ -18,8 +18,8 @@ interface VoiceStyleJson {
 }
 
 interface VoiceStyle {
-	ttl: ort.Tensor;
-	dp: ort.Tensor;
+	ttl: Tensor;
+	dp: Tensor;
 }
 
 interface LoadProgress {
@@ -33,7 +33,7 @@ interface LoadProgress {
 type ProgressCallback = (event: LoadProgress) => void;
 type Backend = 'webgpu' | 'wasm';
 
-function disposeTensor(tensor: ort.Tensor | undefined): void {
+function disposeTensor(tensor: Tensor | undefined): void {
 	try {
 		tensor?.dispose();
 	} catch {
@@ -143,13 +143,20 @@ function chunkText(text: string, maxLength = 300): string[] {
 export class SupertonicAdapter {
 	private config?: TtsConfig;
 	private indexer?: number[];
-	private sessions = new Map<ModelFile, ort.InferenceSession>();
+	private runtime?: OrtRuntime;
+	private sessions = new Map<ModelFile, InferenceSession>();
 	private styles = new Map<string, VoiceStyle>();
 
 	constructor(
 		private readonly descriptor: ModelDescriptor,
-		private readonly fetcher: typeof fetch
+		private readonly fetcher: typeof fetch,
+		private readonly policy: SpeechRuntimePolicy
 	) {}
+
+	private ort(): OrtRuntime {
+		if (!this.runtime) throw new Error('The ONNX runtime is not ready.');
+		return this.runtime;
+	}
 
 	private assetUrl(path: string): string {
 		return `https://huggingface.co/${this.descriptor.repository}/resolve/${this.descriptor.revision}/${path}`;
@@ -185,6 +192,7 @@ export class SupertonicAdapter {
 			url: this.assetUrl(path),
 			fetcher: this.fetcher,
 			cacheName: MODEL_ASSET_CACHE,
+			chunkBytes: this.policy.modelChunkBytes,
 			onProgress: ({ loaded, total, phase }) => {
 				// Once durable chunks are complete, assembling them for ONNX Runtime
 				// must not make the visible download percentage run backwards.
@@ -203,9 +211,9 @@ export class SupertonicAdapter {
 	private async createSession(
 		file: ModelFile,
 		fileIndex: number,
-		options: ort.InferenceSession.SessionOptions,
+		options: InferenceSession.SessionOptions,
 		progress: ProgressCallback
-	): Promise<ort.InferenceSession> {
+	): Promise<InferenceSession> {
 		const path = `onnx/${file}`;
 		const data = await this.bytes(path, fileIndex, MODEL_FILES.length, progress);
 		progress({
@@ -213,16 +221,22 @@ export class SupertonicAdapter {
 			file: `Initializing ${file.replace('.onnx', '').replaceAll('_', ' ')}`,
 			progress: ((fileIndex + 1) / MODEL_FILES.length) * 100
 		});
-		return ort.InferenceSession.create(data, options);
+		return this.ort().InferenceSession.create(data, options);
 	}
 
 	async load(backend: Backend, progress: ProgressCallback): Promise<void> {
+		this.runtime =
+			backend === 'webgpu'
+				? await import('onnxruntime-web-supertone/webgpu')
+				: await import('onnxruntime-web-supertone/wasm');
+		if (backend === 'wasm' && this.policy.wasmThreads)
+			this.runtime.env.wasm.numThreads = this.policy.wasmThreads;
 		progress({ status: 'loading', file: 'Configuration', progress: 0 });
 		[this.config, this.indexer] = await Promise.all([
 			this.json<TtsConfig>('onnx/tts.json'),
 			this.json<number[]>('onnx/unicode_indexer.json')
 		]);
-		const options: ort.InferenceSession.SessionOptions = {
+		const options: InferenceSession.SessionOptions = {
 			executionProviders: [backend],
 			graphOptimizationLevel: 'all'
 		};
@@ -241,29 +255,32 @@ export class SupertonicAdapter {
 		// The first WebGPU run includes shader and graph compilation. Supertone's
 		// official Space absorbs that cost before enabling Generate; do the same
 		// here so the user's first Play gesture is not the warm-up benchmark.
-		progress({ status: 'loading', file: 'Warming up WebGPU', progress: 96 });
-		try {
-			const style = await this.style(this.descriptor.defaultVoice);
-			await this.infer('Hello, this is a quick warmup.', 'en', style, undefined, 1);
-		} catch (error) {
-			console.warn(
-				'Supertonic warm-up did not complete; normal synthesis can still continue.',
-				error
-			);
+		if (!this.policy.skipWarmup) {
+			progress({ status: 'loading', file: `Warming up ${backend.toUpperCase()}`, progress: 96 });
+			try {
+				const style = await this.style(this.descriptor.defaultVoice);
+				await this.infer('Hello, this is a quick warmup.', 'en', style, undefined, 1);
+			} catch (error) {
+				console.warn(
+					'Supertonic warm-up did not complete; normal synthesis can still continue.',
+					error
+				);
+			}
 		}
 		progress({ status: 'ready', file: 'Supertonic 3 ready', progress: 100 });
 	}
 
-	private textInputs(text: string, language: string): { ids: ort.Tensor; mask: ort.Tensor } {
+	private textInputs(text: string, language: string): { ids: Tensor; mask: Tensor } {
 		if (!this.indexer) throw new Error('Supertonic text processing is not ready.');
+		const runtime = this.ort();
 		const normalized = normalizeText(text, language);
 		const codePoints = Array.from(normalized, (character) => character.codePointAt(0) ?? 0);
 		const ids = new BigInt64Array(
 			codePoints.map((codePoint) => BigInt(this.indexer![codePoint] ?? -1))
 		);
 		return {
-			ids: new ort.Tensor('int64', ids, [1, ids.length]),
-			mask: new ort.Tensor('float32', new Float32Array(ids.length).fill(1), [1, 1, ids.length])
+			ids: new runtime.Tensor('int64', ids, [1, ids.length]),
+			mask: new runtime.Tensor('float32', new Float32Array(ids.length).fill(1), [1, 1, ids.length])
 		};
 	}
 
@@ -272,8 +289,16 @@ export class SupertonicAdapter {
 		if (cached) return cached;
 		const source = await this.json<VoiceStyleJson>(`voice_styles/${voiceId}.json`);
 		const style = {
-			ttl: new ort.Tensor('float32', flattenNumbers(source.style_ttl.data), source.style_ttl.dims),
-			dp: new ort.Tensor('float32', flattenNumbers(source.style_dp.data), source.style_dp.dims)
+			ttl: new (this.ort().Tensor)(
+				'float32',
+				flattenNumbers(source.style_ttl.data),
+				source.style_ttl.dims
+			),
+			dp: new (this.ort().Tensor)(
+				'float32',
+				flattenNumbers(source.style_dp.data),
+				source.style_dp.dims
+			)
 		};
 		this.styles.set(voiceId, style);
 		return style;
@@ -281,7 +306,7 @@ export class SupertonicAdapter {
 
 	private noisyLatent(duration: number): {
 		latent: Float32Array;
-		mask: ort.Tensor;
+		mask: Tensor;
 		dims: number[];
 	} {
 		if (!this.config) throw new Error('Supertonic configuration is not ready.');
@@ -298,7 +323,11 @@ export class SupertonicAdapter {
 		}
 		return {
 			latent,
-			mask: new ort.Tensor('float32', new Float32Array(latentLength).fill(1), [1, 1, latentLength]),
+			mask: new (this.ort().Tensor)('float32', new Float32Array(latentLength).fill(1), [
+				1,
+				1,
+				latentLength
+			]),
 			dims: [1, latentChannels, latentLength]
 		};
 	}
@@ -321,12 +350,12 @@ export class SupertonicAdapter {
 			throw new Error('Supertonic 3 is missing one or more inference sessions.');
 		}
 		const { ids, mask } = this.textInputs(text, language);
-		let durationTensor: ort.Tensor | undefined;
-		let textEmbedding: ort.Tensor | undefined;
-		let latentMask: ort.Tensor | undefined;
-		let totalStepTensor: ort.Tensor | undefined;
-		let vocoderInput: ort.Tensor | undefined;
-		let decodedAudio: ort.Tensor | undefined;
+		let durationTensor: Tensor | undefined;
+		let textEmbedding: Tensor | undefined;
+		let latentMask: Tensor | undefined;
+		let totalStepTensor: Tensor | undefined;
+		let vocoderInput: Tensor | undefined;
+		let decodedAudio: Tensor | undefined;
 		try {
 			const durationOutput = await durationPredictor.run({
 				text_ids: ids,
@@ -340,24 +369,26 @@ export class SupertonicAdapter {
 				style_ttl: style.ttl,
 				text_mask: mask
 			});
-			textEmbedding = encoded.text_emb;
+			const encodedText = encoded.text_emb;
+			textEmbedding = encodedText;
 			const sampled = this.noisyLatent(duration);
 			latentMask = sampled.mask;
 			const latent = sampled.latent;
-			totalStepTensor = new ort.Tensor('float32', new Float32Array([totalSteps]), [1]);
+			const totalStep = new (this.ort().Tensor)('float32', new Float32Array([totalSteps]), [1]);
+			totalStepTensor = totalStep;
 			for (let step = 0; step < totalSteps; step += 1) {
-				const noisyLatent = new ort.Tensor('float32', latent, sampled.dims);
-				const currentStep = new ort.Tensor('float32', new Float32Array([step]), [1]);
-				let denoisedLatent: ort.Tensor | undefined;
+				const noisyLatent = new (this.ort().Tensor)('float32', latent, sampled.dims);
+				const currentStep = new (this.ort().Tensor)('float32', new Float32Array([step]), [1]);
+				let denoisedLatent: Tensor | undefined;
 				try {
 					const output = await vectorEstimator.run({
 						noisy_latent: noisyLatent,
-						text_emb: textEmbedding,
+						text_emb: encodedText,
 						style_ttl: style.ttl,
 						latent_mask: latentMask,
 						text_mask: mask,
 						current_step: currentStep,
-						total_step: totalStepTensor
+						total_step: totalStep
 					});
 					denoisedLatent = output.denoised_latent;
 					latent.set(denoisedLatent.data as Float32Array);
@@ -368,8 +399,9 @@ export class SupertonicAdapter {
 					disposeTensor(noisyLatent);
 				}
 			}
-			vocoderInput = new ort.Tensor('float32', latent, sampled.dims);
-			const decoded = await vocoder.run({ latent: vocoderInput });
+			const vocoderLatent = new (this.ort().Tensor)('float32', latent, sampled.dims);
+			vocoderInput = vocoderLatent;
+			const decoded = await vocoder.run({ latent: vocoderLatent });
 			decodedAudio = decoded.wav_tts;
 			const audio = (decodedAudio.data as Float32Array).slice(
 				0,

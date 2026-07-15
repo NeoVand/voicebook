@@ -296,7 +296,11 @@ export class VoicebookState {
 	async addPastedText(title: string, text: string): Promise<NormalizedDocument | null> {
 		if (!text.trim()) return null;
 		try {
-			return await this.addImportedDocument(documentFromText(title, text));
+			const document = documentFromText(title, text);
+			return await this.addImportedDocument(
+				document,
+				new Blob([text], { type: document.mimeType })
+			);
 		} catch (error) {
 			this.errorMessage =
 				error instanceof Error ? error.message : 'The pasted text could not be saved.';

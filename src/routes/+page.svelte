@@ -280,7 +280,7 @@
 				<header>
 					<div>
 						<p class="eyebrow">Quick import</p>
-						<h2 id="paste-title">Paste text</h2>
+						<h2 id="paste-title">Paste text or Markdown</h2>
 					</div>
 					<button
 						class="icon-button"
@@ -297,7 +297,8 @@
 				</label>
 				<label class="form-field">
 					<span>Text</span>
-					<textarea bind:value={pasteText} placeholder="Paste text to read aloud…"></textarea>
+					<textarea bind:value={pasteText} placeholder="Paste text or Markdown to read aloud…"
+					></textarea>
 				</label>
 				<footer>
 					<small>{pasteText.trim().split(/\s+/).filter(Boolean).length} words</small>

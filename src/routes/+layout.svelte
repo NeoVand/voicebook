@@ -3,7 +3,7 @@
 	import '@fontsource-variable/newsreader/index.css';
 	import { browser } from '$app/environment';
 	import { page } from '$app/state';
-	import { resolve } from '$app/paths';
+	import { base, resolve } from '$app/paths';
 	import {
 		Bookmark,
 		CloudRain,
@@ -116,6 +116,7 @@
 			};
 		let registration: ServiceWorkerRegistration | undefined;
 		let installingWorker: ServiceWorker | null = null;
+		let checkingForUpdate = false;
 		const showWaitingUpdate = (worker: ServiceWorker | null | undefined) => {
 			if (!worker || !navigator.serviceWorker.controller) return;
 			waitingServiceWorker = worker;
@@ -132,14 +133,32 @@
 			installingWorker?.addEventListener('statechange', onInstallingStateChange);
 		};
 		const checkForUpdate = () => {
+			if (checkingForUpdate || runtimeBusy || document.visibilityState !== 'visible') return;
+			checkingForUpdate = true;
 			void (async () => {
-				registration ??= await navigator.serviceWorker.getRegistration();
-				if (!registration) return;
+				registration ??= await navigator.serviceWorker.getRegistration(base || '/');
+				if (!registration) {
+					registration = await navigator.serviceWorker.register(`${base}/service-worker.js`, {
+						scope: `${base}/`
+					});
+					registration.addEventListener('updatefound', onUpdateFound);
+					showWaitingUpdate(registration.waiting);
+					return;
+				}
 				registration.removeEventListener('updatefound', onUpdateFound);
 				registration.addEventListener('updatefound', onUpdateFound);
 				showWaitingUpdate(registration.waiting);
 				await registration.update();
-			})();
+			})()
+				.catch((error: unknown) =>
+					recordRuntimeEvent(
+						'service-worker-update',
+						error instanceof Error ? error.message : String(error)
+					)
+				)
+				.finally(() => {
+					checkingForUpdate = false;
+				});
 		};
 		const finishManualUpdate = () => {
 			if (applyingUpdate) window.location.reload();

@@ -851,6 +851,23 @@ function textBlocks(text: string): DocumentBlock[] {
 		.map((paragraph, index) => block('paragraph', paragraph, index));
 }
 
+function looksLikeMarkdown(text: string): boolean {
+	const source = text.replace(/^\uFEFF/, '');
+	return [
+		/^\s*---\s*\n[\s\S]+?\n---\s*(?:\n|$)/,
+		/^\s{0,3}#{1,6}\s+\S/m,
+		/^\s{0,3}(?:`{3,}|~{3,})(?:\w+)?\s*$/m,
+		/^\s{0,3}>\s*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/im,
+		/^\s{0,3}>\s+\S/m,
+		/^\s{0,3}(?:[-+*]|\d+[.)])\s+\S/m,
+		/^\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}/m,
+		/^\s*(?:\$\$|```math)\s*$/m,
+		/!\[[^\]]*\]\([^\s)]+(?:\s+['"][^'"]*['"])?\)/,
+		/\[[^\]]+\]\([^\s)]+(?:\s+['"][^'"]*['"])?\)/,
+		/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/m
+	].some((pattern) => pattern.test(source));
+}
+
 async function parseDocx(file: File): Promise<ParsedSource> {
 	try {
 		const arrayBuffer = await file.arrayBuffer();
@@ -1068,24 +1085,27 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 
 export function documentFromText(title: string, text: string): NormalizedDocument {
 	const now = Date.now();
-	const blocks = textBlocks(text);
+	const markdown = looksLikeMarkdown(text);
+	const parsed = markdown ? parseMarkdown(text) : { blocks: textBlocks(text) };
+	const blocks = parsed.blocks.map((candidate, index) => ({ ...candidate, id: `b${index}` }));
 	const id = crypto.randomUUID();
+	const resolvedTitle = title.trim() || parsed.title || 'Pasted text';
 	return {
 		normalizationVersion: DOCUMENT_NORMALIZATION_VERSION,
 		id,
 		fingerprint: `pasted-${id}`,
-		title: title.trim() || 'Pasted text',
-		sourceName: `${title.trim() || 'Pasted text'}.txt`,
-		sourceKind: 'text',
-		mimeType: 'text/plain',
+		title: resolvedTitle,
+		sourceName: `${resolvedTitle}.${markdown ? 'md' : 'txt'}`,
+		sourceKind: markdown ? 'markdown' : 'text',
+		mimeType: markdown ? 'text/markdown' : 'text/plain',
 		language: 'en',
 		createdAt: now,
 		updatedAt: now,
 		blocks,
 		segments: segmentBlocks(blocks),
-		outline: [],
+		outline: outlineFor(blocks),
 		bookmarks: [],
-		warnings: [],
+		warnings: parsed.warnings ?? [],
 		includeCode: false
 	};
 }
