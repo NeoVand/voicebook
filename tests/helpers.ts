@@ -116,3 +116,21 @@ export async function installFakeTts(page: Page): Promise<void> {
 		Object.defineProperty(window, 'Worker', { value: RoutedWorker, configurable: true });
 	});
 }
+
+export async function completeModelSetup(page: Page): Promise<void> {
+	const setup = page.getByRole('heading', {
+		name: 'Listen privately, right in this browser.'
+	});
+	const library = page.getByRole('heading', { name: 'Library', exact: true });
+	await Promise.race([setup.waitFor({ state: 'visible' }), library.waitFor({ state: 'visible' })]);
+	if (!(await setup.isVisible())) return;
+	await page.getByRole('checkbox', { name: /I have reviewed and agree/ }).check();
+	await page.getByRole('button', { name: 'Download voice engine' }).click();
+	await setup.waitFor({ state: 'hidden' });
+	await library.waitFor({ state: 'visible' });
+}
+
+export async function openReadyLibrary(page: Page): Promise<void> {
+	await page.goto('./');
+	await completeModelSetup(page);
+}

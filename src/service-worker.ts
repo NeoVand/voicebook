@@ -14,12 +14,11 @@ const PRECACHE = ASSETS.filter(
 );
 
 worker.addEventListener('install', (event) => {
-	event.waitUntil(
-		caches
-			.open(CACHE)
-			.then((cache) => cache.addAll(PRECACHE))
-			.then(() => worker.skipWaiting())
-	);
+	event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(PRECACHE)));
+});
+
+worker.addEventListener('message', (event) => {
+	if (event.data?.type === 'SKIP_WAITING') void worker.skipWaiting();
 });
 
 worker.addEventListener('activate', (event) => {

@@ -20,6 +20,7 @@
 		Moon,
 		PanelLeftClose,
 		PanelLeftOpen,
+		RefreshCw,
 		Settings2,
 		Sun,
 		ZoomIn,
@@ -30,6 +31,7 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import GitHubOutline from '$lib/components/GitHubOutline.svelte';
+	import { recordRuntimeEvent } from '$lib/services/runtime-diagnostics';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
@@ -69,7 +71,17 @@
 		normalizeTheme(browser ? document.documentElement.dataset.theme : undefined)
 	);
 	let fullscreenElement = $state<Element | null>(null);
+	let waitingServiceWorker = $state<ServiceWorker | null>(null);
+	let updateAvailable = $state(false);
+	let updateDismissed = $state(false);
+	let applyingUpdate = $state(false);
 	let isFullscreen = $derived(Boolean(fullscreenElement));
+	let runtimeBusy = $derived(
+		Object.values(appState.modelProgress).some((progress) => progress.status === 'loading') ||
+			player.isBuffering ||
+			player.isPlaying ||
+			player.isGeneratingAll
+	);
 	let nextTheme = $derived(themes[(themes.indexOf(theme) + 1) % themes.length]);
 	let isReader = $derived(page.url.pathname.startsWith(resolve('/read')));
 	let settingsSection = $derived(page.url.searchParams.get('section') ?? 'models');
@@ -87,37 +99,69 @@
 	onMount(() => {
 		readerChrome.hydratePreferences();
 		void appState.initialize();
+		const onWindowError = (event: ErrorEvent) =>
+			recordRuntimeEvent('window-error', event.message || 'unknown window error');
+		const onUnhandledRejection = (event: PromiseRejectionEvent) =>
+			recordRuntimeEvent(
+				'unhandled-rejection',
+				event.reason instanceof Error ? event.reason.message : String(event.reason)
+			);
+		window.addEventListener('error', onWindowError);
+		window.addEventListener('unhandledrejection', onUnhandledRejection);
 
-		if (!('serviceWorker' in navigator)) return;
-		const hadController = Boolean(navigator.serviceWorker.controller);
-		let reloading = false;
-		let reloadDeferredForModelInstall = false;
-		const modelInstallActive = () =>
-			Object.values(appState.modelProgress).some((progress) => progress.status === 'loading');
-		const activateUpdate = () => {
-			if (!hadController || reloading) return;
-			if (modelInstallActive()) {
-				reloadDeferredForModelInstall = true;
-				return;
-			}
-			reloading = true;
-			window.location.reload();
+		if (!('serviceWorker' in navigator))
+			return () => {
+				window.removeEventListener('error', onWindowError);
+				window.removeEventListener('unhandledrejection', onUnhandledRejection);
+			};
+		let registration: ServiceWorkerRegistration | undefined;
+		let installingWorker: ServiceWorker | null = null;
+		const showWaitingUpdate = (worker: ServiceWorker | null | undefined) => {
+			if (!worker || !navigator.serviceWorker.controller) return;
+			waitingServiceWorker = worker;
+			updateAvailable = true;
+			updateDismissed = false;
+		};
+		const onInstallingStateChange = () => {
+			if (installingWorker?.state === 'installed')
+				showWaitingUpdate(registration?.waiting ?? installingWorker);
+		};
+		const onUpdateFound = () => {
+			installingWorker?.removeEventListener('statechange', onInstallingStateChange);
+			installingWorker = registration?.installing ?? null;
+			installingWorker?.addEventListener('statechange', onInstallingStateChange);
 		};
 		const checkForUpdate = () => {
-			if (reloadDeferredForModelInstall && !modelInstallActive()) {
-				activateUpdate();
-				return;
-			}
-			void navigator.serviceWorker.ready.then((worker) => worker.update());
+			void (async () => {
+				registration ??= await navigator.serviceWorker.getRegistration();
+				if (!registration) return;
+				registration.removeEventListener('updatefound', onUpdateFound);
+				registration.addEventListener('updatefound', onUpdateFound);
+				showWaitingUpdate(registration.waiting);
+				await registration.update();
+			})();
 		};
-		navigator.serviceWorker.addEventListener('controllerchange', activateUpdate);
+		const finishManualUpdate = () => {
+			if (applyingUpdate) window.location.reload();
+		};
+		navigator.serviceWorker.addEventListener('controllerchange', finishManualUpdate);
 		window.addEventListener('focus', checkForUpdate);
 		checkForUpdate();
 		return () => {
-			navigator.serviceWorker.removeEventListener('controllerchange', activateUpdate);
+			window.removeEventListener('error', onWindowError);
+			window.removeEventListener('unhandledrejection', onUnhandledRejection);
+			navigator.serviceWorker.removeEventListener('controllerchange', finishManualUpdate);
 			window.removeEventListener('focus', checkForUpdate);
+			registration?.removeEventListener('updatefound', onUpdateFound);
+			installingWorker?.removeEventListener('statechange', onInstallingStateChange);
 		};
 	});
+
+	function applyUpdate(): void {
+		if (!waitingServiceWorker || runtimeBusy) return;
+		applyingUpdate = true;
+		waitingServiceWorker.postMessage({ type: 'SKIP_WAITING' });
+	}
 
 	function toggleSidebar(): void {
 		sidebarCollapsed = !sidebarCollapsed;
@@ -225,7 +269,6 @@
 					>
 						<ZoomIn size={16} />
 					</button>
-					<span class="zoom-divider" aria-hidden="true"></span>
 					<button
 						class="icon-button"
 						class:active={isFullscreen}
@@ -257,7 +300,6 @@
 				>
 					<ListMusic size={16} />
 				</button>
-				<span class="commandbar-divider" aria-hidden="true"></span>
 				<button
 					class="icon-button"
 					type="button"
@@ -463,6 +505,38 @@
 		</main>
 	</div>
 </div>
+
+{#if updateAvailable && !updateDismissed}
+	<div class="toast update-toast" class:stacked={Boolean(appState.errorMessage)} role="status">
+		<div>
+			<strong>A Voicebook update is ready</strong>
+			<p>
+				{runtimeBusy
+					? 'Finish or pause the current voice work before reloading.'
+					: 'Reload when you are ready. Voicebook will never refresh itself.'}
+			</p>
+		</div>
+		<div class="update-actions">
+			<button
+				class="button"
+				type="button"
+				disabled={runtimeBusy || applyingUpdate}
+				onclick={applyUpdate}
+			>
+				<RefreshCw class={applyingUpdate ? 'spin' : undefined} size={14} />
+				{applyingUpdate ? 'Reloading' : 'Reload'}
+			</button>
+			<button
+				class="icon-button"
+				type="button"
+				aria-label="Dismiss update notice"
+				onclick={() => (updateDismissed = true)}
+			>
+				<X size={17} />
+			</button>
+		</div>
+	</div>
+{/if}
 
 {#if appState.errorMessage}
 	<div class="toast error-toast" role="alert">

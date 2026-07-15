@@ -1,11 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { installFakeTts } from './helpers';
+import { completeModelSetup, installFakeTts } from './helpers';
 
-test('empty library visual baseline', async ({ page }, testInfo) => {
+test('model onboarding visual baseline', async ({ page }, testInfo) => {
 	await installFakeTts(page);
 	await page.goto('./');
-	await expect(page.getByRole('heading', { name: 'Library', exact: true })).toBeVisible();
-	await expect(page).toHaveScreenshot(`library-empty-${testInfo.project.name}.png`, {
+	await expect(
+		page.getByRole('heading', { name: 'Listen privately, right in this browser.' })
+	).toBeVisible();
+	await expect(page).toHaveScreenshot(`model-onboarding-${testInfo.project.name}.png`, {
 		fullPage: true,
 		animations: 'disabled'
 	});
@@ -14,10 +16,7 @@ test('empty library visual baseline', async ({ page }, testInfo) => {
 test('reader workspace visual baseline', async ({ page }, testInfo) => {
 	await installFakeTts(page);
 	await page.goto('./');
-	await page.getByRole('link', { name: 'Voice', exact: true }).click();
-	await page.getByRole('checkbox', { name: 'I have reviewed the terms' }).check();
-	await page.getByRole('button', { name: 'Install locally' }).click();
-	await page.getByRole('link', { name: 'Library', exact: true }).click();
+	await completeModelSetup(page);
 	await page.locator('#document-upload').setInputFiles({
 		name: 'quiet-machine.md',
 		mimeType: 'text/markdown',
@@ -70,6 +69,7 @@ test('reader workspace visual baseline', async ({ page }, testInfo) => {
 test('populated library visual baseline', async ({ page }, testInfo) => {
 	await installFakeTts(page);
 	await page.goto('./');
+	await completeModelSetup(page);
 	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
 	await page.getByLabel('Title').fill('The Quiet Machine');
 	await page

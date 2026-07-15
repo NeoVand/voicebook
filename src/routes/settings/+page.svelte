@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import {
 		AlertTriangle,
 		ArrowUpRight,
+		Bug,
 		Check,
+		ClipboardCopy,
 		Cpu,
 		Database,
 		Download,
@@ -23,6 +25,7 @@
 	} from '@lucide/svelte';
 	import { getModel } from '$lib/domain/model-catalog';
 	import type { VoiceDescriptor } from '$lib/domain/types';
+	import { runtimeDiagnosticsReport } from '$lib/services/runtime-diagnostics';
 	import { ttsClient } from '$lib/services/tts-client';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { requestPersistentStorage } from '$lib/services/repository';
@@ -45,6 +48,8 @@
 	let previewAbort: AbortController | undefined;
 	let previewEngineLoad: Promise<void> | undefined;
 	let previewSequence = 0;
+	let diagnosticReport = $state('');
+	let diagnosticsCopied = $state(false);
 	let activeSection = $derived.by<SettingsSection>(() => {
 		const section = page.url.searchParams.get('section');
 		return section === 'storage' || section === 'system' ? section : 'models';
@@ -182,6 +187,21 @@
 		previewGain?.disconnect();
 		void previewContext?.close();
 	});
+
+	onMount(() => {
+		diagnosticReport = runtimeDiagnosticsReport();
+	});
+
+	async function copyDiagnostics(): Promise<void> {
+		try {
+			diagnosticReport = runtimeDiagnosticsReport();
+			await navigator.clipboard.writeText(diagnosticReport);
+			diagnosticsCopied = true;
+			setTimeout(() => (diagnosticsCopied = false), 2_000);
+		} catch {
+			appState.errorMessage = 'This browser did not allow Voicebook to copy the diagnostic report.';
+		}
+	}
 
 	async function install(): Promise<void> {
 		busy = true;
@@ -535,6 +555,25 @@
 					</b>
 				</div>
 			</div>
+		</section>
+
+		<section class="settings-section diagnostics-section" aria-labelledby="diagnostics-title">
+			<header class="section-title">
+				<div>
+					<h2 id="diagnostics-title"><Bug size={16} /> Local diagnostics</h2>
+					<p>
+						Records model loading, speech generation, worker errors, and interrupted browser
+						sessions on this device. Nothing is transmitted automatically.
+					</p>
+				</div>
+				<button class="button" type="button" onclick={copyDiagnostics}>
+					{#if diagnosticsCopied}<Check size={14} /> Copied{:else}<ClipboardCopy size={14} /> Copy report{/if}
+				</button>
+			</header>
+			<details class="diagnostics-report">
+				<summary>View recent runtime events</summary>
+				<pre>{diagnosticReport || 'No runtime events have been recorded yet.'}</pre>
+			</details>
 		</section>
 
 		<div class="two-column">
@@ -1079,6 +1118,42 @@
 
 	.capability-list b.available {
 		color: var(--success);
+	}
+
+	.diagnostics-section {
+		margin-top: 42px;
+	}
+
+	.diagnostics-section .section-title h2 {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.diagnostics-report {
+		padding: 14px 0;
+		border-bottom: 1px solid var(--line);
+	}
+
+	.diagnostics-report summary {
+		color: var(--muted);
+		font-size: 9px;
+		font-weight: 620;
+		cursor: pointer;
+	}
+
+	.diagnostics-report pre {
+		max-height: 280px;
+		overflow: auto;
+		padding: 14px;
+		margin: 12px 0 0;
+		border-radius: 6px;
+		background: var(--control-strong);
+		color: var(--text-soft);
+		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+		font-size: 8px;
+		line-height: 1.6;
+		white-space: pre-wrap;
 	}
 
 	.two-column {

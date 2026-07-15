@@ -52,6 +52,14 @@ export interface TimelineSegmentVisual {
 	listened: Array<{ left: number; width: number }>;
 }
 
+function isMemoryConstrainedRuntime(): boolean {
+	const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+	return (
+		(memory !== undefined && memory <= 4) ||
+		(matchMedia('(pointer: coarse)').matches && matchMedia('(max-width: 840px)').matches)
+	);
+}
+
 export class VoicebookPlayer {
 	book = $state<NormalizedDocument | null>(null);
 	isPlaying = $state(false);
@@ -554,8 +562,9 @@ export class VoicebookPlayer {
 	}
 
 	private prunePreparedAudio(center: number): void {
+		const radius = isMemoryConstrainedRuntime() ? 1 : 3;
 		for (const [index, prepared] of this.preparedBySegment) {
-			if (Math.abs(index - center) <= 3) continue;
+			if (Math.abs(index - center) <= radius) continue;
 			this.preparedBySegment.delete(index);
 			this.audioCache.delete(prepared.key);
 		}
@@ -618,7 +627,7 @@ export class VoicebookPlayer {
 
 	private prefetch(): void {
 		if (!this.book) return;
-		const lookAhead = ttsClient.backend === 'webgpu' ? 2 : 1;
+		const lookAhead = ttsClient.backend === 'webgpu' && !isMemoryConstrainedRuntime() ? 2 : 1;
 		for (const index of generationPlan(
 			this.book.segments.length,
 			this.currentSegmentIndex,

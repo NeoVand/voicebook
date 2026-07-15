@@ -33,6 +33,15 @@ interface LoadProgress {
 type ProgressCallback = (event: LoadProgress) => void;
 type Backend = 'webgpu' | 'wasm';
 
+function disposeTensor(tensor: ort.Tensor | undefined): void {
+	try {
+		tensor?.dispose();
+	} catch {
+		// Disposal is best-effort during error recovery. The owning session is still
+		// released when the engine itself is disposed.
+	}
+}
+
 const LANGUAGES = new Set([
 	'en',
 	'ko',
@@ -312,42 +321,71 @@ export class SupertonicAdapter {
 			throw new Error('Supertonic 3 is missing one or more inference sessions.');
 		}
 		const { ids, mask } = this.textInputs(text, language);
-		const durationOutput = await durationPredictor.run({
-			text_ids: ids,
-			style_dp: style.dp,
-			text_mask: mask
-		});
-		const duration = Number(durationOutput.duration.data[0]);
-		const encoded = await textEncoder.run({
-			text_ids: ids,
-			style_ttl: style.ttl,
-			text_mask: mask
-		});
-		const sampled = this.noisyLatent(duration);
-		const latent = sampled.latent;
-		const totalStepTensor = new ort.Tensor('float32', new Float32Array([totalSteps]), [1]);
-		const stepTensors = Array.from(
-			{ length: totalSteps },
-			(_, step) => new ort.Tensor('float32', new Float32Array([step]), [1])
-		);
-		for (let step = 0; step < totalSteps; step += 1) {
-			const output = await vectorEstimator.run({
-				noisy_latent: new ort.Tensor('float32', latent, sampled.dims),
-				text_emb: encoded.text_emb,
-				style_ttl: style.ttl,
-				latent_mask: sampled.mask,
-				text_mask: mask,
-				current_step: stepTensors[step],
-				total_step: totalStepTensor
+		let durationTensor: ort.Tensor | undefined;
+		let textEmbedding: ort.Tensor | undefined;
+		let latentMask: ort.Tensor | undefined;
+		let totalStepTensor: ort.Tensor | undefined;
+		let vocoderInput: ort.Tensor | undefined;
+		let decodedAudio: ort.Tensor | undefined;
+		try {
+			const durationOutput = await durationPredictor.run({
+				text_ids: ids,
+				style_dp: style.dp,
+				text_mask: mask
 			});
-			latent.set(output.denoised_latent.data as Float32Array);
-			progress?.(step + 1, totalSteps);
+			durationTensor = durationOutput.duration;
+			const duration = Number(durationTensor.data[0]);
+			const encoded = await textEncoder.run({
+				text_ids: ids,
+				style_ttl: style.ttl,
+				text_mask: mask
+			});
+			textEmbedding = encoded.text_emb;
+			const sampled = this.noisyLatent(duration);
+			latentMask = sampled.mask;
+			const latent = sampled.latent;
+			totalStepTensor = new ort.Tensor('float32', new Float32Array([totalSteps]), [1]);
+			for (let step = 0; step < totalSteps; step += 1) {
+				const noisyLatent = new ort.Tensor('float32', latent, sampled.dims);
+				const currentStep = new ort.Tensor('float32', new Float32Array([step]), [1]);
+				let denoisedLatent: ort.Tensor | undefined;
+				try {
+					const output = await vectorEstimator.run({
+						noisy_latent: noisyLatent,
+						text_emb: textEmbedding,
+						style_ttl: style.ttl,
+						latent_mask: latentMask,
+						text_mask: mask,
+						current_step: currentStep,
+						total_step: totalStepTensor
+					});
+					denoisedLatent = output.denoised_latent;
+					latent.set(denoisedLatent.data as Float32Array);
+					progress?.(step + 1, totalSteps);
+				} finally {
+					disposeTensor(denoisedLatent);
+					disposeTensor(currentStep);
+					disposeTensor(noisyLatent);
+				}
+			}
+			vocoderInput = new ort.Tensor('float32', latent, sampled.dims);
+			const decoded = await vocoder.run({ latent: vocoderInput });
+			decodedAudio = decoded.wav_tts;
+			const audio = (decodedAudio.data as Float32Array).slice(
+				0,
+				Math.floor(duration * this.config.ae.sample_rate)
+			);
+			return { audio, duration };
+		} finally {
+			disposeTensor(decodedAudio);
+			disposeTensor(vocoderInput);
+			disposeTensor(totalStepTensor);
+			disposeTensor(latentMask);
+			disposeTensor(textEmbedding);
+			disposeTensor(durationTensor);
+			disposeTensor(mask);
+			disposeTensor(ids);
 		}
-		const decoded = await vocoder.run({
-			latent: new ort.Tensor('float32', latent, sampled.dims)
-		});
-		const audio = new Float32Array(decoded.wav_tts.data as Float32Array);
-		return { audio: audio.slice(0, Math.floor(duration * this.config.ae.sample_rate)), duration };
 	}
 
 	async synthesize(
@@ -384,6 +422,10 @@ export class SupertonicAdapter {
 	async dispose(): Promise<void> {
 		await Promise.all(Array.from(this.sessions.values(), (session) => session.release()));
 		this.sessions.clear();
+		for (const style of this.styles.values()) {
+			disposeTensor(style.ttl);
+			disposeTensor(style.dp);
+		}
 		this.styles.clear();
 	}
 }
