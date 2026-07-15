@@ -3,14 +3,12 @@
 		AlertTriangle,
 		ArrowUpRight,
 		Check,
-		Cpu,
 		Download,
-		HardDrive,
 		LoaderCircle,
 		ShieldCheck,
-		Sparkles,
 		Square
 	} from '@lucide/svelte';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { getModel } from '$lib/domain/model-catalog';
 	import { appState } from '$lib/state/app-state.svelte';
 
@@ -22,6 +20,7 @@
 	let progress = $derived(appState.modelProgress['supertonic-3']);
 	let licenseAccepted = $derived(appState.acceptedLicenses.includes('supertonic-3'));
 	let installing = $derived(busy || progress.status === 'loading');
+	let logoActive = $derived(installing);
 
 	function friendlyError(message?: string): string {
 		if (!message) return 'The voice engine could not be installed.';
@@ -67,73 +66,30 @@
 	aria-busy={installing}
 >
 	<header class="setup-heading">
-		<span class="setup-mark" aria-hidden="true"><Sparkles size={compact ? 17 : 22} /></span>
-		<div>
-			{#if !compact}<p class="eyebrow">First, prepare your voice</p>{/if}
+		<div class="setup-brand" aria-hidden="true">
+			<BrandMark size={compact ? 36 : 72} active={logoActive} />
+		</div>
+		<div class="setup-copy">
 			<h1 id={compact ? 'reader-model-setup-title' : 'model-setup-title'}>
-				{compact ? 'Install the local voice engine' : 'Listen privately, right in this browser.'}
+				{compact ? 'Install the local voice engine' : 'Set up local listening.'}
 			</h1>
 			<p>
 				{compact
 					? 'Accept the model terms and finish the one-time download here.'
-					: 'Voicebook needs one local speech model before you add a document. Download it once, then your documents and generated audio stay on this device.'}
+					: 'Private speech, downloaded once and kept on this device.'}
 			</p>
 		</div>
 	</header>
 
-	<div class="setup-facts" aria-label="Voice engine details">
-		<span
-			><HardDrive size={15} /><strong>{model.sizeMb} MB</strong><small>one-time download</small
-			></span
-		>
-		<span
-			><Cpu size={15} /><strong>{appState.capabilities.webgpu ? 'WebGPU' : 'WASM'}</strong><small
-				>{appState.capabilities.webgpu ? 'hardware accelerated' : 'compatibility mode'}</small
-			></span
-		>
-		<span
-			><ShieldCheck size={15} /><strong>On device</strong><small>no document uploads</small></span
-		>
-	</div>
-
 	<div class="license-step">
-		<div>
-			<strong>Supertonic 3 · OpenRAIL-M</strong>
-			<p>
-				Review the model’s use restrictions before downloading.
-				<a href={model.licenseUrl} target="_blank" rel="external noreferrer">
-					Open terms <ArrowUpRight size={12} />
-				</a>
-			</p>
-		</div>
 		<label class="license-check">
 			<input type="checkbox" checked={licenseAccepted} onchange={updateLicense} />
 			<span class="check-box" aria-hidden="true"><Check size={14} strokeWidth={2.5} /></span>
-			<span>I have reviewed and agree to the model terms</span>
+			<span>I agree to the Supertonic model terms</span>
 		</label>
-	</div>
-
-	<div class="install-state" aria-live="polite">
-		{#if installing}
-			<div class="progress-copy">
-				<span>{progress.message ?? 'Preparing the local voice engine…'}</span>
-				<strong>{Math.round(progress.progress)}%</strong>
-			</div>
-			<progress max="100" value={progress.progress}></progress>
-			<small>{progress.file ?? 'Checking saved model files'}</small>
-		{:else if localError || progress.status === 'error'}
-			<div class="setup-error" role="alert">
-				<AlertTriangle size={15} />
-				<span>{localError || friendlyError(progress.message)}</span>
-			</div>
-		{:else if appState.runtimeNotice}
-			<div class="recovery-note">
-				<ShieldCheck size={15} />
-				<span>{appState.runtimeNotice}</span>
-			</div>
-		{:else}
-			<p class="ready-note">The download resumes automatically if the browser is interrupted.</p>
-		{/if}
+		<a class="terms-link" href={model.licenseUrl} target="_blank" rel="external noreferrer">
+			Review terms <ArrowUpRight size={12} />
+		</a>
 	</div>
 
 	<footer class="setup-actions">
@@ -152,124 +108,89 @@
 				{progress.status === 'error' ? 'Resume installation' : 'Download voice engine'}
 			</button>
 		{/if}
-		<small>31 languages · 10 voices · runs locally after download</small>
 	</footer>
+
+	{#if installing || localError || progress.status === 'error' || appState.runtimeNotice}
+		<div class="install-state" aria-live="polite">
+			{#if installing}
+				<div class="progress-copy">
+					<span>{progress.message ?? 'Preparing the local voice engine…'}</span>
+					<strong>{Math.round(progress.progress)}%</strong>
+				</div>
+				<progress max="100" value={progress.progress}></progress>
+				<small>{progress.file ?? 'Checking saved model files'}</small>
+			{:else if localError || progress.status === 'error'}
+				<div class="setup-error" role="alert">
+					<AlertTriangle size={15} />
+					<span>{localError || friendlyError(progress.message)}</span>
+				</div>
+			{:else if appState.runtimeNotice}
+				<div class="recovery-note">
+					<ShieldCheck size={15} />
+					<span>{appState.runtimeNotice}</span>
+				</div>
+			{/if}
+		</div>
+	{/if}
 </section>
 
 <style>
 	.model-setup {
-		width: min(760px, calc(100% - 40px));
-		min-height: calc(100dvh - var(--app-header-height));
-		padding: clamp(48px, 9dvh, 96px) 0 72px;
+		display: flex;
+		width: min(560px, 100%);
+		align-items: center;
+		padding: 0;
 		margin: 0 auto;
+		flex-direction: column;
 	}
 
 	.setup-heading {
-		display: grid;
-		grid-template-columns: 48px minmax(0, 1fr);
-		gap: 20px;
-		padding-bottom: 32px;
-		border-bottom: 1px solid var(--line-strong);
+		display: flex;
+		align-items: center;
+		flex-direction: column;
+		text-align: center;
 	}
 
-	.setup-mark {
+	.setup-brand {
 		display: grid;
-		width: 48px;
-		height: 48px;
+		margin-bottom: 22px;
 		place-items: center;
-		border-radius: 14px;
-		background: var(--primary-soft);
-		color: var(--primary);
-	}
-
-	.eyebrow {
-		margin: 0 0 8px;
-		color: var(--primary);
-		font-size: 9px;
-		font-weight: 720;
-		letter-spacing: 0.11em;
-		text-transform: uppercase;
 	}
 
 	.setup-heading h1 {
-		max-width: 640px;
 		margin: 0;
 		font-family: var(--font-display);
-		font-size: clamp(2rem, 5vw, 3.55rem);
+		font-size: clamp(2rem, 3.8vw, 2.8rem);
 		font-variation-settings: 'opsz' 48;
 		font-weight: 560;
 		letter-spacing: -0.045em;
-		line-height: 1;
+		line-height: 1.03;
 	}
 
 	.setup-heading p:last-child {
-		max-width: 620px;
-		margin: 14px 0 0;
+		max-width: 420px;
+		margin: 12px auto 0;
 		color: var(--muted);
-		font-size: 12px;
+		font-size: 11px;
 		line-height: 1.65;
 	}
 
-	.setup-facts {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		padding: 24px 0;
-		border-bottom: 1px solid var(--line);
-	}
-
-	.setup-facts > span {
-		display: grid;
-		grid-template-columns: 22px 1fr;
-		align-items: center;
-		padding-right: 20px;
-		color: var(--primary);
-	}
-
-	.setup-facts strong,
-	.setup-facts small {
-		grid-column: 2;
-	}
-
-	.setup-facts strong {
-		color: var(--text-soft);
-		font-size: 11px;
-		font-weight: 650;
-	}
-
-	.setup-facts small {
-		margin-top: 2px;
-		color: var(--faint);
-		font-size: 9px;
-	}
-
 	.license-step {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(250px, auto);
+		display: flex;
 		align-items: center;
-		gap: 24px;
-		padding: 22px 0;
-		border-bottom: 1px solid var(--line);
+		justify-content: center;
+		gap: 10px;
+		padding: 0;
+		margin-top: 26px;
+		flex-wrap: wrap;
 	}
 
-	.license-step strong {
-		color: var(--text-soft);
-		font-size: 11px;
-		font-weight: 650;
-	}
-
-	.license-step p {
-		margin: 5px 0 0;
-		color: var(--faint);
-		font-size: 9px;
-		line-height: 1.5;
-	}
-
-	.license-step a {
+	.terms-link {
 		display: inline-flex;
 		align-items: center;
 		gap: 3px;
-		margin-left: 4px;
 		color: var(--primary);
+		font-size: 10px;
 		text-decoration: underline;
 		text-underline-offset: 2px;
 	}
@@ -279,11 +200,9 @@
 		min-height: 48px;
 		align-items: center;
 		gap: 11px;
-		padding: 9px 12px;
-		border-radius: 9px;
-		background: var(--primary-soft);
+		padding: 0;
 		color: var(--text-soft);
-		font-size: 10px;
+		font-size: 11px;
 		font-weight: 600;
 		line-height: 1.35;
 		cursor: pointer;
@@ -326,8 +245,10 @@
 	}
 
 	.install-state {
-		min-height: 88px;
-		padding: 18px 0 12px;
+		width: min(420px, 100%);
+		padding: 0;
+		margin: 12px auto 0;
+		text-align: center;
 	}
 
 	.progress-copy {
@@ -377,29 +298,20 @@
 		color: var(--bookmark);
 	}
 
-	.ready-note {
-		margin: 0;
-		color: var(--faint);
-		font-size: 10px;
-	}
-
 	.setup-actions {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		gap: 20px;
-		padding-top: 8px;
+		justify-content: center;
+		padding: 0;
+		margin-top: 20px;
+		flex-direction: column;
 	}
 
 	.install-button {
 		height: 48px;
+		min-width: 220px;
 		padding: 0 20px;
 		font-size: 11px;
-	}
-
-	.setup-actions > small {
-		color: var(--faint);
-		font-size: 9px;
 	}
 
 	.model-setup.compact {
@@ -412,15 +324,16 @@
 	}
 
 	.compact .setup-heading {
+		display: grid;
 		grid-template-columns: 36px minmax(0, 1fr);
 		gap: 14px;
 		padding-bottom: 16px;
+		border-bottom: 1px solid var(--line-strong);
+		text-align: left;
 	}
 
-	.compact .setup-mark {
-		width: 36px;
-		height: 36px;
-		border-radius: 10px;
+	.compact .setup-brand {
+		margin: 0;
 	}
 
 	.compact .setup-heading h1 {
@@ -436,21 +349,22 @@
 		font-size: 10px;
 	}
 
-	.compact .setup-facts {
-		display: none;
-	}
-
 	.compact .license-step {
-		padding: 14px 0;
+		padding: 0;
+		margin-top: 14px;
 	}
 
 	.compact .install-state {
-		min-height: 58px;
-		padding: 12px 0 4px;
+		padding: 0;
+		margin-top: 10px;
 	}
 
 	.compact .setup-actions {
-		padding-top: 4px;
+		align-items: center;
+		justify-content: flex-start;
+		padding: 0;
+		margin-top: 12px;
+		flex-direction: row;
 	}
 
 	.compact .install-button {
@@ -459,33 +373,19 @@
 
 	@media (max-width: 680px) {
 		.model-setup {
-			width: min(100% - 32px, 560px);
-			padding-top: 44px;
+			width: 100%;
 		}
 
-		.setup-heading {
-			grid-template-columns: 40px minmax(0, 1fr);
-			gap: 14px;
-		}
-
-		.setup-mark {
-			width: 40px;
-			height: 40px;
-			border-radius: 11px;
+		.setup-brand {
+			margin-bottom: 20px;
 		}
 
 		.setup-heading h1 {
 			font-size: clamp(1.85rem, 10vw, 2.65rem);
 		}
 
-		.setup-facts {
-			grid-template-columns: 1fr;
-			gap: 16px;
-		}
-
 		.license-step {
-			grid-template-columns: 1fr;
-			gap: 14px;
+			gap: 10px;
 		}
 
 		.license-check {
@@ -494,15 +394,10 @@
 
 		.setup-actions {
 			align-items: stretch;
-			flex-direction: column;
 		}
 
 		.setup-actions .button {
 			width: 100%;
-		}
-
-		.setup-actions > small {
-			text-align: center;
 		}
 
 		.model-setup.compact {
@@ -514,9 +409,13 @@
 			grid-template-columns: 32px minmax(0, 1fr);
 		}
 
-		.compact .setup-mark {
-			width: 32px;
-			height: 32px;
+		.compact .setup-brand {
+			margin: 0;
+		}
+
+		.compact .setup-actions {
+			align-items: stretch;
+			flex-direction: column;
 		}
 	}
 

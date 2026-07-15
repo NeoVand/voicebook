@@ -4,10 +4,21 @@ import { completeModelSetup, installFakeTts } from './helpers';
 test('model onboarding visual baseline', async ({ page }, testInfo) => {
 	await installFakeTts(page);
 	await page.goto('./');
-	await expect(
-		page.getByRole('heading', { name: 'Listen privately, right in this browser.' })
-	).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Set up local listening.' })).toBeVisible();
 	await expect(page).toHaveScreenshot(`model-onboarding-${testInfo.project.name}.png`, {
+		fullPage: true,
+		animations: 'disabled'
+	});
+});
+
+test('empty library visual baseline', async ({ page }, testInfo) => {
+	await installFakeTts(page);
+	await page.goto('./');
+	await completeModelSetup(page);
+	await expect(
+		page.getByRole('region', { name: 'What would you like to listen to?' })
+	).toBeVisible();
+	await expect(page).toHaveScreenshot(`library-empty-${testInfo.project.name}.png`, {
 		fullPage: true,
 		animations: 'disabled'
 	});
