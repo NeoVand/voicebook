@@ -11,6 +11,7 @@ import type {
 } from '$lib/domain/types';
 import { audioVariantKey, decodeAudio, encodeAudio } from '$lib/services/audio-codec';
 import { getAudio, listAudioVariants, putAudio } from '$lib/services/repository';
+import { encodeDocumentMp3, mp3Filename } from '$lib/services/mp3-export';
 import { ttsClient } from '$lib/services/tts-client';
 import { generationPlan } from '$lib/services/generation-plan';
 import {
@@ -34,6 +35,12 @@ interface GeneratedSegment {
 	sampleRate: number;
 	meta: Omit<AudioVariantMeta, 'mimeType'>;
 	signal: AbortSignal;
+	version: number;
+}
+
+interface ActiveSynthesis {
+	controller: AbortController;
+	purpose: 'playback' | 'document';
 }
 
 export interface TimelineSegmentVisual {
@@ -86,7 +93,8 @@ export class VoicebookPlayer {
 	private persistenceBySegment = new SvelteMap<number, Promise<boolean>>();
 	private cachedSegments = new SvelteSet<number>();
 	private generationBySegment = new SvelteMap<number, number>();
-	private abortControllers = new SvelteMap<number, AbortController>();
+	private hasCachedAudioVariants = $state(false);
+	private abortControllers = new SvelteMap<number, ActiveSynthesis>();
 	private lastSavedAt = 0;
 	private cancellationVersion = 0;
 	private engineLoad?: { modelId: string; promise: Promise<void> };
@@ -170,6 +178,15 @@ export class VoicebookPlayer {
 		return Boolean(this.book?.segments.length) && this.cachedProgress >= 0.9999;
 	}
 
+	get hasDocumentAudioState(): boolean {
+		return (
+			this.hasCachedAudioVariants ||
+			this.audioCache.size > 0 ||
+			this.listenedProgress > 0 ||
+			this.generationBySegment.size > 0
+		);
+	}
+
 	get runtimeLabel(): string {
 		if (!this.engineBackend) return 'Engine warming';
 		return `${this.engineBackend === 'webgpu' ? 'WebGPU' : 'WASM'} · ${this.engineDtype}`;
@@ -192,6 +209,7 @@ export class VoicebookPlayer {
 		this.persistenceBySegment.clear();
 		this.cachedSegments.clear();
 		this.generationBySegment.clear();
+		this.hasCachedAudioVariants = false;
 		this.cacheCoverageSignature = '';
 		this.isBuffering = false;
 		this.isGeneratingAll = false;
@@ -214,9 +232,12 @@ export class VoicebookPlayer {
 		if (this.currentSegment) this.onSegmentChange?.(this.currentSegment.id);
 	}
 
-	private reprioritize(): void {
-		for (const controller of this.abortControllers.values()) controller.abort();
-		this.abortControllers.clear();
+	private reprioritize(preserveDocumentPreparation = false): void {
+		for (const [index, active] of this.abortControllers) {
+			if (preserveDocumentPreparation && active.purpose === 'document') continue;
+			active.controller.abort();
+			this.abortControllers.delete(index);
+		}
 		this.queue.clear();
 	}
 
@@ -252,6 +273,7 @@ export class VoicebookPlayer {
 		const documentId = this.book.id;
 		const variants = await listAudioVariants(documentId);
 		if (!this.book || this.book.id !== documentId || signature !== this.variantSignature()) return;
+		this.hasCachedAudioVariants = variants.length > 0;
 		this.cachedSegments.clear();
 		const indexes = new SvelteMap(this.book.segments.map((segment, index) => [segment.id, index]));
 		for (const variant of variants) {
@@ -426,7 +448,8 @@ export class VoicebookPlayer {
 	private async synthesizeSegment(
 		index: number,
 		key: string,
-		keepGenerationVisible = false
+		keepGenerationVisible = false,
+		purpose: ActiveSynthesis['purpose'] = 'playback'
 	): Promise<GeneratedSegment> {
 		if (!this.book) throw new Error('No document is open.');
 		const segment = this.book.segments[index];
@@ -434,8 +457,9 @@ export class VoicebookPlayer {
 		const documentId = this.book.id;
 		const model = appState.selectedModel;
 		const controller = new AbortController();
+		const version = this.cancellationVersion;
 		let completed = false;
-		this.abortControllers.set(index, controller);
+		this.abortControllers.set(index, { controller, purpose });
 		this.generationBySegment.set(index, 0.02);
 		try {
 			this.bufferingStage = `Generating “${segment.normalizedText.slice(0, 48)}${segment.normalizedText.length > 48 ? '…' : ''}”`;
@@ -474,10 +498,12 @@ export class VoicebookPlayer {
 					timing: generated.timing,
 					createdAt: Date.now()
 				},
-				signal: controller.signal
+				signal: controller.signal,
+				version
 			};
 		} finally {
-			if (this.abortControllers.get(index) === controller) this.abortControllers.delete(index);
+			if (this.abortControllers.get(index)?.controller === controller)
+				this.abortControllers.delete(index);
 			if (!keepGenerationVisible || !completed) this.generationBySegment.delete(index);
 		}
 	}
@@ -486,11 +512,12 @@ export class VoicebookPlayer {
 		meta: Omit<AudioVariantMeta, 'mimeType'>,
 		audio: Float32Array,
 		sampleRate: number,
-		signal: AbortSignal
+		signal: AbortSignal,
+		version: number
 	): Promise<boolean> {
 		try {
 			const encoded = await encodeAudio(audio, sampleRate);
-			if (signal.aborted) return false;
+			if (signal.aborted || version !== this.cancellationVersion) return false;
 			await putAudio({ ...meta, mimeType: encoded.mimeType }, encoded.blob);
 			return true;
 		} catch {
@@ -505,7 +532,8 @@ export class VoicebookPlayer {
 			generated.meta,
 			generated.audio,
 			generated.sampleRate,
-			generated.signal
+			generated.signal,
+			generated.version
 		)
 			.then((saved) => {
 				if (
@@ -514,6 +542,7 @@ export class VoicebookPlayer {
 					this.matchesCurrentVariant({ ...generated.meta, mimeType: '' })
 				)
 					this.cachedSegments.add(index);
+				if (saved) this.hasCachedAudioVariants = true;
 				this.generationProgress = this.cachedProgress * 100;
 				return saved;
 			})
@@ -541,18 +570,22 @@ export class VoicebookPlayer {
 			if (this.cachedSegments.has(index)) return;
 			throw new Error('Voicebook generated a passage but could not save it on this device.');
 		}
-		await this.ensureEngine();
-		const segment = this.book.segments[index];
-		if (!segment) return;
-		const key = await this.cacheKey(segment);
-		if (await getAudio(key)) {
-			this.cachedSegments.add(index);
-			this.generationProgress = this.cachedProgress * 100;
-			return;
-		}
-		const generated = await this.synthesizeSegment(index, key, true);
-		this.generationBySegment.set(index, 1);
+		// Claim the passage before model loading and storage lookup. This keeps the
+		// timeline informative even when preparation first has to warm the engine.
+		this.generationBySegment.set(index, 0.02);
 		try {
+			await this.ensureEngine();
+			if (this.cachedSegments.has(index)) return;
+			const segment = this.book.segments[index];
+			if (!segment) return;
+			const key = await this.cacheKey(segment);
+			if (await getAudio(key)) {
+				this.cachedSegments.add(index);
+				this.generationProgress = this.cachedProgress * 100;
+				return;
+			}
+			const generated = await this.synthesizeSegment(index, key, true, 'document');
+			this.generationBySegment.set(index, 1);
 			if (!(await this.trackPersistence(index, generated)))
 				throw new Error('Voicebook generated a passage but could not save it on this device.');
 		} finally {
@@ -786,7 +819,7 @@ export class VoicebookPlayer {
 		if (!this.book) return;
 		const wasPlaying = this.isPlaying;
 		this.pause();
-		this.reprioritize();
+		this.reprioritize(this.isGeneratingAll);
 		const durations = this.timelineDurations();
 		const absolute =
 			absoluteTimelinePosition(durations, this.currentSegmentIndex, this.position) + seconds;
@@ -835,7 +868,7 @@ export class VoicebookPlayer {
 		if (!this.book) return;
 		const wasPlaying = this.isPlaying;
 		this.pause();
-		this.reprioritize();
+		this.reprioritize(this.isGeneratingAll);
 		this.currentSegmentIndex = Math.max(0, Math.min(index, this.book.segments.length - 1));
 		this.position = offset;
 		this.currentWordIndex = 0;
@@ -941,27 +974,25 @@ export class VoicebookPlayer {
 		this.errorMessage = '';
 		const version = this.cancellationVersion;
 		try {
-			await this.ensureEngine();
-			await this.refreshCacheCoverage(true);
 			this.generationProgress = this.cachedProgress * 100;
-			const plan = generationPlan(
-				this.book.segments.length,
-				this.currentSegmentIndex,
-				3,
-				true
-			).filter((index) => !this.cachedSegments.has(index));
-			let cursor = 0;
-			const concurrency = ttsClient.backend === 'webgpu' ? 2 : 1;
-			await Promise.all(
-				Array.from({ length: Math.min(concurrency, plan.length) }, async () => {
-					while (cursor < plan.length) {
-						const index = plan[cursor++];
-						await this.queuedCache(index);
-						if (version !== this.cancellationVersion) return;
-						this.generationProgress = this.cachedProgress * 100;
-					}
-				})
-			);
+			const active = new SvelteSet<number>();
+			const nextIndex = (): number | undefined =>
+				generationPlan(this.book?.segments.length ?? 0, this.currentSegmentIndex, 3, true).find(
+					(index) =>
+						!this.cachedSegments.has(index) && !active.has(index) && !this.cacheQueue.has(index)
+				);
+			while (version === this.cancellationVersion) {
+				const index = nextIndex();
+				if (index === undefined) break;
+				active.add(index);
+				try {
+					await this.queuedCache(index);
+				} finally {
+					active.delete(index);
+				}
+				if (version !== this.cancellationVersion) break;
+				this.generationProgress = this.cachedProgress * 100;
+			}
 			await appState.refreshStorage();
 		} catch (error) {
 			if (
@@ -976,6 +1007,95 @@ export class VoicebookPlayer {
 				this.generationProgress = this.cachedProgress * 100;
 			}
 		}
+	}
+
+	async clearDocumentAudio(): Promise<boolean> {
+		if (!this.book) return false;
+		const document = this.book;
+		const pending = [
+			...this.queue.values(),
+			...this.cacheQueue.values(),
+			...this.persistenceBySegment.values()
+		];
+		const hadPendingSynthesis =
+			this.isBuffering ||
+			this.isGeneratingAll ||
+			this.abortControllers.size > 0 ||
+			this.queue.size > 0 ||
+			this.cacheQueue.size > 0;
+		this.stopPlayback(false);
+		this.cancellationVersion += 1;
+		this.reprioritize();
+		// Clearing already-saved audio should not unload an idle model. Keeping the
+		// engine warm makes preparing again immediate; active work is still canceled.
+		if (hadPendingSynthesis) ttsClient.cancelAll();
+		this.isBuffering = false;
+		this.isGeneratingAll = false;
+		this.generationBySegment.clear();
+		this.cacheQueue.clear();
+		this.bufferingStage = 'Preparing this passage…';
+		this.errorMessage = '';
+
+		try {
+			await Promise.allSettled(pending);
+			await appState.clearAudio(document.id);
+			this.audioCache.clear();
+			this.preparedBySegment.clear();
+			this.persistenceBySegment.clear();
+			this.cachedSegments.clear();
+			this.hasCachedAudioVariants = false;
+			this.cacheCoverageSignature = '';
+			this.generationProgress = 0;
+			document.listened = {};
+			await appState.saveDocument(document);
+			return true;
+		} catch (error) {
+			this.errorMessage =
+				error instanceof Error ? error.message : 'Cached audio could not be cleared.';
+			await this.refreshCacheCoverage(true);
+			return false;
+		}
+	}
+
+	async exportDocumentMp3(
+		onProgress?: (progress: number) => void
+	): Promise<{ blob: Blob; filename: string }> {
+		if (!this.book) throw new Error('No document is open.');
+		if (!this.isDocumentPrepared)
+			throw new Error('Prepare the whole document before downloading its MP3.');
+
+		const document = this.book;
+		const variants = await listAudioVariants(document.id);
+		const currentVariants = new SvelteMap(
+			variants
+				.filter((variant) => this.matchesCurrentVariant(variant))
+				.map((variant) => [variant.segmentId, variant])
+		);
+		const parts = document.segments.map((segment) => {
+			const variant = currentVariants.get(segment.id);
+			if (!variant)
+				throw new Error(
+					'Some prepared passages are missing. Prepare the document again to repair it.'
+				);
+			return {
+				load: async () => {
+					const stored = await getAudio(variant.key);
+					if (!stored)
+						throw new Error(
+							'Some prepared passages are missing. Prepare the document again to repair it.'
+						);
+					return stored.blob;
+				}
+			};
+		});
+		const context = await this.audioGraph();
+		const blob = await encodeDocumentMp3({
+			title: document.title,
+			parts,
+			context,
+			onProgress
+		});
+		return { blob, filename: mp3Filename(document.title) };
 	}
 
 	private async persistPosition(force: boolean): Promise<void> {

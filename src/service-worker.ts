@@ -1,11 +1,10 @@
 /// <reference lib="webworker" />
 
-import { build, files, version } from '$service-worker';
+import { base, build, files, prerendered, version } from '$service-worker';
 
 const worker = self as unknown as ServiceWorkerGlobalScope;
 const CACHE = `voicebook-shell-${version}`;
-const PAGES = ['./', './read/', './settings/'];
-const ASSETS = [...build, ...files, ...PAGES];
+const ASSETS = [...build, ...files, ...prerendered];
 const PRECACHE = ASSETS.filter(
 	(asset) =>
 		!asset.endsWith('.wasm') &&
@@ -15,7 +14,12 @@ const PRECACHE = ASSETS.filter(
 );
 
 worker.addEventListener('install', (event) => {
-	event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(PRECACHE)));
+	event.waitUntil(
+		caches
+			.open(CACHE)
+			.then((cache) => cache.addAll(PRECACHE))
+			.then(() => worker.skipWaiting())
+	);
 });
 
 worker.addEventListener('activate', (event) => {
@@ -38,29 +42,34 @@ worker.addEventListener('fetch', (event) => {
 	const url = new URL(event.request.url);
 	if (url.origin !== worker.location.origin) return;
 
+	if (event.request.mode === 'navigate') {
+		event.respondWith(
+			(async () => {
+				try {
+					return await fetch(new Request(event.request, { cache: 'no-store' }));
+				} catch {
+					const relativePath = url.pathname.slice(base.length).replace(/^\//, '');
+					const route = relativePath.startsWith('read')
+						? `${base}/read/`
+						: relativePath.startsWith('settings')
+							? `${base}/settings/`
+							: `${base}/`;
+					return (await caches.match(route)) ?? Response.error();
+				}
+			})()
+		);
+		return;
+	}
+
 	event.respondWith(
-		caches.match(event.request).then(async (cached) => {
+		(async () => {
+			const cached = await caches.match(event.request);
 			if (cached) return cached;
 			try {
-				const response = await fetch(event.request);
-				if (response.ok && ASSETS.some((asset) => url.pathname.endsWith(asset))) {
-					const cache = await caches.open(CACHE);
-					await cache.put(event.request, response.clone());
-				}
-				return response;
+				return await fetch(event.request);
 			} catch {
-				if (event.request.mode === 'navigate') {
-					const scope = worker.registration.scope;
-					const relativePath = url.pathname.slice(new URL(scope).pathname.length);
-					const page = relativePath.startsWith('read')
-						? './read/'
-						: relativePath.startsWith('settings')
-							? './settings/'
-							: './';
-					return (await caches.match(new URL(page, scope))) ?? Response.error();
-				}
 				return Response.error();
 			}
-		})
+		})()
 	);
 });

@@ -384,6 +384,11 @@ h3 {
 	pointer-events: auto;
 }
 
+.mobile-nav-toggle.icon-button,
+.mobile-nav-scrim {
+	display: none;
+}
+
 .global-commandbar {
 	display: flex;
 	align-items: center;
@@ -1158,12 +1163,91 @@ textarea {
 		display: block;
 	}
 
+	.mobile-nav-toggle.icon-button {
+		position: absolute;
+		top: 6px;
+		left: var(--sidebar-collapsed-width);
+		z-index: 2;
+		display: grid;
+	}
+
+	.mobile-nav-scrim {
+		position: fixed;
+		inset: var(--app-header-height) 0 0;
+		z-index: 70;
+		display: block;
+		width: 100%;
+		padding: 0;
+		border: 0;
+		background: var(--modal-scrim);
+		-webkit-backdrop-filter: blur(3px);
+		backdrop-filter: blur(3px);
+	}
+
 	.app-sidebar {
-		display: none;
+		z-index: 75;
+		display: flex;
+		width: min(82vw, 276px);
+		align-items: stretch;
+		padding: 8px 10px max(12px, env(safe-area-inset-bottom));
+		transform: translateX(-102%);
+		transition: transform 180ms var(--ease);
+	}
+
+	.app-sidebar.mobile-open,
+	.app-shell.sidebar-collapsed .app-sidebar.mobile-open {
+		width: min(82vw, 276px);
+		align-items: stretch;
+		transform: translateX(0);
+	}
+
+	.app-sidebar.mobile-open .sidebar-head {
+		justify-content: flex-start;
+	}
+
+	.app-sidebar.mobile-open .library-nav-group,
+	.app-sidebar.mobile-open .sidebar-library-link,
+	.app-sidebar.mobile-open .utility-nav .nav-link {
+		width: 100%;
+	}
+
+	.app-sidebar.mobile-open .sidebar-library-link {
+		justify-content: flex-start;
+		padding: 0 8px;
+	}
+
+	.app-sidebar.mobile-open .sidebar-library-link span,
+	.app-sidebar.mobile-open .utility-nav .nav-link span,
+	.app-sidebar.mobile-open .sidebar-documents {
+		display: flex;
+	}
+
+	.app-sidebar.mobile-open .sidebar-library-link span,
+	.app-sidebar.mobile-open .utility-nav .nav-link span {
+		display: inline;
+	}
+
+	.app-sidebar.mobile-open .sidebar-documents {
+		min-height: 0;
+	}
+
+	.app-sidebar.mobile-open .utility-nav .nav-link {
+		justify-content: flex-start;
+		padding: 0 8px;
 	}
 
 	.shell-content {
 		grid-column: auto;
+	}
+
+	.reader-commandbar .mobile-reader-hidden,
+	.reader-commandbar .document-zoom,
+	.reader-commandbar .commandbar-divider {
+		display: none;
+	}
+
+	.reader-commandbar {
+		padding-right: max(6px, env(safe-area-inset-right));
 	}
 }
 

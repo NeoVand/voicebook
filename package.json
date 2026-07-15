@@ -64,6 +64,7 @@
 		"@fontsource-variable/newsreader": "5.2.10",
 		"@huggingface/hub": "^2.13.3",
 		"@lucide/svelte": "1.24.0",
+		"@mediabunny/mp3-encoder": "1.50.8",
 		"@soundtouchjs/audio-worklet": "2.1.0",
 		"highlight.js": "^11.11.1",
 		"idb": "8.0.3",
