@@ -8,11 +8,16 @@ import {
 } from '$lib/domain/narration';
 import { blockPositions, documentContextFor, prioritizeQueue } from '$lib/domain/narration-queue';
 import type { NarrationEntry, NormalizedDocument } from '$lib/domain/types';
-import { NarrationRewriteError, rewriteConstruct } from '$lib/services/narration-rewriter';
+import {
+	NarrationRewriteError,
+	rewriteConstruct,
+	type NarrationEngine
+} from '$lib/services/narration-rewriter';
 import { ttsClient } from '$lib/services/tts-client';
 import { appState } from './app-state.svelte';
 import { llmState } from './llm.svelte';
 import { player } from './player.svelte';
+import { providersState } from './providers.svelte';
 
 export type NarrationPhase = 'idle' | 'running' | 'paused-gpu' | 'error';
 
@@ -78,6 +83,31 @@ export class NarrationState {
 	}
 
 	/**
+	 * The engine that would generate descriptions right now: the selected
+	 * cloud provider when it has a key, otherwise the on-device model when
+	 * this device can run it and it is installed. Null when neither can.
+	 */
+	get engine(): NarrationEngine | null {
+		const cloud = providersState.cloudDescriptionEngine;
+		if (cloud) return { type: 'cloud', ...cloud };
+		if (providersState.descriptionEngine !== 'local') return null;
+		return llmState.eligible && llmState.installed ? { type: 'local' } : null;
+	}
+
+	get engineAvailable(): boolean {
+		return this.engine !== null;
+	}
+
+	/** Warm the on-device model when it is the engine; cloud engines are
+	 * always "ready" (each call carries the key). */
+	private async ensureEngineReady(): Promise<boolean> {
+		const engine = this.engine;
+		if (!engine) return false;
+		if (engine.type === 'cloud') return true;
+		return llmState.ensureReadyForNarration();
+	}
+
+	/**
 	 * Reconcile a freshly opened document and start the background queue.
 	 * Call after player.setDocument(document) — results are applied through
 	 * player.book so the reader re-renders.
@@ -90,8 +120,8 @@ export class NarrationState {
 		this.error = '';
 		const token = ++this.runToken;
 
-		await llmState.initialize();
-		const active = llmState.eligible && llmState.narrationEnabled && llmState.installed;
+		await Promise.all([llmState.initialize(), providersState.initialize()]);
+		const active = llmState.narrationEnabled && this.engineAvailable;
 
 		const book = player.book;
 		if (!book || book.id !== document.id || token !== this.runToken) return;
@@ -136,7 +166,7 @@ export class NarrationState {
 		this.total = this.queue.length;
 		if (!this.queue.length) return;
 
-		const ready = await llmState.ensureReadyForNarration();
+		const ready = await this.ensureEngineReady();
 		if (token !== this.runToken) return;
 		if (!ready) {
 			this.queue = [];
@@ -183,9 +213,9 @@ export class NarrationState {
 			onProgress(this.done, this.total);
 		}
 		try {
-			// If the model cannot run, settle pending entries as failed so the
+			// If no engine can run, settle pending entries as failed so the
 			// audio pass and MP3 export proceed over final fallbacks.
-			const ready = await llmState.ensureReadyForNarration();
+			const ready = await this.ensureEngineReady();
 			if (!ready) {
 				const book = player.book;
 				if (book && book.id === this.documentId) {
@@ -292,12 +322,12 @@ export class NarrationState {
 		this.total = this.queue.length;
 		this.completed = 0;
 		this.failed = 0;
-		const ready = await llmState.ensureReadyForNarration();
+		const ready = await this.ensureEngineReady();
 		if (token !== this.runToken) return;
 		if (!ready) {
 			this.queue = [];
 			this.regenerating.delete(constructId);
-			this.error = 'The language model is not available right now.';
+			this.error = 'No description engine is available right now.';
 			return;
 		}
 		void this.run(token);
@@ -324,7 +354,8 @@ export class NarrationState {
 	private async run(token: number): Promise<void> {
 		this.phase = 'running';
 		while (token === this.runToken && this.queue.length) {
-			await this.gpuQuiet(token);
+			// Cloud engines never contend with the speech engine for the GPU.
+			if (this.engine?.type === 'local') await this.gpuQuiet(token);
 			if (token !== this.runToken) return;
 			const construct = this.queue.shift()!;
 			try {
@@ -334,7 +365,7 @@ export class NarrationState {
 				this.completed += 1;
 			} catch (error) {
 				if (token !== this.runToken) return;
-				if (this.isOom(error)) {
+				if (this.isOom(error) && this.engine?.type === 'local') {
 					const stopped = await this.handleOom(construct, token);
 					if (stopped || token !== this.runToken) return;
 					continue;
@@ -379,10 +410,12 @@ export class NarrationState {
 
 	private async rewrite(construct: NarrationConstruct, token: number): Promise<string> {
 		const book = player.book;
+		const engine = this.engine ?? undefined;
 		const request = {
 			construct,
 			documentContext: documentContextFor(book?.blocks ?? [], construct),
-			promptOverrides: llmState.promptOverrides
+			promptOverrides: llmState.promptOverrides,
+			engine
 		};
 		try {
 			return await rewriteConstruct(request);
@@ -393,8 +426,10 @@ export class NarrationState {
 				error.reason === 'generation-failed' &&
 				!this.isOom(error)
 			) {
-				// One transient-error retry after the GPU quiets down.
-				await this.gpuQuiet(token);
+				// One transient-error retry: local waits for the GPU to quiet
+				// down, cloud just backs off briefly.
+				if (engine?.type === 'cloud') await delay(1_500);
+				else await this.gpuQuiet(token);
 				if (token !== this.runToken) throw error;
 				return await rewriteConstruct(request);
 			}
@@ -436,13 +471,17 @@ export class NarrationState {
 	}
 
 	private entryFor(construct: NarrationConstruct, text?: string): NarrationEntry {
+		const engine = this.engine;
 		return {
 			constructId: construct.id,
 			kind: construct.kind,
 			status: text ? 'ready' : 'failed',
 			...(text ? { text } : {}),
 			sourceHash: construct.sourceHash,
-			modelId: llmState.activeModelId ?? undefined,
+			modelId:
+				engine?.type === 'cloud'
+					? `${engine.provider}:${engine.model}`
+					: (llmState.activeModelId ?? undefined),
 			promptVersion: NARRATION_PROMPT_VERSION,
 			promptHash: llmState.promptHashes[construct.kind],
 			updatedAt: Date.now()

@@ -196,7 +196,7 @@
 
 	/* ── Construct description panels ─────────────────────────────────────── */
 
-	let llmAvailable = $derived(llmState.eligible && llmState.installed);
+	let llmAvailable = $derived(narrationState.engineAvailable);
 
 	function panelItem(
 		blockId: string,
