@@ -1077,7 +1077,8 @@ async function parsePdf(file: File): Promise<ParsedSource> {
 			const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
 			pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
 		}
-		const pdf = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+		const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+		const pdf = await loadingTask.promise;
 		const pages: string[][] = [];
 
 		for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
@@ -1122,7 +1123,9 @@ async function parsePdf(file: File): Promise<ParsedSource> {
 		});
 
 		const metadata = await pdf.getMetadata().catch(() => null);
-		await pdf.destroy();
+		// pdfjs v6 removed PDFDocumentProxy.destroy — teardown lives on the
+		// loading task.
+		await loadingTask.destroy();
 		const info = metadata?.info as { Title?: string } | undefined;
 		return { title: info?.Title?.trim(), blocks };
 	} catch (error) {
