@@ -19,18 +19,26 @@
 		Play,
 		RefreshCw,
 		ShieldCheck,
+		BrainCircuit,
 		Square,
 		Trash2,
 		Wifi
 	} from '@lucide/svelte';
 	import { getModel } from '$lib/domain/model-catalog';
+	import { LLM_CATALOG, type LlmModelSpec } from '$lib/domain/llm-catalog';
+	import {
+		DEFAULT_NARRATION_PROMPTS,
+		type NarrationPromptKey
+	} from '$lib/domain/narration-prompts';
 	import type { VoiceDescriptor } from '$lib/domain/types';
 	import { runtimeDiagnosticsReport } from '$lib/services/runtime-diagnostics';
 	import { ttsClient } from '$lib/services/tts-client';
 	import { appState } from '$lib/state/app-state.svelte';
+	import { llmState } from '$lib/state/llm.svelte';
+	import { narrationState } from '$lib/state/narrations.svelte';
 	import { requestPersistentStorage } from '$lib/services/repository';
 
-	type SettingsSection = 'models' | 'storage' | 'system';
+	type SettingsSection = 'models' | 'llm' | 'storage' | 'system';
 	type PreviewState = 'idle' | 'loading' | 'playing' | 'error';
 
 	const model = getModel('supertonic-3');
@@ -52,7 +60,8 @@
 	let diagnosticsCopied = $state(false);
 	let activeSection = $derived.by<SettingsSection>(() => {
 		const section = page.url.searchParams.get('section');
-		return section === 'storage' || section === 'system' ? section : 'models';
+		if (section === 'narration') return 'llm'; // pre-rename links
+		return section === 'storage' || section === 'system' || section === 'llm' ? section : 'models';
 	});
 	let progress = $derived(appState.modelProgress['supertonic-3']);
 	let installed = $derived(appState.installedModels.includes('supertonic-3'));
@@ -262,6 +271,141 @@
 		await requestPersistentStorage();
 		await appState.refreshStorage();
 	}
+
+	/* ── Narration model management ────────────────────────────────────── */
+
+	let llmBusy = $state(false);
+	let llmError = $state('');
+	let regenerating = $state(false);
+	let llmActivating = $derived(
+		llmState.phase === 'downloading' || llmState.phase === 'loading' || llmState.phase === 'probing'
+	);
+
+	onMount(() => {
+		void llmState.initialize();
+	});
+
+	async function updateLlmLicense(spec: LlmModelSpec, event: Event): Promise<void> {
+		await llmState.setLicenseAcceptance(spec.id, (event.currentTarget as HTMLInputElement).checked);
+	}
+
+	async function installLlm(spec: LlmModelSpec): Promise<void> {
+		llmBusy = true;
+		llmError = '';
+		try {
+			await llmState.activate(spec.id, { install: true });
+		} catch (error) {
+			llmError =
+				error instanceof Error ? error.message : 'The language model could not be installed.';
+		} finally {
+			llmBusy = false;
+		}
+	}
+
+	function cancelLlmInstall(): void {
+		llmState.cancelActivation();
+		llmBusy = false;
+	}
+
+	async function removeLlm(spec: LlmModelSpec): Promise<void> {
+		if (
+			!confirm(
+				`Remove ${spec.label} from this browser? Rewritten narrations are kept and can be regenerated later.`
+			)
+		)
+			return;
+		llmBusy = true;
+		llmError = '';
+		try {
+			await llmState.remove(spec.id);
+		} catch (error) {
+			llmError =
+				error instanceof Error ? error.message : 'The language model could not be removed.';
+		} finally {
+			llmBusy = false;
+		}
+	}
+
+	async function useLlm(spec: LlmModelSpec): Promise<void> {
+		await llmState.selectModel(spec.id);
+	}
+
+	async function toggleNarrationEnabled(event: Event): Promise<void> {
+		await llmState.setNarrationEnabled((event.currentTarget as HTMLInputElement).checked);
+	}
+
+	async function regenerateNarrations(): Promise<void> {
+		if (
+			!confirm(
+				'Rewrite every equation, table, and diagram narration again? The open document starts immediately; others regenerate the next time they are opened.'
+			)
+		)
+			return;
+		regenerating = true;
+		try {
+			await narrationState.regenerateAll();
+		} finally {
+			regenerating = false;
+		}
+	}
+
+	/* ── Prompt editor ─────────────────────────────────────────────────── */
+
+	const PROMPT_FIELDS: Array<{ key: NarrationPromptKey; label: string; hint: string }> = [
+		{ key: 'system', label: 'Shared rules', hint: 'Prepended to every rewrite request.' },
+		{
+			key: 'math-block',
+			label: 'Equations',
+			hint: 'Asks only for the symbol-meaning sentence; the reading itself is generated exactly, without the model. Placeholders: {{reading}}, {{context}}, {{source}}'
+		},
+		{
+			key: 'math-inline',
+			label: 'Inline symbols',
+			hint: 'Only for expressions the built-in verbalizer cannot read. Placeholders: {{source}}'
+		},
+		{
+			key: 'table-row',
+			label: 'Table rows',
+			hint: 'Placeholders: {{source}}, {{header}}, {{context}}'
+		},
+		{ key: 'mermaid', label: 'Diagrams', hint: 'Placeholders: {{source}}, {{context}}' },
+		{ key: 'image', label: 'Images', hint: 'Placeholders: {{source}}, {{context}}' }
+	];
+
+	let promptDrafts = $state<Record<NarrationPromptKey, string>>({
+		...DEFAULT_NARRATION_PROMPTS
+	});
+	let promptsSynced = $state(false);
+	let promptSavedKey = $state<NarrationPromptKey | null>(null);
+
+	$effect(() => {
+		if (llmState.initialized && !promptsSynced) {
+			promptDrafts = { ...llmState.promptTemplates };
+			promptsSynced = true;
+		}
+	});
+
+	function promptDirty(key: NarrationPromptKey): boolean {
+		return promptDrafts[key].trim() !== llmState.promptTemplates[key].trim();
+	}
+
+	function promptCustom(key: NarrationPromptKey): boolean {
+		return llmState.promptOverrides[key] !== undefined;
+	}
+
+	async function savePrompt(key: NarrationPromptKey): Promise<void> {
+		await llmState.setPromptTemplate(key, promptDrafts[key]);
+		promptDrafts = { ...promptDrafts, [key]: llmState.promptTemplates[key] };
+		promptSavedKey = key;
+		setTimeout(() => {
+			if (promptSavedKey === key) promptSavedKey = null;
+		}, 2_000);
+	}
+
+	async function resetPrompt(key: NarrationPromptKey): Promise<void> {
+		promptDrafts = { ...promptDrafts, [key]: DEFAULT_NARRATION_PROMPTS[key] };
+		await llmState.setPromptTemplate(key, DEFAULT_NARRATION_PROMPTS[key]);
+	}
 </script>
 
 <svelte:head>
@@ -273,14 +417,22 @@
 		<div>
 			<p class="eyebrow">Preferences</p>
 			<h1>
-				{activeSection === 'models' ? 'Voice' : activeSection === 'storage' ? 'Storage' : 'System'}
+				{activeSection === 'models'
+					? 'Voice'
+					: activeSection === 'llm'
+						? 'LLM'
+						: activeSection === 'storage'
+							? 'Storage'
+							: 'System'}
 			</h1>
 			<p>
 				{activeSection === 'models'
 					? 'One fast, local speech engine. No model switching in the reader.'
-					: activeSection === 'storage'
-						? 'See and clean up the data Voicebook keeps on this device.'
-						: 'Browser capabilities, privacy, and reader shortcuts.'}
+					: activeSection === 'llm'
+						? 'A language model, run privately on this device, rewrites equations, tables, and diagrams into words the reader voice can speak.'
+						: activeSection === 'storage'
+							? 'See and clean up the data Voicebook keeps on this device.'
+							: 'Browser capabilities, privacy, and reader shortcuts.'}
 			</p>
 		</div>
 		{#if activeSection === 'storage'}
@@ -457,6 +609,256 @@
 				</div>
 			{/if}
 		</section>
+	{:else if activeSection === 'llm'}
+		{#if !llmState.eligible}
+			<section class="settings-section" aria-labelledby="llm-gate-title">
+				<header class="section-title">
+					<div>
+						<h2 id="llm-gate-title">Not available on this device</h2>
+						<p>
+							{llmState.policy.reason ?? 'The language model needs a desktop browser with WebGPU.'}
+							Equations and tables are read with built-in fallbacks instead.
+						</p>
+					</div>
+					<span class="capability-label"><Cpu size={15} /> WebGPU required</span>
+				</header>
+			</section>
+		{:else}
+			<section class="settings-section" aria-labelledby="llm-models-title">
+				<header class="section-title">
+					<div>
+						<h2 id="llm-models-title">Models</h2>
+						<p>Downloaded once from Hugging Face, then run entirely in this browser.</p>
+					</div>
+					<span class="runtime-state" class:ready={llmState.installed}>
+						<span></span>
+						{llmState.phase === 'probing'
+							? 'Warming up…'
+							: llmState.installed
+								? 'Installed'
+								: 'Not installed'}
+					</span>
+				</header>
+
+				<div class="llm-grid">
+					{#each LLM_CATALOG as spec (spec.id)}
+						{@const specInstalled = llmState.installedModels.includes(spec.id)}
+						{@const specSelected = llmState.selectedModelId === spec.id}
+						{@const specActivating = llmActivating && llmState.activeModelId === spec.id}
+						{@const offer = llmState.canOffer(spec)}
+						<article
+							class="llm-card"
+							class:selected={specSelected}
+							class:unavailable={!offer.ok}
+							aria-label={`${spec.label} language model`}
+						>
+							<header class="llm-card-head">
+								<span class="llm-card-icon"><BrainCircuit size={19} /></span>
+								<div class="llm-card-name">
+									<h3>{spec.label}</h3>
+									<p>{spec.tagline}</p>
+								</div>
+								{#if specSelected && llmState.ready}
+									<span class="llm-card-state active">Active</span>
+								{:else if specSelected}
+									<span class="llm-card-state">Selected</span>
+								{:else if specInstalled}
+									<span class="llm-card-state">Installed</span>
+								{/if}
+							</header>
+
+							<dl class="llm-card-facts">
+								<div>
+									<dt>Download</dt>
+									<dd>{spec.sizeMb} MB</dd>
+								</div>
+								<div>
+									<dt>Precision</dt>
+									<dd>{spec.dtype}</dd>
+								</div>
+								<div>
+									<dt>License</dt>
+									<dd>
+										<a href={spec.licenseUrl} target="_blank" rel="external noreferrer">
+											{spec.license}
+											<ArrowUpRight size={11} />
+										</a>
+									</dd>
+								</div>
+							</dl>
+
+							{#if specActivating}
+								<div class="install-progress" aria-live="polite">
+									<div>
+										<strong>
+											{llmState.phase === 'downloading'
+												? 'Downloading… keep this tab open.'
+												: llmState.phase === 'probing'
+													? 'Warming up the model…'
+													: 'Loading model files…'}
+										</strong>
+										<span>{llmState.download ? `${llmState.download.percent}%` : ''}</span>
+									</div>
+									<progress max="100" value={llmState.download?.percent ?? 0}></progress>
+									<small>{llmState.download?.file ?? 'Preparing model files'}</small>
+								</div>
+							{:else if !specInstalled}
+								<label class="check-control llm-card-license">
+									<input
+										type="checkbox"
+										checked={llmState.acceptedLicenses.includes(spec.id)}
+										onchange={(event) => updateLlmLicense(spec, event)}
+									/>
+									<span>I have reviewed the license terms</span>
+								</label>
+							{/if}
+
+							<footer class="llm-card-actions">
+								{#if !offer.ok}
+									<p class="llm-card-note">{offer.reason ?? 'Unavailable on this device'}</p>
+								{:else if specActivating}
+									<button class="button" type="button" onclick={cancelLlmInstall}>
+										<Square size={13} fill="currentColor" /> Stop
+									</button>
+								{:else if specInstalled}
+									{#if !specSelected}
+										<button class="button primary" type="button" onclick={() => useLlm(spec)}>
+											<Check size={14} /> Use this model
+										</button>
+									{/if}
+									<button
+										class="button danger"
+										type="button"
+										disabled={llmBusy}
+										onclick={() => removeLlm(spec)}
+									>
+										<Trash2 size={14} /> Remove
+									</button>
+								{:else}
+									<button
+										class="button primary"
+										type="button"
+										disabled={!llmState.acceptedLicenses.includes(spec.id) || llmBusy}
+										onclick={() => installLlm(spec)}
+									>
+										<Download size={15} /> Download · {spec.sizeMb} MB
+									</button>
+								{/if}
+							</footer>
+						</article>
+					{/each}
+				</div>
+
+				{#if llmError || llmState.error}
+					<div class="inline-error" role="alert">
+						<AlertTriangle size={15} />
+						<span>{llmError || llmState.error}</span>
+					</div>
+				{/if}
+			</section>
+
+			<section class="settings-section" aria-labelledby="llm-behavior-title">
+				<header class="section-title">
+					<div>
+						<h2 id="llm-behavior-title">Behavior</h2>
+						<p>How Voicebook uses the language model while you read.</p>
+					</div>
+				</header>
+
+				<div class="setting-row">
+					<div>
+						<strong>Describe visuals automatically</strong>
+						<p>
+							When a document contains equations, tables, or diagrams, rewrite them in the
+							background as soon as it opens.
+						</p>
+					</div>
+					<label class="check-control">
+						<input
+							type="checkbox"
+							checked={llmState.narrationEnabled}
+							disabled={!llmState.installed}
+							onchange={toggleNarrationEnabled}
+						/>
+						<span>{llmState.narrationEnabled ? 'On' : 'Off'}</span>
+					</label>
+				</div>
+
+				{#if narrationState.error}
+					<div class="inline-error" role="alert">
+						<AlertTriangle size={15} />
+						<span>{narrationState.error}</span>
+					</div>
+				{/if}
+
+				<footer class="section-actions">
+					<p>Descriptions are stored with each document and only change when the source changes.</p>
+					<div>
+						<button
+							class="button"
+							type="button"
+							disabled={regenerating || !llmState.installed}
+							onclick={regenerateNarrations}
+						>
+							{#if regenerating}<LoaderCircle class="spin" size={15} />{:else}<RefreshCw
+									size={15}
+								/>{/if}
+							Regenerate all descriptions
+						</button>
+					</div>
+				</footer>
+			</section>
+
+			<section class="settings-section" aria-labelledby="llm-prompts-title">
+				<header class="section-title">
+					<div>
+						<h2 id="llm-prompts-title">Prompts</h2>
+						<p>
+							Exactly what the model is asked, per element type. Edited prompts rewrite documents
+							the next time they open.
+						</p>
+					</div>
+				</header>
+
+				{#each PROMPT_FIELDS as field (field.key)}
+					<div class="prompt-editor">
+						<div class="prompt-editor-head">
+							<div>
+								<strong>{field.label}</strong>
+								{#if promptCustom(field.key)}<span class="prompt-custom-badge">Custom</span>{/if}
+								<p>{field.hint}</p>
+							</div>
+							<div class="prompt-editor-actions">
+								{#if promptSavedKey === field.key}
+									<span class="installed-mark"><Check size={13} /> Saved</span>
+								{/if}
+								<button
+									class="button"
+									type="button"
+									disabled={!promptCustom(field.key) && !promptDirty(field.key)}
+									onclick={() => resetPrompt(field.key)}
+								>
+									Reset
+								</button>
+								<button
+									class="button primary"
+									type="button"
+									disabled={!promptDirty(field.key)}
+									onclick={() => savePrompt(field.key)}
+								>
+									Save
+								</button>
+							</div>
+						</div>
+						<textarea
+							rows={field.key === 'system' ? 6 : 4}
+							spellcheck="false"
+							aria-label={`${field.label} prompt template`}
+							bind:value={promptDrafts[field.key]}></textarea>
+					</div>
+				{/each}
+			</section>
+		{/if}
 	{:else if activeSection === 'storage'}
 		<section class="settings-section" aria-labelledby="storage-title">
 			<header class="section-title">
@@ -499,6 +901,19 @@
 				</div>
 				<Mic2 size={16} />
 			</div>
+			{#if llmState.installedModels.length}
+				<div class="setting-row">
+					<div>
+						<strong>Language model weights</strong>
+						<p>
+							{LLM_CATALOG.filter((spec) => llmState.installedModels.includes(spec.id))
+								.map((spec) => `${spec.label} · ~${spec.sizeMb} MB`)
+								.join(', ')} — cached once from Hugging Face. Remove under LLM.
+						</p>
+					</div>
+					<BrainCircuit size={16} />
+				</div>
+			{/if}
 
 			<footer class="section-actions">
 				<p>Clearing audio does not remove documents, bookmarks, or reading progress.</p>
@@ -723,6 +1138,205 @@
 		align-items: center;
 		gap: 28px;
 		border-bottom: 1px solid var(--line);
+	}
+
+	.llm-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+		gap: 14px;
+		margin-top: 16px;
+	}
+
+	.llm-card {
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+		padding: 18px;
+		border: 1px solid var(--line);
+		border-radius: 12px;
+		background: color-mix(in srgb, var(--surface, transparent) 60%, transparent);
+		transition:
+			border-color 150ms var(--ease),
+			box-shadow 150ms var(--ease);
+	}
+
+	.llm-card.selected {
+		border-color: color-mix(in srgb, var(--primary) 55%, var(--line));
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent);
+	}
+
+	.llm-card.unavailable {
+		opacity: 0.6;
+	}
+
+	.llm-card-head {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+	}
+
+	.llm-card-icon {
+		display: grid;
+		width: 38px;
+		height: 38px;
+		flex: 0 0 38px;
+		place-items: center;
+		border-radius: 9px;
+		background: var(--primary-soft);
+		color: var(--primary);
+	}
+
+	.llm-card-name {
+		min-width: 0;
+		flex: 1;
+	}
+
+	.llm-card-name h3 {
+		margin: 0;
+		font-size: 15px;
+		font-weight: 650;
+		letter-spacing: -0.02em;
+	}
+
+	.llm-card-name p {
+		margin: 2px 0 0;
+		color: var(--muted);
+		font-size: 10.5px;
+	}
+
+	.llm-card-state {
+		flex: none;
+		padding: 3px 9px;
+		border: 1px solid var(--line-strong);
+		border-radius: 999px;
+		color: var(--muted);
+		font-size: 9.5px;
+		font-weight: 650;
+		letter-spacing: 0.02em;
+	}
+
+	.llm-card-state.active {
+		border-color: transparent;
+		background: var(--primary-soft);
+		color: var(--primary);
+	}
+
+	.llm-card-facts {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		padding: 10px 12px;
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		margin: 0;
+		gap: 8px;
+	}
+
+	.llm-card-facts dt {
+		color: var(--faint);
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+
+	.llm-card-facts dd {
+		margin: 3px 0 0;
+		font-size: 11px;
+		font-weight: 620;
+		white-space: nowrap;
+	}
+
+	.llm-card-facts dd a {
+		display: inline-flex;
+		align-items: center;
+		gap: 2px;
+		color: var(--primary);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	.llm-card-license {
+		font-size: 10.5px;
+	}
+
+	.llm-card-actions {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		margin-top: auto;
+		gap: 8px;
+	}
+
+	.llm-card-note {
+		margin: 0 auto 0 0;
+		color: var(--faint);
+		font-size: 10px;
+	}
+
+	.prompt-editor {
+		padding: 14px 0;
+		border-bottom: 1px solid var(--line);
+	}
+
+	.prompt-editor:last-child {
+		border-bottom: 0;
+	}
+
+	.prompt-editor-head {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 16px;
+		margin-bottom: 8px;
+	}
+
+	.prompt-editor-head strong {
+		font-size: 12px;
+		font-weight: 650;
+	}
+
+	.prompt-editor-head p {
+		margin: 3px 0 0;
+		color: var(--faint);
+		font-size: 10px;
+	}
+
+	.prompt-custom-badge {
+		display: inline-block;
+		padding: 2px 7px;
+		border-radius: 999px;
+		margin-left: 8px;
+		background: var(--primary-soft);
+		color: var(--primary);
+		font-size: 9px;
+		font-weight: 650;
+		vertical-align: 1px;
+	}
+
+	.prompt-editor-actions {
+		display: flex;
+		flex: none;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.prompt-editor textarea {
+		width: 100%;
+		padding: 10px 12px;
+		border: 1px solid var(--control-border);
+		border-radius: 8px;
+		background: var(--control);
+		color: var(--text);
+		font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+		font-size: 11px;
+		line-height: 1.55;
+		resize: vertical;
+	}
+
+	.prompt-editor textarea:focus-visible {
+		border-color: var(--primary);
+		outline: 2px solid var(--focus);
+		outline-offset: 1px;
 	}
 
 	.engine-name {

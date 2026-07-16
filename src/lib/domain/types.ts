@@ -12,6 +12,7 @@ export type BlockKind =
 	| 'definition-description'
 	| 'code'
 	| 'math'
+	| 'mermaid'
 	| 'footnote'
 	| 'html'
 	| 'frontmatter'
@@ -132,6 +133,40 @@ export interface DocumentBlock {
 	anchor: SourceAnchor;
 }
 
+export type NarrationConstructKind =
+	'math-block' | 'math-inline' | 'mermaid' | 'table-header' | 'table-row' | 'image';
+
+export type NarrationStatus = 'pending' | 'ready' | 'failed';
+
+/** One construct's LLM-generated narration, persisted with the document. */
+export interface NarrationEntry {
+	constructId: string;
+	kind: NarrationConstructKind;
+	status: NarrationStatus;
+	/** Speakable prose; present when status === 'ready'. */
+	text?: string;
+	/** Hash of the construct source — a mismatch invalidates the entry. */
+	sourceHash: string;
+	modelId?: string;
+	promptVersion?: number;
+	/** Hash of the prompt (system + template) that produced this narration —
+	 * editing a prompt in settings re-queues affected constructs lazily. */
+	promptHash?: string;
+	updatedAt: number;
+}
+
+/** Set on segments whose spoken text is narration rather than (or substituted
+ * into) the displayed text. */
+export interface SegmentNarration {
+	constructIds: string[];
+	/** 'construct' = the whole segment narrates one construct (equation,
+	 * diagram, table row); 'inline' = a text sentence with substituted runs. */
+	kind: 'construct' | 'inline';
+	constructKind?: NarrationConstructKind;
+	/** True while a fallback is being spoken and an LLM rewrite is expected. */
+	pending: boolean;
+}
+
 export interface SpeechSegment {
 	id: string;
 	blockId: string;
@@ -142,6 +177,7 @@ export interface SpeechSegment {
 	words: WordSpan[];
 	estimatedDuration: number;
 	anchor: SourceAnchor;
+	narration?: SegmentNarration;
 }
 
 export interface OutlineEntry {
@@ -191,6 +227,7 @@ export interface NormalizedDocument {
 	bookmarks: Bookmark[];
 	playback?: PlaybackPosition;
 	listened?: Record<string, ListenedRange[]>;
+	narrations?: Record<string, NarrationEntry>;
 	warnings: string[];
 	includeCode: boolean;
 	sourcePath?: string;

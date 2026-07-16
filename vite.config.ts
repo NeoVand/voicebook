@@ -8,6 +8,12 @@ import { sveltekit } from '@sveltejs/kit/vite';
 const basePath = (process.env.BASE_PATH || '') as '' | `/${string}`;
 
 export default defineConfig({
+	// transformers.js loads its ONNX/WASM backends dynamically at runtime;
+	// pre-bundling breaks those dynamic imports inside the LLM worker.
+	optimizeDeps: { exclude: ['@huggingface/transformers'] },
+	// Module workers (tts.worker.ts, llm/worker.ts) must be emitted as ES
+	// modules — the classic-worker default cannot use import statements.
+	worker: { format: 'es' },
 	plugins: [
 		tailwindcss(),
 		sveltekit({

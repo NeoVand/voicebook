@@ -8,6 +8,7 @@
 		Check,
 		ChevronLeft,
 		ChevronRight,
+		BrainCircuit,
 		LoaderCircle,
 		LocateFixed,
 		Pause,
@@ -40,6 +41,7 @@
 	} from '$lib/domain/types';
 	import { GENERATION_STEP_OPTIONS } from '$lib/domain/synthesis';
 	import { appState } from '$lib/state/app-state.svelte';
+	import { narrationState } from '$lib/state/narrations.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 
@@ -104,6 +106,11 @@
 	let activeSegmentId = $derived(
 		player.isPlaying || player.position > 0 ? player.currentSegment?.id : undefined
 	);
+	let activeConstructIds = $derived(
+		(activeSegmentId
+			? book?.segments.find((segment) => segment.id === activeSegmentId)?.narration?.constructIds
+			: undefined) ?? []
+	);
 	let installed = $derived(appState.installedModels.includes('supertonic-3'));
 	let voiceOptions = $derived(
 		appState.selectedModel.voices.map((voice) => ({ value: voice.id, label: voice.name }))
@@ -130,6 +137,7 @@
 
 	onMount(() => {
 		player.onSegmentChange = (segmentId) => {
+			narrationState.notifyPlayhead(segmentId);
 			if (!player.autoFollow || outlineNavigationBlockId) return;
 			requestAnimationFrame(() => {
 				const element = segmentElements.get(segmentId);
@@ -145,6 +153,7 @@
 					book.outline.find((item) => item.blockId === player.currentSegment?.blockId)?.blockId ??
 					book.outline[0]?.blockId;
 				void player.warmEngine();
+				void narrationState.open(book);
 				requestAnimationFrame(scheduleVisibleSectionUpdate);
 			}
 		});
@@ -152,6 +161,7 @@
 			cancelAnimationFrame(readerScrollFrame);
 			if (scrollbarTimer) clearTimeout(scrollbarTimer);
 			player.onSegmentChange = undefined;
+			narrationState.stop();
 		};
 	});
 
@@ -160,6 +170,25 @@
 			segmentElements.set(id, node);
 			return () => segmentElements.delete(id);
 		};
+	}
+
+	// A construct (equation, diagram, table row) registers one element under
+	// every narration-chunk id so autoscroll finds it from any chunk.
+	function trackConstruct(ids: string[]) {
+		return (node: HTMLElement) => {
+			for (const id of ids) segmentElements.set(id, node);
+			return () => {
+				for (const id of ids) {
+					if (segmentElements.get(id) === node) segmentElements.delete(id);
+				}
+			};
+		};
+	}
+
+	function constructSegments(blockId: string, constructId: string): SpeechSegment[] {
+		return (segmentsByBlock.get(blockId) ?? []).filter(
+			(segment) => segment.narration?.constructIds[0] === constructId
+		);
 	}
 
 	const trackReadingCanvas: Attachment<HTMLElement> = (element) => {
@@ -341,7 +370,7 @@
 	}
 
 	function segmentForElement(element: Element | null): SpeechSegment | undefined {
-		const segmentId = element?.closest<HTMLElement>('.speech-segment')?.dataset.segmentId;
+		const segmentId = element?.closest<HTMLElement>('[data-segment-id]')?.dataset.segmentId;
 		return segmentId ? book?.segments.find((candidate) => candidate.id === segmentId) : undefined;
 	}
 
@@ -375,7 +404,7 @@
 	function handlePassageKeydown(event: KeyboardEvent): void {
 		if (
 			!(event.target instanceof HTMLElement) ||
-			!event.target.matches('.speech-segment') ||
+			!event.target.matches('[data-segment-id]') ||
 			(event.key !== 'Enter' && event.key !== ' ')
 		)
 			return;
@@ -526,7 +555,7 @@
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
 		const target = event.target as HTMLElement | null;
-		if (target?.matches('input,textarea,select,button,.speech-segment')) return;
+		if (target?.matches('input,textarea,select,button,[data-segment-id]')) return;
 		if (event.code === 'Space') {
 			event.preventDefault();
 			if (player.isBuffering) player.cancelGeneration();
@@ -636,12 +665,38 @@
 			<summary>Document metadata</summary>
 			<pre><code>{block.text}</code></pre>
 		</details>
-	{:else if block.kind === 'code' && block.codeLanguage?.toLowerCase() === 'mermaid'}
-		<MermaidDiagram id={block.id} source={block.text} />
+	{:else if block.kind === 'mermaid' || (block.kind === 'code' && block.codeLanguage?.toLowerCase() === 'mermaid')}
+		{@const segs = segmentsByBlock.get(block.id) ?? []}
+		<div
+			class="construct-segment diagram-construct"
+			class:active={activeConstructIds.includes(block.id)}
+			class:narration-pending={segs[0]?.narration?.pending}
+			role="button"
+			tabindex="0"
+			aria-label={segs.map((segment) => segment.text).join(' ') || 'Diagram'}
+			title="Play narration for this diagram"
+			data-segment-id={segs[0]?.id}
+			{@attach trackConstruct(segs.map((segment) => segment.id))}
+		>
+			<MermaidDiagram id={block.id} source={block.text} />
+		</div>
 	{:else if block.kind === 'code'}
 		<CodeBlock id={block.id} source={block.text} language={block.codeLanguage} />
 	{:else if block.kind === 'math'}
-		<MathFormula id={block.id} formula={block.text} displayMode />
+		{@const segs = segmentsByBlock.get(block.id) ?? []}
+		<div
+			class="construct-segment math-construct"
+			class:active={activeConstructIds.includes(block.id)}
+			class:narration-pending={segs[0]?.narration?.pending}
+			role="button"
+			tabindex="0"
+			aria-label={segs.map((segment) => segment.text).join(' ') || 'Equation'}
+			title="Play narration for this equation"
+			data-segment-id={segs[0]?.id}
+			{@attach trackConstruct(segs.map((segment) => segment.id))}
+		>
+			<MathFormula id={block.id} formula={block.text} displayMode />
+		</div>
 	{:else if block.kind === 'footnote'}
 		<aside
 			class="document-footnote"
@@ -703,10 +758,18 @@
 			{/each}
 		</dd>
 	{:else if block.kind === 'table' && block.table}
+		{@const headerSegs = constructSegments(block.id, `${block.id}:rh`)}
 		<div class="table-region" id={block.id} role="region" aria-label="Document table">
 			<table>
 				<thead>
-					<tr>
+					<tr
+						class="construct-row"
+						class:active={activeConstructIds.includes(`${block.id}:rh`)}
+						tabindex="0"
+						title="Play narration for this table"
+						data-segment-id={headerSegs[0]?.id}
+						{@attach trackConstruct(headerSegs.map((segment) => segment.id))}
+					>
 						{#each block.table.header as cell, index (index)}
 							<th scope="col" style:text-align={block.table.align[index] ?? undefined}>
 								{@render renderCell(cell)}
@@ -716,7 +779,16 @@
 				</thead>
 				<tbody>
 					{#each block.table.rows as row, rowIndex (rowIndex)}
-						<tr>
+						{@const rowSegs = constructSegments(block.id, `${block.id}:r${rowIndex}`)}
+						<tr
+							class="construct-row"
+							class:active={activeConstructIds.includes(`${block.id}:r${rowIndex}`)}
+							class:narration-pending={rowSegs[0]?.narration?.pending}
+							tabindex="0"
+							title="Play narration for this row"
+							data-segment-id={rowSegs[0]?.id}
+							{@attach trackConstruct(rowSegs.map((segment) => segment.id))}
+						>
 							{#each row as cell, index (index)}
 								<td style:text-align={block.table.align[index] ?? undefined}>
 									{@render renderCell(cell)}
@@ -982,6 +1054,26 @@
 						<AudioLines size={17} />
 					{/if}
 				</button>
+				{#if narrationState.working || player.narrationStage}
+					<a
+						class="narration-chip"
+						class:paused={narrationState.phase === 'paused-gpu'}
+						href={resolve('/settings?section=llm')}
+						title="The on-device language model is rewriting equations, tables, and diagrams for speech"
+						aria-live="polite"
+					>
+						<BrainCircuit size={13} strokeWidth={2.1} />
+						<span class="narration-chip-copy">
+							{player.narrationStage || 'Describing visuals'}
+						</span>
+						<span class="narration-chip-count">{narrationState.done}/{narrationState.total}</span>
+						<i class="narration-chip-track" aria-hidden="true">
+							<i
+								style:width={`${narrationState.total ? Math.round((narrationState.done / narrationState.total) * 100) : 0}%`}
+							></i>
+						</i>
+					</a>
+				{/if}
 			</div>
 
 			<div class="transport">
@@ -1055,9 +1147,19 @@
 							{#if player.isGeneratingAll}
 								<span class="generating-key">Preparing</span>
 							{/if}
+							{#if player.hasPendingNarrations}
+								<span class="rewriting-key">Rewriting</span>
+							{/if}
 						</div>
 						<div class="timeline-rail" aria-hidden="true">
 							{#each player.timelineSegments as segment (segment.id)}
+								{#if segment.narrationPending}
+									<i
+										class="timeline-band narration-pending"
+										style:left={`${segment.left * 100}%`}
+										style:width={`${segment.width * 100}%`}
+									></i>
+								{/if}
 								{#if segment.cached}
 									<i
 										class="timeline-band cached"
@@ -1904,6 +2006,94 @@
 		color: var(--reader-ink-strong);
 	}
 
+	/* Narrated constructs (equations, diagrams) highlight as whole blocks in
+	   the same visual language as the sentence highlight. */
+	.construct-segment {
+		position: relative;
+		border-radius: 6px;
+		cursor: pointer;
+		transition:
+			background 150ms var(--ease),
+			box-shadow 150ms var(--ease);
+	}
+
+	.construct-segment:hover {
+		background: color-mix(in srgb, var(--primary) 5%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 5%, transparent);
+	}
+
+	.construct-segment:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 4px;
+	}
+
+	.construct-segment.active {
+		background: color-mix(in srgb, var(--primary) 9%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 9%, transparent);
+	}
+
+	/* Diagrams get the subtler treatment — a large highlighted area reads
+	   louder than an inline sentence. */
+	.construct-segment.diagram-construct.active {
+		background: color-mix(in srgb, var(--primary) 4%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 4%, transparent);
+	}
+
+	/* Small pulsing dot while an LLM rewrite for the construct is pending. */
+	.construct-segment.narration-pending::after,
+	tr.construct-row.narration-pending td:last-child::after {
+		position: absolute;
+		top: 6px;
+		right: 6px;
+		width: 6px;
+		height: 6px;
+		border-radius: 999px;
+		animation: narration-pending-pulse 2.2s ease-in-out infinite;
+		background: var(--primary);
+		content: '';
+		opacity: 0.4;
+	}
+
+	tr.construct-row.narration-pending td:last-child {
+		position: relative;
+	}
+
+	@keyframes narration-pending-pulse {
+		0%,
+		100% {
+			opacity: 0.18;
+		}
+		50% {
+			opacity: 0.55;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.construct-segment.narration-pending::after,
+		tr.construct-row.narration-pending td:last-child::after {
+			animation: none;
+		}
+	}
+
+	tr.construct-row {
+		cursor: pointer;
+		transition: background 150ms var(--ease);
+	}
+
+	tr.construct-row:hover {
+		background: color-mix(in srgb, var(--primary) 5%, transparent);
+	}
+
+	tr.construct-row:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: -2px;
+	}
+
+	tr.construct-row.active {
+		background: color-mix(in srgb, var(--primary) 9%, transparent);
+		box-shadow: inset 2px 0 0 var(--primary);
+	}
+
 	.sr-only {
 		position: absolute;
 		width: 1px;
@@ -2047,6 +2237,85 @@
 		-webkit-mask: radial-gradient(circle, transparent 67%, black 69%);
 		mask: radial-gradient(circle, transparent 67%, black 69%);
 		pointer-events: none;
+	}
+
+	.narration-chip {
+		display: inline-flex;
+		min-width: 0;
+		height: 28px;
+		align-items: center;
+		gap: 7px;
+		padding: 0 11px;
+		border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--primary-soft) 72%, transparent);
+		color: var(--primary);
+		font-size: 10px;
+		font-weight: 620;
+		letter-spacing: 0.01em;
+		line-height: 1;
+		text-decoration: none;
+		white-space: nowrap;
+	}
+
+	.narration-chip-copy {
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.narration-chip-count {
+		color: color-mix(in srgb, var(--primary) 72%, var(--muted));
+		font-variant-numeric: tabular-nums;
+	}
+
+	.narration-chip-track {
+		position: relative;
+		display: block;
+		overflow: hidden;
+		width: 34px;
+		height: 3px;
+		flex: none;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--primary) 18%, transparent);
+	}
+
+	.narration-chip-track > i {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		border-radius: 999px;
+		background: var(--primary);
+		transition: width 300ms var(--ease);
+	}
+
+	.narration-chip:hover {
+		background: color-mix(in srgb, var(--primary-soft) 70%, var(--primary) 14%);
+	}
+
+	.narration-chip.paused {
+		border-color: var(--line-strong);
+		color: var(--muted);
+		background: var(--hover);
+	}
+
+	.narration-chip.paused .narration-chip-track > i {
+		background: var(--muted);
+	}
+
+	.narration-chip :global(svg) {
+		flex: none;
+		animation: narration-pending-pulse 2.2s ease-in-out infinite;
+	}
+
+	.narration-chip.paused :global(svg) {
+		animation: none;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.narration-chip :global(svg) {
+			animation: none;
+		}
 	}
 
 	.transport {
@@ -2222,6 +2491,15 @@
 		background: var(--timeline-listened, #9bc7b0);
 	}
 
+	.timeline-band.narration-pending {
+		z-index: 0;
+		background: repeating-linear-gradient(
+			90deg,
+			color-mix(in srgb, var(--timeline-generating, #e4b86a) 40%, transparent) 0 3px,
+			transparent 3px 6px
+		);
+	}
+
 	.timeline-key {
 		position: absolute;
 		bottom: calc(100% + 8px);
@@ -2274,6 +2552,10 @@
 
 	.generating-key {
 		color: var(--timeline-generating);
+	}
+
+	.rewriting-key {
+		color: color-mix(in srgb, var(--timeline-generating) 62%, var(--text-soft));
 	}
 
 	.timeline-scrubber:hover .timeline-key,

@@ -2,25 +2,60 @@
 	import {
 		AlertTriangle,
 		ArrowUpRight,
+		BrainCircuit,
 		Check,
 		Download,
 		LoaderCircle,
+		Mic2,
 		ShieldCheck,
 		Square
 	} from '@lucide/svelte';
+	import { onMount } from 'svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { getModel } from '$lib/domain/model-catalog';
+	import { DEFAULT_LLM_ID, getLlmModel } from '$lib/domain/llm-catalog';
 	import { appState } from '$lib/state/app-state.svelte';
+	import { llmState } from '$lib/state/llm.svelte';
 
 	let { compact = false } = $props<{ compact?: boolean }>();
 
 	const model = getModel('supertonic-3');
+	const llmSpec = getLlmModel(DEFAULT_LLM_ID)!;
 	let busy = $state(false);
 	let localError = $state('');
+	let llmError = $state('');
+	let stage = $state<'idle' | 'speech' | 'llm'>('idle');
+	/** Whether the optional language model is part of this install. */
+	let includeLlm = $state(true);
 	let progress = $derived(appState.modelProgress['supertonic-3']);
-	let licenseAccepted = $derived(appState.acceptedLicenses.includes('supertonic-3'));
-	let installing = $derived(busy || progress.status === 'loading');
-	let logoActive = $derived(installing);
+	let speechInstalled = $derived(appState.installedModels.includes('supertonic-3'));
+	let llmEligible = $derived(llmState.eligible);
+	let llmInstalled = $derived(llmState.installedModels.includes(llmSpec.id));
+	let installingSpeech = $derived(stage === 'speech' || progress.status === 'loading');
+	let installingLlm = $derived(
+		stage === 'llm' ||
+			(llmState.activeModelId === llmSpec.id &&
+				(llmState.phase === 'downloading' ||
+					llmState.phase === 'loading' ||
+					llmState.phase === 'probing'))
+	);
+	let installing = $derived(busy || installingSpeech || installingLlm);
+	let llmRelevant = $derived(llmEligible && !llmInstalled && includeLlm);
+	// One consent covers the licenses of everything about to be downloaded.
+	let consented = $derived(
+		(speechInstalled || appState.acceptedLicenses.includes('supertonic-3')) &&
+			(!llmRelevant || llmState.acceptedLicenses.includes(llmSpec.id))
+	);
+	let totalMb = $derived((speechInstalled ? 0 : model.sizeMb) + (llmRelevant ? llmSpec.sizeMb : 0));
+	let downloadLabel = $derived(
+		progress.status === 'error' && !speechInstalled
+			? 'Resume installation'
+			: `Download · ${totalMb >= 1000 ? `${(totalMb / 1000).toFixed(1)} GB` : `${totalMb} MB`}`
+	);
+
+	onMount(() => {
+		void llmState.initialize();
+	});
 
 	function friendlyError(message?: string): string {
 		if (!message) return 'The voice engine could not be installed.';
@@ -29,20 +64,36 @@
 		return message;
 	}
 
-	async function updateLicense(event: Event): Promise<void> {
+	async function updateConsent(event: Event): Promise<void> {
+		const accepted = (event.currentTarget as HTMLInputElement).checked;
 		localError = '';
-		await appState.setLicenseAcceptance(
-			'supertonic-3',
-			(event.currentTarget as HTMLInputElement).checked
-		);
+		llmError = '';
+		if (!speechInstalled) await appState.setLicenseAcceptance('supertonic-3', accepted);
+		if (llmEligible && !llmInstalled) await llmState.setLicenseAcceptance(llmSpec.id, accepted);
 	}
 
 	async function install(): Promise<void> {
-		if (!licenseAccepted || installing) return;
+		if (installing || !consented || totalMb === 0) return;
 		busy = true;
 		localError = '';
+		llmError = '';
 		try {
-			await appState.installModel('supertonic-3');
+			if (!speechInstalled) {
+				stage = 'speech';
+				await appState.installModel('supertonic-3');
+			}
+			if (llmRelevant) {
+				stage = 'llm';
+				try {
+					await llmState.activate(llmSpec.id, { install: true });
+				} catch (error) {
+					// The language model is an enhancement — speech stands on its own.
+					llmError =
+						error instanceof Error
+							? error.message
+							: 'The language model could not be installed. You can retry from Settings → LLM.';
+				}
+			}
 		} catch (error) {
 			if (error instanceof DOMException && error.name === 'AbortError') return;
 			localError = friendlyError(
@@ -50,12 +101,15 @@
 			);
 		} finally {
 			busy = false;
+			stage = 'idle';
 		}
 	}
 
 	function cancelInstall(): void {
-		appState.cancelModelInstall('supertonic-3');
+		if (installingLlm) llmState.cancelActivation();
+		else appState.cancelModelInstall('supertonic-3');
 		busy = false;
+		stage = 'idle';
 	}
 </script>
 
@@ -67,62 +121,132 @@
 >
 	<header class="setup-heading">
 		<div class="setup-brand" aria-hidden="true">
-			<BrandMark size={compact ? 36 : 72} active={logoActive} />
+			<BrandMark size={compact ? 36 : 72} active={installing} />
 		</div>
 		<div class="setup-copy">
 			<h1 id={compact ? 'reader-model-setup-title' : 'model-setup-title'}>
-				{compact ? 'Install the local voice engine' : 'Set up local listening.'}
+				{compact ? 'Finish setting up Voicebook' : 'Set up local listening.'}
 			</h1>
 			<p>
 				{compact
 					? 'Accept the model terms and finish the one-time download here.'
-					: 'Private speech, downloaded once and kept on this device.'}
+					: 'Downloaded once from Hugging Face. Everything runs and stays on this device.'}
 			</p>
 		</div>
 	</header>
 
-	<div class="license-step">
-		<label class="license-check">
-			<input type="checkbox" checked={licenseAccepted} onchange={updateLicense} />
-			<span class="check-box" aria-hidden="true"><Check size={14} strokeWidth={2.5} /></span>
-			<span>I agree to the Supertonic model terms</span>
-		</label>
-		<a class="terms-link" href={model.licenseUrl} target="_blank" rel="external noreferrer">
-			Review terms <ArrowUpRight size={12} />
-		</a>
+	<div class="setup-models" role="list">
+		<div class="model-row" class:done={speechInstalled} role="listitem">
+			<span class="model-icon" aria-hidden="true"><Mic2 size={17} /></span>
+			<div class="model-copy">
+				<strong>Voice engine</strong>
+				<small>{model.name} · {model.voices.length} studio voices · 31 languages</small>
+				<a class="model-license" href={model.licenseUrl} target="_blank" rel="external noreferrer">
+					{model.license} license <ArrowUpRight size={10} />
+				</a>
+				{#if installingSpeech}
+					<div class="model-progress" aria-live="polite">
+						<progress max="100" value={progress.progress}></progress>
+						<small>{progress.file ?? progress.message ?? 'Preparing model files'}</small>
+					</div>
+				{/if}
+			</div>
+			<div class="model-meta">
+				{#if speechInstalled}
+					<span class="model-state"><Check size={12} strokeWidth={2.6} /> Installed</span>
+				{:else if installingSpeech}
+					<span class="model-size">{Math.round(progress.progress)}%</span>
+				{:else}
+					<span class="model-size">{model.sizeMb} MB</span>
+				{/if}
+			</div>
+		</div>
+
+		{#if llmEligible}
+			<div
+				class="model-row"
+				class:done={llmInstalled}
+				class:excluded={!includeLlm && !llmInstalled}
+				role="listitem"
+			>
+				<span class="model-icon" aria-hidden="true"><BrainCircuit size={17} /></span>
+				<div class="model-copy">
+					<strong>Language model</strong>
+					<small>{llmSpec.label} · speaks equations, tables, and diagrams</small>
+					<a
+						class="model-license"
+						href={llmSpec.licenseUrl}
+						target="_blank"
+						rel="external noreferrer"
+					>
+						{llmSpec.license}
+						<ArrowUpRight size={10} />
+					</a>
+					{#if installingLlm}
+						<div class="model-progress" aria-live="polite">
+							<progress max="100" value={llmState.download?.percent ?? 0}></progress>
+							<small>
+								{llmState.phase === 'probing'
+									? 'Warming up the model…'
+									: (llmState.download?.file ?? 'Preparing model files')}
+							</small>
+						</div>
+					{/if}
+				</div>
+				<div class="model-meta">
+					{#if llmInstalled}
+						<span class="model-state"><Check size={12} strokeWidth={2.6} /> Installed</span>
+					{:else if installingLlm}
+						<span class="model-size">{llmState.download?.percent ?? 0}%</span>
+					{:else}
+						<span class="model-size">{llmSpec.sizeMb} MB</span>
+						<label class="include-toggle">
+							<input type="checkbox" bind:checked={includeLlm} disabled={installing} />
+							<span>Include</span>
+						</label>
+					{/if}
+				</div>
+			</div>
+		{/if}
 	</div>
+
+	{#if !speechInstalled || llmRelevant}
+		<label class="license-check">
+			<input type="checkbox" checked={consented} disabled={installing} onchange={updateConsent} />
+			<span class="check-box" aria-hidden="true"><Check size={14} strokeWidth={2.5} /></span>
+			<span>I accept the model licenses linked above</span>
+		</label>
+	{/if}
 
 	<footer class="setup-actions">
 		{#if installing}
 			<button class="button" type="button" onclick={cancelInstall}>
 				<Square size={12} fill="currentColor" /> Stop for now
 			</button>
-		{:else}
+		{:else if totalMb > 0}
 			<button
 				class="button primary install-button"
 				type="button"
-				disabled={!licenseAccepted}
+				disabled={!consented}
 				onclick={install}
 			>
 				{#if busy}<LoaderCircle class="spin" size={16} />{:else}<Download size={16} />{/if}
-				{progress.status === 'error' ? 'Resume installation' : 'Download voice engine'}
+				{downloadLabel}
 			</button>
 		{/if}
 	</footer>
 
-	{#if installing || localError || progress.status === 'error' || appState.runtimeNotice}
+	{#if localError || llmError || progress.status === 'error' || appState.runtimeNotice}
 		<div class="install-state" aria-live="polite">
-			{#if installing}
-				<div class="progress-copy">
-					<span>{progress.message ?? 'Preparing the local voice engine…'}</span>
-					<strong>{Math.round(progress.progress)}%</strong>
-				</div>
-				<progress max="100" value={progress.progress}></progress>
-				<small>{progress.file ?? 'Checking saved model files'}</small>
-			{:else if localError || progress.status === 'error'}
+			{#if localError || progress.status === 'error'}
 				<div class="setup-error" role="alert">
 					<AlertTriangle size={15} />
 					<span>{localError || friendlyError(progress.message)}</span>
+				</div>
+			{:else if llmError}
+				<div class="setup-error" role="alert">
+					<AlertTriangle size={15} />
+					<span>{llmError}</span>
 				</div>
 			{:else if appState.runtimeNotice}
 				<div class="recovery-note">
@@ -137,7 +261,7 @@
 <style>
 	.model-setup {
 		display: flex;
-		width: min(560px, 100%);
+		width: min(520px, 100%);
 		align-items: center;
 		padding: 0;
 		margin: 0 auto;
@@ -175,32 +299,153 @@
 		line-height: 1.65;
 	}
 
-	.license-step {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 10px;
-		padding: 0;
-		margin-top: 26px;
-		flex-wrap: wrap;
+	.setup-models {
+		width: 100%;
+		border: 1px solid var(--line-strong);
+		border-radius: 13px;
+		margin-top: 28px;
+		background: color-mix(in srgb, var(--surface, transparent) 55%, transparent);
 	}
 
-	.terms-link {
+	.model-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 13px;
+		padding: 15px 16px;
+		transition: opacity 150ms var(--ease);
+	}
+
+	.model-row + .model-row {
+		border-top: 1px solid var(--line);
+	}
+
+	.model-row.excluded {
+		opacity: 0.45;
+	}
+
+	.model-icon {
+		display: grid;
+		width: 34px;
+		height: 34px;
+		flex: 0 0 34px;
+		place-items: center;
+		border-radius: 9px;
+		margin-top: 1px;
+		background: var(--primary-soft);
+		color: var(--primary);
+	}
+
+	.model-copy {
+		display: flex;
+		min-width: 0;
+		flex: 1;
+		flex-direction: column;
+		gap: 3px;
+		text-align: left;
+	}
+
+	.model-copy strong {
+		font-size: 12px;
+		font-weight: 660;
+		letter-spacing: -0.01em;
+	}
+
+	.model-copy small {
+		color: var(--muted);
+		font-size: 10px;
+		line-height: 1.45;
+	}
+
+	.model-license {
 		display: inline-flex;
 		align-items: center;
-		gap: 3px;
-		color: var(--primary);
-		font-size: 10px;
+		gap: 2px;
+		margin-top: 2px;
+		color: var(--faint);
+		font-size: 9.5px;
 		text-decoration: underline;
 		text-underline-offset: 2px;
 	}
 
+	.model-license:hover {
+		color: var(--primary);
+	}
+
+	.model-progress {
+		margin-top: 6px;
+	}
+
+	.model-progress progress {
+		width: 100%;
+		height: 4px;
+		accent-color: var(--primary);
+	}
+
+	.model-progress small {
+		display: block;
+		overflow: hidden;
+		margin-top: 4px;
+		color: var(--faint);
+		font-size: 9px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.model-meta {
+		display: flex;
+		flex: none;
+		align-items: flex-end;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.model-size {
+		padding: 3px 9px;
+		border: 1px solid var(--line-strong);
+		border-radius: 999px;
+		color: var(--muted);
+		font-size: 9.5px;
+		font-weight: 650;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+
+	.model-state {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 3px 9px;
+		border-radius: 999px;
+		background: var(--primary-soft);
+		color: var(--primary);
+		font-size: 9.5px;
+		font-weight: 650;
+		white-space: nowrap;
+	}
+
+	.include-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		color: var(--muted);
+		font-size: 9.5px;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.include-toggle input {
+		width: 13px;
+		height: 13px;
+		accent-color: var(--primary);
+	}
+
 	.license-check {
 		display: flex;
-		min-height: 48px;
+		min-height: 44px;
 		align-items: center;
 		gap: 11px;
 		padding: 0;
+		margin-top: 16px;
 		color: var(--text-soft);
 		font-size: 11px;
 		font-weight: 600;
@@ -251,36 +496,6 @@
 		text-align: center;
 	}
 
-	.progress-copy {
-		display: flex;
-		justify-content: space-between;
-		gap: 16px;
-		color: var(--muted);
-		font-size: 10px;
-	}
-
-	.progress-copy strong {
-		color: var(--text-soft);
-		font-variant-numeric: tabular-nums;
-	}
-
-	.install-state progress {
-		width: 100%;
-		height: 5px;
-		margin-top: 10px;
-		accent-color: var(--primary);
-	}
-
-	.install-state small {
-		display: block;
-		overflow: hidden;
-		margin-top: 7px;
-		color: var(--faint);
-		font-size: 9px;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
 	.setup-error,
 	.recovery-note {
 		display: flex;
@@ -303,14 +518,14 @@
 		align-items: center;
 		justify-content: center;
 		padding: 0;
-		margin-top: 20px;
+		margin-top: 14px;
 		flex-direction: column;
 	}
 
 	.install-button {
 		height: 48px;
 		min-width: 220px;
-		padding: 0 20px;
+		padding: 0 22px;
 		font-size: 11px;
 	}
 
@@ -327,8 +542,6 @@
 		display: grid;
 		grid-template-columns: 36px minmax(0, 1fr);
 		gap: 14px;
-		padding-bottom: 16px;
-		border-bottom: 1px solid var(--line-strong);
 		text-align: left;
 	}
 
@@ -349,21 +562,23 @@
 		font-size: 10px;
 	}
 
-	.compact .license-step {
-		padding: 0;
+	.compact .setup-models {
 		margin-top: 14px;
 	}
 
-	.compact .install-state {
-		padding: 0;
+	.compact .model-row {
+		padding: 11px 13px;
+	}
+
+	.compact .license-check {
+		min-height: 38px;
 		margin-top: 10px;
 	}
 
 	.compact .setup-actions {
 		align-items: center;
 		justify-content: flex-start;
-		padding: 0;
-		margin-top: 12px;
+		margin-top: 10px;
 		flex-direction: row;
 	}
 
@@ -384,16 +599,13 @@
 			font-size: clamp(1.85rem, 10vw, 2.65rem);
 		}
 
-		.license-step {
-			gap: 10px;
-		}
-
 		.license-check {
 			width: 100%;
 		}
 
 		.setup-actions {
 			align-items: stretch;
+			align-self: stretch;
 		}
 
 		.setup-actions .button {
@@ -409,10 +621,6 @@
 			grid-template-columns: 32px minmax(0, 1fr);
 		}
 
-		.compact .setup-brand {
-			margin: 0;
-		}
-
 		.compact .setup-actions {
 			align-items: stretch;
 			flex-direction: column;
@@ -420,7 +628,8 @@
 	}
 
 	@media (prefers-reduced-motion: reduce) {
-		.check-box {
+		.check-box,
+		.model-row {
 			transition: none;
 		}
 	}

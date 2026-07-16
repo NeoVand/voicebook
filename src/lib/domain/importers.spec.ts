@@ -83,7 +83,7 @@ describe('document importers', () => {
 		].join('\n');
 		const document = await importFile(new File([markdown], 'guide.md', { type: 'text/markdown' }));
 		expect(document.title).toBe('Listening well');
-		expect(document.normalizationVersion).toBe(7);
+		expect(document.normalizationVersion).toBe(8);
 		expect(document.outline[0]).toMatchObject({ title: 'Listening well', level: 1 });
 		expect(document.blocks.map((item) => item.kind)).toEqual([
 			'heading',
@@ -94,7 +94,7 @@ describe('document importers', () => {
 			'list-item',
 			'list-item',
 			'code',
-			'code'
+			'mermaid'
 		]);
 		const quote = document.blocks.find((item) => item.kind === 'quote');
 		expect(quote?.children).toHaveLength(1);
@@ -103,10 +103,15 @@ describe('document importers', () => {
 			text: 'A useful quotation.'
 		});
 		expect(document.blocks.find((item) => item.codeLanguage === 'mermaid')).toMatchObject({
-			kind: 'code',
+			kind: 'mermaid',
 			text: 'flowchart LR\n  Document --> Speech',
 			speak: false
 		});
+		// Mermaid diagrams narrate via a deterministic fallback until an LLM
+		// rewrite arrives.
+		expect(
+			document.segments.find((segment) => segment.narration?.constructKind === 'mermaid')?.text
+		).toBe('A flowchart is shown here.');
 		expect(
 			document.blocks.filter((item) => item.kind === 'code').every((item) => !item.speak)
 		).toBe(true);

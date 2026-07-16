@@ -19,6 +19,7 @@
 		Moon,
 		PanelLeftClose,
 		PanelLeftOpen,
+		BrainCircuit,
 		RefreshCw,
 		Settings2,
 		Sun,
@@ -487,6 +488,20 @@
 			>
 				<Cpu size={17} />
 				<span>Voice</span>
+			</a>
+			<a
+				class="nav-link"
+				class:active={page.url.pathname.startsWith(settingsHref) && settingsSection === 'llm'}
+				href={resolve('/settings?section=llm')}
+				aria-label="LLM"
+				aria-current={page.url.pathname.startsWith(settingsHref) && settingsSection === 'llm'
+					? 'page'
+					: undefined}
+				data-tooltip="LLM"
+				onclick={closeNavigation}
+			>
+				<BrainCircuit size={17} />
+				<span>LLM</span>
 			</a>
 			<a
 				class="nav-link"

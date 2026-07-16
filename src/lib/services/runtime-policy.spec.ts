@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAppleMobileWebKit, speechRuntimePolicy } from './runtime-policy';
+import { isAppleMobileWebKit, narrationRuntimePolicy, speechRuntimePolicy } from './runtime-policy';
 
 describe('speechRuntimePolicy', () => {
 	it('forces the true WASM runtime for Chrome and Safari on iPhone', () => {
@@ -45,5 +45,46 @@ describe('speechRuntimePolicy', () => {
 			modelChunkBytes: undefined,
 			wasmThreads: undefined
 		});
+	});
+});
+
+describe('narrationRuntimePolicy', () => {
+	const desktopChrome =
+		'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/150.0 Safari/537.36';
+
+	it('is eligible on desktop with verified WebGPU', () => {
+		expect(narrationRuntimePolicy({ userAgent: desktopChrome }, { webgpu: true })).toEqual({
+			eligible: true
+		});
+	});
+
+	it('is ineligible without verified WebGPU', () => {
+		const policy = narrationRuntimePolicy({ userAgent: desktopChrome }, { webgpu: false });
+		expect(policy.eligible).toBe(false);
+		expect(policy.reason).toMatch(/WebGPU/);
+	});
+
+	it('is ineligible on Apple mobile even if WebGPU is reported', () => {
+		const policy = narrationRuntimePolicy(
+			{
+				userAgent:
+					'Mozilla/5.0 (iPhone; CPU iPhone OS 26_5_2 like Mac OS X) AppleWebKit/605.1.15 Version/26.5 Mobile/15E148 Safari/604.1'
+			},
+			{ webgpu: true }
+		);
+		expect(policy.eligible).toBe(false);
+		expect(policy.reason).toMatch(/desktop/);
+	});
+
+	it('is ineligible on Android even if WebGPU is reported', () => {
+		const policy = narrationRuntimePolicy(
+			{
+				userAgent:
+					'Mozilla/5.0 (Linux; Android 16; Pixel 10) AppleWebKit/537.36 Chrome/150.0 Mobile Safari/537.36'
+			},
+			{ webgpu: true }
+		);
+		expect(policy.eligible).toBe(false);
+		expect(policy.reason).toMatch(/desktop/);
 	});
 });

@@ -1,4 +1,22 @@
-import type { DocumentBlock, NormalizedDocument, SpeechSegment, WordSpan } from './types';
+import type {
+	DocumentBlock,
+	NarrationConstructKind,
+	NarrationEntry,
+	NormalizedDocument,
+	SpeechSegment,
+	WordSpan
+} from './types';
+import {
+	inlineConstructSpans,
+	inlineMathFallback,
+	mathBlockFallback,
+	mermaidFallback,
+	tableHeaderFallback,
+	tableRowFallback,
+	tableRowRanges,
+	type InlineConstructSpan,
+	type TextRange
+} from './narration';
 
 export const MAX_SEGMENT_CHARS = 280;
 
@@ -80,12 +98,156 @@ export function estimateDuration(text: string): number {
 	return Math.max(0.7, wordCount / 2.65 + punctuationPause);
 }
 
-export function segmentBlocks(blocks: DocumentBlock[], includeCode = false): SpeechSegment[] {
+/** Narration/fallback text resolution for one construct. */
+function spokenFor(
+	entry: NarrationEntry | undefined,
+	fallback: string
+): { text: string; pending: boolean } {
+	if (entry?.status === 'ready' && entry.text?.trim()) {
+		return { text: entry.text.trim(), pending: false };
+	}
+	return { text: fallback, pending: entry?.status === 'pending' };
+}
+
+/** Narration text stays one segment when it fits; longer narrations pack
+ * whole sentences greedily into MAX_SEGMENT_CHARS chunks. */
+function narrationChunks(text: string): string[] {
+	const trimmed = text.trim();
+	if (!trimmed) return [];
+	if (trimmed.length <= MAX_SEGMENT_CHARS) return [trimmed];
+	const chunks: string[] = [];
+	let current = '';
+	const flush = () => {
+		if (current.trim()) chunks.push(current.trim());
+		current = '';
+	};
+	for (const part of sentenceParts(trimmed)) {
+		for (const piece of splitLongSentence(part.text, part.index)) {
+			const sentence = piece.text.trim();
+			if (!sentence) continue;
+			if (current && current.length + sentence.length + 1 > MAX_SEGMENT_CHARS) flush();
+			current = current ? `${current} ${sentence}` : sentence;
+		}
+	}
+	flush();
+	return chunks;
+}
+
+/** Emit the `${constructId}:n${k}` segments for one narrated construct,
+ * subdividing the construct's character range so position remapping stays
+ * monotonic within the block. */
+function pushConstructSegments(
+	segments: SpeechSegment[],
+	block: DocumentBlock,
+	constructId: string,
+	constructKind: NarrationConstructKind,
+	spoken: string,
+	pending: boolean,
+	range: TextRange
+): void {
+	const chunks = narrationChunks(spoken);
+	if (!chunks.length) return;
+	const span = range.end - range.start;
+	chunks.forEach((chunk, index) => {
+		const start = range.start + Math.floor((span * index) / chunks.length);
+		const end =
+			index === chunks.length - 1
+				? range.end
+				: range.start + Math.floor((span * (index + 1)) / chunks.length);
+		segments.push({
+			id: `${constructId}:n${index}`,
+			blockId: block.id,
+			text: chunk,
+			normalizedText: normalizeForSpeech(chunk),
+			start,
+			end,
+			words: wordsFor(chunk),
+			estimatedDuration: estimateDuration(chunk),
+			anchor: {
+				...block.anchor,
+				start: (block.anchor.start ?? 0) + start,
+				end: (block.anchor.start ?? 0) + end
+			},
+			narration: { constructIds: [constructId], kind: 'construct', constructKind, pending }
+		});
+	});
+}
+
+/** The replacement spoken for an inline construct span. */
+function inlineReplacement(
+	span: InlineConstructSpan,
+	narrations: Record<string, NarrationEntry>
+): { text: string; pending: boolean; hasEntry: boolean } {
+	const entry = span.eligible ? narrations[span.id] : undefined;
+	if (entry?.status === 'ready' && entry.text?.trim()) {
+		return { text: entry.text.trim(), pending: false, hasEntry: true };
+	}
+	const fallback = span.kind === 'math-inline' ? inlineMathFallback(span.run.text) : span.run.text;
+	return { text: fallback, pending: entry?.status === 'pending', hasEntry: Boolean(entry) };
+}
+
+export function segmentBlocks(
+	blocks: DocumentBlock[],
+	includeCode = false,
+	narrations: Record<string, NarrationEntry> = {}
+): SpeechSegment[] {
 	const segments: SpeechSegment[] = [];
 
 	for (const block of blocks) {
+		// Narrated constructs first — math and mermaid blocks are not speakable
+		// as source, but their narration (or deterministic fallback) is.
+		if (block.kind === 'math' || block.kind === 'mermaid') {
+			const fallback =
+				block.kind === 'math' ? mathBlockFallback(block.text) : mermaidFallback(block.text);
+			const { text, pending } = spokenFor(narrations[block.id], fallback);
+			pushConstructSegments(
+				segments,
+				block,
+				block.id,
+				block.kind === 'math' ? 'math-block' : 'mermaid',
+				text,
+				pending,
+				{ start: 0, end: block.text.length }
+			);
+			continue;
+		}
+
+		// Tables: a deterministic header announcement plus one narrated segment
+		// group per row, each anchored to the row's range in the flattened text.
+		if (block.kind === 'table' && block.table) {
+			const ranges = tableRowRanges(block.text, block.table);
+			const header = block.table.header.map((cell) => cell.text);
+			pushConstructSegments(
+				segments,
+				block,
+				`${block.id}:rh`,
+				'table-header',
+				tableHeaderFallback(header),
+				false,
+				ranges.header ?? { start: 0, end: 0 }
+			);
+			block.table.rows.forEach((row, rowIndex) => {
+				const cells = row.map((cell) => cell.text);
+				const fallback = tableRowFallback(header, cells);
+				const { text, pending } = spokenFor(narrations[`${block.id}:r${rowIndex}`], fallback);
+				if (!text) return;
+				pushConstructSegments(
+					segments,
+					block,
+					`${block.id}:r${rowIndex}`,
+					'table-row',
+					text,
+					pending,
+					ranges.rows[rowIndex] ?? { start: block.text.length, end: block.text.length }
+				);
+			});
+			continue;
+		}
+
 		if ((!block.speak && block.kind !== 'code') || (block.kind === 'code' && !includeCode))
 			continue;
+
+		const spans = inlineConstructSpans(block);
 		let blockSegmentIndex = 0;
 		const sourceParts =
 			block.kind === 'heading' || block.kind === 'list-item'
@@ -98,26 +260,75 @@ export function segmentBlocks(blocks: DocumentBlock[], includeCode = false): Spe
 				const text = piece.text.trim();
 				if (!text) continue;
 				const start = piece.index + leading;
+				const end = start + text.length;
+				const id = `${block.id}:s${blockSegmentIndex++}`;
+
+				// Substitute inline math/image runs with their narration or
+				// fallback in the SPOKEN text only; the displayed slice, ids and
+				// offsets stay exactly as before so positions remain stable.
+				const overlapping = spans.filter((span) => span.start < end && span.end > start);
+				let speech = text;
+				let pending = false;
+				const constructIds: string[] = [];
+				if (overlapping.length) {
+					let rendered = '';
+					let cursor = start;
+					for (const span of overlapping) {
+						const from = Math.max(span.start, start);
+						const to = Math.min(span.end, end);
+						rendered += block.text.slice(cursor, from);
+						if (span.start >= start) {
+							const replacement = inlineReplacement(span, narrations);
+							rendered += replacement.text;
+							pending ||= replacement.pending;
+							// A span only makes this a narration segment when it
+							// actually changes the spoken text or an LLM rewrite
+							// exists/is expected for it — a short readable E=mc^2
+							// keeps plain word-highlighted treatment.
+							if (replacement.hasEntry || replacement.text !== block.text.slice(from, to)) {
+								constructIds.push(span.id);
+							}
+						}
+						cursor = to;
+					}
+					rendered += block.text.slice(cursor, end);
+					speech = rendered;
+				}
+				const substituted = speech !== text || constructIds.length > 0;
+
 				segments.push({
-					id: `${block.id}:s${blockSegmentIndex++}`,
+					id,
 					blockId: block.id,
 					text,
-					normalizedText: normalizeForSpeech(text),
+					normalizedText: normalizeForSpeech(speech),
 					start,
-					end: start + text.length,
-					words: wordsFor(text),
-					estimatedDuration: estimateDuration(text),
+					end,
+					// Word-level highlighting needs displayed text === spoken text;
+					// substituted sentences highlight at the sentence level instead.
+					words: substituted ? [] : wordsFor(text),
+					estimatedDuration: estimateDuration(speech),
 					anchor: {
 						...block.anchor,
 						start: (block.anchor.start ?? 0) + start,
 						end: (block.anchor.start ?? 0) + start + text.length
-					}
+					},
+					...(substituted ? { narration: { constructIds, kind: 'inline' as const, pending } } : {})
 				});
 			}
 		}
 	}
 
 	return segments;
+}
+
+export function segmentsEqual(a: SpeechSegment[], b: SpeechSegment[]): boolean {
+	if (a.length !== b.length) return false;
+	return a.every(
+		(segment, index) =>
+			segment.id === b[index].id &&
+			segment.normalizedText === b[index].normalizedText &&
+			(segment.narration?.pending ?? false) === (b[index].narration?.pending ?? false)
+	);
 }
 
 function semanticPosition(
@@ -151,10 +362,9 @@ function remapPosition(
 }
 
 export function refreshDocumentSegments(document: NormalizedDocument): NormalizedDocument {
-	if (document.segments.every((segment) => segment.normalizedText.length <= MAX_SEGMENT_CHARS))
-		return document;
 	const previousSegments = document.segments;
-	const segments = segmentBlocks(document.blocks, document.includeCode);
+	const segments = segmentBlocks(document.blocks, document.includeCode, document.narrations ?? {});
+	if (segmentsEqual(previousSegments, segments)) return document;
 	const playbackPosition = document.playback
 		? semanticPosition(previousSegments, document.playback.segmentId, document.playback.wordIndex)
 		: undefined;

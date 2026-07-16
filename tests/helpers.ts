@@ -135,8 +135,12 @@ export async function completeModelSetup(page: Page): Promise<void> {
 		readyLibrary.waitFor({ state: 'visible' })
 	]);
 	if (!(await setup.isVisible())) return;
-	await page.getByRole('checkbox', { name: /I agree to the Supertonic model terms/ }).check();
-	await page.getByRole('button', { name: 'Download voice engine' }).click();
+	// Only the (fake) voice engine installs in tests — leave the real
+	// language-model download out of the run.
+	const includeLlm = page.getByRole('checkbox', { name: 'Include' });
+	if (await includeLlm.isVisible()) await includeLlm.uncheck();
+	await page.getByRole('checkbox', { name: /I accept the model licenses/ }).check();
+	await page.getByRole('button', { name: /^Download ·/ }).click();
 	await setup.waitFor({ state: 'hidden' });
 	await readyLibrary.waitFor({ state: 'visible' });
 }

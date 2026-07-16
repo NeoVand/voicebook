@@ -23,7 +23,7 @@ import type {
 	TableCell
 } from './types';
 
-export const DOCUMENT_NORMALIZATION_VERSION = 7;
+export const DOCUMENT_NORMALIZATION_VERSION = 8;
 
 interface AstNode {
 	type: string;
@@ -120,6 +120,7 @@ function block(
 			'definition-list',
 			'code',
 			'math',
+			'mermaid',
 			'frontmatter',
 			'divider',
 			'page-break'
@@ -702,12 +703,19 @@ function parseMarkdown(markdown: string): ParsedSource {
 					});
 					break;
 				}
-				case 'code':
-					if (node.lang?.trim().toLowerCase() === 'math') {
+				case 'code': {
+					const codeLanguage = node.lang?.trim().toLowerCase();
+					if (codeLanguage === 'math') {
 						add('math', node.value ?? '', {
 							parentId,
 							anchor: anchorFor(node, frontmatter.offset),
 							speak: false
+						});
+					} else if (codeLanguage === 'mermaid') {
+						add('mermaid', node.value ?? '', {
+							parentId,
+							codeLanguage: 'mermaid',
+							anchor: anchorFor(node, frontmatter.offset)
 						});
 					} else {
 						add('code', node.value ?? '', {
@@ -717,6 +725,7 @@ function parseMarkdown(markdown: string): ParsedSource {
 						});
 					}
 					break;
+				}
 				case 'math':
 					add('math', node.value ?? '', {
 						parentId,

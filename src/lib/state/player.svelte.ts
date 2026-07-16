@@ -10,7 +10,13 @@ import type {
 	TimingMap
 } from '$lib/domain/types';
 import { audioVariantKey, decodeAudio, encodeAudio } from '$lib/services/audio-codec';
-import { getAudio, listAudioVariants, putAudio } from '$lib/services/repository';
+import { segmentsEqual } from '$lib/domain/segmenter';
+import {
+	deleteAudioForSegments,
+	getAudio,
+	listAudioVariants,
+	putAudio
+} from '$lib/services/repository';
 import { encodeDocumentMp3, mp3Filename } from '$lib/services/mp3-export';
 import { ttsClient } from '$lib/services/tts-client';
 import { generationPlan } from '$lib/services/generation-plan';
@@ -49,6 +55,8 @@ export interface TimelineSegmentVisual {
 	width: number;
 	cached: boolean;
 	generating: number;
+	/** An LLM narration rewrite is still expected for this segment. */
+	narrationPending: boolean;
 	listened: Array<{ left: number; width: number }>;
 }
 
@@ -59,6 +67,8 @@ export class VoicebookPlayer {
 	bufferingStage = $state('Preparing this passage…');
 	isGeneratingAll = $state(false);
 	generationProgress = $state(0);
+	/** Progress label while generateAll waits for narration rewrites. */
+	narrationStage = $state('');
 	currentSegmentIndex = $state(0);
 	currentWordIndex = $state(0);
 	position = $state(0);
@@ -101,6 +111,10 @@ export class VoicebookPlayer {
 	private engineLoad?: { modelId: string; promise: Promise<void> };
 	private cacheCoverageSignature = '';
 	onSegmentChange?: (segmentId: string) => void;
+	/** Assigned by the narration state module (mirrors onSegmentChange to
+	 * avoid an import cycle): resolves when every construct is ready or
+	 * failed AND the resulting segment rebinds have been applied. */
+	ensureNarrationsReady?: (onProgress: (done: number, total: number) => void) => Promise<void>;
 
 	get currentSegment(): SpeechSegment | undefined {
 		return this.book?.segments[this.currentSegmentIndex];
@@ -155,6 +169,7 @@ export class VoicebookPlayer {
 				width: duration / total,
 				cached: this.cachedSegments.has(index),
 				generating: this.generationBySegment.get(index) ?? 0,
+				narrationPending: segment.narration?.pending ?? false,
 				listened: mergeListenedRange(this.book?.listened?.[segment.id] ?? [], 0, 0).map(
 					(range) => ({
 						left: duration ? Math.min(1, range.start / duration) : 0,
@@ -175,8 +190,18 @@ export class VoicebookPlayer {
 		return `${cached}% audio cached for this voice. ${listened}% listened.${generating ? ` Preparing ${generating} ${generating === 1 ? 'passage' : 'passages'}.` : ''}`;
 	}
 
+	get hasPendingNarrations(): boolean {
+		return Boolean(this.book?.segments.some((segment) => segment.narration?.pending));
+	}
+
 	get isDocumentPrepared(): boolean {
-		return Boolean(this.book?.segments.length) && this.cachedProgress >= 0.9999;
+		return (
+			Boolean(this.book?.segments.length) &&
+			this.cachedProgress >= 0.9999 &&
+			// Pending narrations will change spoken text and re-generate audio;
+			// 'failed' entries lock in the fallback and do not hold this gate.
+			!this.hasPendingNarrations
+		);
 	}
 
 	get hasDocumentAudioState(): boolean {
@@ -231,6 +256,86 @@ export class VoicebookPlayer {
 
 	private notifySegmentChange(): void {
 		if (this.currentSegment) this.onSegmentChange?.(this.currentSegment.id);
+	}
+
+	/**
+	 * Swap in a freshly computed segment list after narration rewrites arrive.
+	 * Indices shift, so every index-keyed structure is remapped by segment id;
+	 * cached flags survive only where the spoken text is unchanged (the audio
+	 * cache key embeds the text, so changed segments are genuinely uncached).
+	 * The currently playing buffer is never interrupted — callers apply the
+	 * swap policy (never rebind the live prefetch window while playing).
+	 */
+	rebindSegments(next: SpeechSegment[]): void {
+		if (!this.book) return;
+		const previous = this.book.segments;
+		if (segmentsEqual(previous, next)) return;
+		const currentId = this.currentSegment?.id;
+		const nextIndexById = new SvelteMap(next.map((segment, index) => [segment.id, index]));
+
+		// Stop prefetch/synthesis work aimed at old indices; keep document-wide
+		// generation (generateAll) requests alive — their persistence path
+		// re-resolves indices by id.
+		this.reprioritize(this.isGeneratingAll);
+
+		// Segments whose spoken text changed (or that disappeared) have only
+		// stale audio variants; purge them and rebuild coverage afterwards.
+		const changedIds: string[] = [];
+		const nextById = new SvelteMap(next.map((segment) => [segment.id, segment]));
+		for (const segment of previous) {
+			const replacement = nextById.get(segment.id);
+			if (!replacement || replacement.normalizedText !== segment.normalizedText) {
+				changedIds.push(segment.id);
+			}
+		}
+
+		const previousCached = [...this.cachedSegments];
+		this.cachedSegments.clear();
+		for (const index of previousCached) {
+			const old = previous[index];
+			if (!old) continue;
+			const newIndex = nextIndexById.get(old.id);
+			if (newIndex === undefined) continue;
+			if (next[newIndex].normalizedText === old.normalizedText) this.cachedSegments.add(newIndex);
+		}
+
+		// Keep only the current segment's decoded audio (remapped); everything
+		// else re-hydrates from IndexedDB on the next prefetch.
+		const keptPrepared =
+			currentId !== undefined ? this.preparedBySegment.get(this.currentSegmentIndex) : undefined;
+		this.preparedBySegment.clear();
+		this.audioCache.clear();
+		this.generationBySegment.clear();
+
+		this.book.segments = next;
+		const remappedIndex = currentId !== undefined ? nextIndexById.get(currentId) : undefined;
+		const currentTextUnchanged =
+			currentId !== undefined &&
+			remappedIndex !== undefined &&
+			previous[this.currentSegmentIndex]?.normalizedText === next[remappedIndex].normalizedText;
+		this.currentSegmentIndex =
+			remappedIndex ?? Math.max(0, Math.min(this.currentSegmentIndex, next.length - 1));
+		if (keptPrepared && currentTextUnchanged && remappedIndex !== undefined) {
+			this.preparedBySegment.set(remappedIndex, keptPrepared);
+			this.audioCache.set(keptPrepared.key, keptPrepared);
+		} else if (!this.isPlaying) {
+			// The passage under the playhead was rewritten while idle: restart
+			// it from the top with the new narration on the next play.
+			this.position = 0;
+			this.currentWordIndex = 0;
+			this.currentDuration =
+				this.book.segments[this.currentSegmentIndex]?.estimatedDuration ?? this.currentDuration;
+		}
+
+		void deleteAudioForSegments(this.book.id, changedIds)
+			.catch(() => undefined)
+			.then(() => this.refreshCacheCoverage(true))
+			.then(() => {
+				this.generationProgress = this.cachedProgress * 100;
+			})
+			.catch(() => undefined);
+
+		if (this.isPlaying) this.prefetch();
 	}
 
 	private reprioritize(preserveDocumentPreparation = false): void {
@@ -534,6 +639,7 @@ export class VoicebookPlayer {
 	}
 
 	private trackPersistence(index: number, generated: GeneratedSegment): Promise<boolean> {
+		const generatedText = this.book?.segments[index]?.normalizedText;
 		const task = this.persistGeneratedAudio(
 			generated.meta,
 			generated.audio,
@@ -546,8 +652,17 @@ export class VoicebookPlayer {
 					saved &&
 					this.book?.id === generated.meta.documentId &&
 					this.matchesCurrentVariant({ ...generated.meta, mimeType: '' })
-				)
-					this.cachedSegments.add(index);
+				) {
+					// Resolve the index at completion time by segment id — a
+					// narration rebind may have shifted indices (or swapped the
+					// spoken text, making this variant stale) mid-flight.
+					const finalIndex = this.book.segments.findIndex(
+						(segment) => segment.id === generated.meta.segmentId
+					);
+					if (finalIndex >= 0 && this.book.segments[finalIndex].normalizedText === generatedText) {
+						this.cachedSegments.add(finalIndex);
+					}
+				}
 				if (saved) this.hasCachedAudioVariants = true;
 				this.generationProgress = this.cachedProgress * 100;
 				return saved;
@@ -962,10 +1077,14 @@ export class VoicebookPlayer {
 			this.book.bookmarks = this.book.bookmarks.filter((bookmark) => bookmark.id !== existing.id);
 		else {
 			const words = this.currentSegment.words;
-			const excerpt = words
-				.slice(Math.max(0, this.currentWordIndex - 3), this.currentWordIndex + 8)
-				.map((word) => word.text)
-				.join(' ');
+			// Narrated/substituted segments carry no word spans; fall back to
+			// the segment text for the excerpt.
+			const excerpt = words.length
+				? words
+						.slice(Math.max(0, this.currentWordIndex - 3), this.currentWordIndex + 8)
+						.map((word) => word.text)
+						.join(' ')
+				: this.currentSegment.text.slice(0, 60);
 			const bookmark: Bookmark = {
 				id: crypto.randomUUID(),
 				documentId: this.book.id,
@@ -993,6 +1112,19 @@ export class VoicebookPlayer {
 		this.errorMessage = '';
 		const version = this.cancellationVersion;
 		try {
+			// Settle narration rewrites first so the audio pass runs over final
+			// spoken text instead of fallbacks that would be invalidated later.
+			if (this.ensureNarrationsReady && this.hasPendingNarrations) {
+				this.narrationStage = 'Rewriting visuals for speech…';
+				try {
+					await this.ensureNarrationsReady((done, total) => {
+						this.narrationStage = `Rewriting visuals ${done}/${total}…`;
+					});
+				} finally {
+					this.narrationStage = '';
+				}
+				if (version !== this.cancellationVersion) return;
+			}
 			this.generationProgress = this.cachedProgress * 100;
 			const active = new SvelteSet<number>();
 			const nextIndex = (): number | undefined =>

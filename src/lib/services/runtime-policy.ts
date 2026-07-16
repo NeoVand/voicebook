@@ -42,3 +42,29 @@ export function currentSpeechRuntimePolicy(): SpeechRuntimePolicy {
 		hardwareConcurrency: navigator.hardwareConcurrency
 	});
 }
+
+export interface NarrationRuntimePolicy {
+	eligible: boolean;
+	reason?: string;
+}
+
+/**
+ * The narration LLM is desktop-only: it needs a WebGPU adapter that can hold
+ * a 0.8–1.3 GB working set alongside the speech engine. The gate takes the
+ * worker-verified WebGPU capability (not just navigator.gpu — see
+ * speechRuntimePolicy for why that signal lies on Apple mobile) and excludes
+ * mobile user agents where thermals and memory make background inference
+ * impractical.
+ */
+export function narrationRuntimePolicy(
+	identity: BrowserRuntimeIdentity,
+	capabilities: { webgpu: boolean }
+): NarrationRuntimePolicy {
+	if (isAppleMobileWebKit(identity) || /\bAndroid\b/i.test(identity.userAgent)) {
+		return { eligible: false, reason: 'The language model needs a desktop browser.' };
+	}
+	if (!capabilities.webgpu) {
+		return { eligible: false, reason: 'The language model needs a browser with WebGPU.' };
+	}
+	return { eligible: true };
+}
