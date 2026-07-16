@@ -75,7 +75,8 @@ test('completes voice setup before presenting the empty-library import surface',
 	await expect(page.getByText('Drop to add to your library', { exact: true })).toHaveCount(0);
 
 	const themeButton = page.getByRole('button', { name: /^Theme:/ });
-	for (const theme of ['midnight', 'sunny', 'cloudy', 'rainy']) {
+	// The header button flips light/dark; the full palette lives in Appearance.
+	for (const theme of ['midnight', 'sunny', 'midnight', 'sunny']) {
 		await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 		await addDocument.hover();
 		await expect
@@ -246,6 +247,8 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await page.getByRole('button', { name: 'Add to library' }).click();
 	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
 	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
+	// Contents starts closed; these surface checks need both panels open.
+	await page.getByRole('button', { name: 'Open document outline' }).click();
 	await page.getByRole('button', { name: 'Open bookmarks' }).click();
 	const readerSurfaceColors = () =>
 		page.evaluate(() => {
@@ -282,7 +285,8 @@ test('import → install → play → seek → bookmark → reload → offline r
 			};
 		});
 	const readerThemeButton = page.getByRole('button', { name: /^Theme:/ });
-	for (const theme of ['midnight', 'sunny', 'cloudy', 'rainy']) {
+	// The header button flips light/dark; the full palette lives in Appearance.
+	for (const theme of ['midnight', 'sunny', 'midnight', 'sunny']) {
 		await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 		const surfaces = await readerSurfaceColors();
 		expect(new Set(surfaces.chrome).size, `${theme} chrome surfaces should match`).toBe(1);
@@ -430,6 +434,8 @@ test('import → install → play → seek → bookmark → reload → offline r
 
 	await page.reload();
 	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
+	// Contents starts closed; these surface checks need both panels open.
+	await page.getByRole('button', { name: 'Open document outline' }).click();
 	await page.getByRole('button', { name: 'Open bookmarks' }).click();
 	await expect(page.getByText('1 saved')).toBeVisible();
 	const readerA11y = await new AxeBuilder({ page }).analyze();
@@ -608,7 +614,7 @@ test('keeps the phone reader focused on content and a compact transport', async 
 	await expect(page.getByRole('complementary', { name: 'Voicebook navigation' })).toBeVisible();
 	await expect(page.getByRole('link', { name: 'Library', exact: true })).toBeVisible();
 	await expect(page.getByRole('link', { name: 'Voice', exact: true })).toBeVisible();
-	await expect(page.getByRole('link', { name: 'Storage', exact: true })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'LLM', exact: true })).toBeVisible();
 	await expect(page.getByRole('link', { name: 'System', exact: true })).toBeVisible();
 	await page
 		.getByRole('banner', { name: 'Voicebook header' })
@@ -636,6 +642,7 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		.fill('The playback dock should remain compact, aligned, and fully visible.');
 	await page.getByRole('button', { name: 'Add to library' }).click();
 	await expect(page.getByRole('heading', { name: 'Player spacing check' })).toBeVisible();
+	await page.getByRole('button', { name: 'Open document outline' }).click();
 	await page.getByRole('button', { name: 'Collapse sidebar' }).click();
 	await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
 
@@ -808,15 +815,15 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 	await expect(themeButton).toHaveAccessibleName('Theme: Midnight. Switch to Sunny theme');
 	await themeButton.click();
 	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
-	await expect(themeButton).toHaveAccessibleName('Theme: Sunny. Switch to Cloudy theme');
+	await expect(themeButton).toHaveAccessibleName('Theme: Sunny. Switch to Midnight theme');
 	await themeButton.click();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'cloudy');
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
 	await themeButton.click();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'rainy');
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
 	await page.reload();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'rainy');
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
 	await expect(page.getByRole('button', { name: /^Theme:/ })).toHaveAccessibleName(
-		'Theme: Rainy. Switch to Midnight theme'
+		'Theme: Sunny. Switch to Midnight theme'
 	);
 	await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toHaveCount(0);
 	await expect(page.getByRole('link', { name: 'Open Voicebook on GitHub' })).toHaveAttribute(
@@ -1111,7 +1118,6 @@ test('renders technical Markdown and zooms only the document beneath the navbar'
 	expect(Math.abs(geometry.canvasRight - geometry.stageRight)).toBeLessThan(1);
 	expect(geometry.headerBackground).not.toBe(geometry.rootBackground);
 
-	await page.getByRole('button', { name: 'Close document outline' }).click();
 	await expect(page.getByRole('complementary', { name: 'Document outline' })).toHaveCount(0);
 	await page.getByRole('button', { name: 'Open document outline' }).click();
 	await expect(page.getByRole('complementary', { name: 'Document outline' })).toBeVisible();
@@ -1122,10 +1128,10 @@ test('renders technical Markdown and zooms only the document beneath the navbar'
 			getComputedStyle(element).getPropertyValue('--document-canvas-width')
 		)
 	}));
-	await page.getByRole('button', { name: 'Zoom document in' }).click();
-	await expect(
-		page.getByRole('button', { name: 'Reset document zoom, currently 110%' })
-	).toBeVisible();
+	await page.getByRole('button', { name: 'Document zoom 100 percent' }).click();
+	await page.getByRole('slider', { name: 'Document zoom' }).fill('110');
+	await expect(page.getByRole('button', { name: 'Document zoom 110 percent' })).toBeVisible();
+	await page.keyboard.press('Escape');
 	const afterZoom = await canvas.evaluate((element) => ({
 		fontSize: Number.parseFloat(getComputedStyle(element).fontSize),
 		canvasWidth: Number.parseFloat(
@@ -1138,13 +1144,10 @@ test('renders technical Markdown and zooms only the document beneath the navbar'
 		await header.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize))
 	).toBe(geometry.headerFontSize);
 	await page.reload();
-	await expect(
-		page.getByRole('button', { name: 'Reset document zoom, currently 110%' })
-	).toBeVisible();
-	await page.getByRole('button', { name: 'Reset document zoom, currently 110%' }).click();
-	await expect(
-		page.getByRole('button', { name: 'Reset document zoom, currently 100%' })
-	).toBeVisible();
+	const zoomTrigger = page.getByRole('button', { name: 'Document zoom 110 percent' });
+	await expect(zoomTrigger).toBeVisible();
+	await zoomTrigger.dblclick();
+	await expect(page.getByRole('button', { name: 'Document zoom 100 percent' })).toBeVisible();
 });
 
 test('renders nested Markdown extensions as safe semantic document content', async ({ page }) => {
@@ -1242,6 +1245,7 @@ test('table of contents moves the reading canvas and closes its compact drawer',
 	});
 
 	const canvas = page.locator('.reading-canvas');
+	await page.getByRole('button', { name: 'Open document outline' }).click();
 	const outline = page.getByRole('complementary', { name: 'Document outline' });
 	const tableOfContents = page.getByRole('navigation', { name: 'Table of contents' });
 	const openingSection = tableOfContents.getByRole('button', {

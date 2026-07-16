@@ -133,8 +133,30 @@
 	}
 
 	async function download(): Promise<void> {
-		if (!player.isDocumentPrepared || busy) return;
+		if (busy || !player.book || player.isGeneratingAll) return;
 		closeMenu();
+		// Not everything is generated yet: confirm, prepare the rest from
+		// cache-misses, then stitch and save.
+		if (!player.isDocumentPrepared) {
+			const remaining = player.book.segments.length;
+			if (
+				!confirm(
+					`Some of the ${remaining} passages still need audio. Generate the missing ones now and download the MP3 when done?`
+				)
+			)
+				return;
+			downloading = true;
+			announcement = 'Generating the remaining passages…';
+			try {
+				await player.generateAll();
+			} finally {
+				downloading = false;
+			}
+			if (!player.isDocumentPrepared) {
+				announcement = 'Audio generation did not finish, so no MP3 was created.';
+				return;
+			}
+		}
 		downloading = true;
 		downloadProgress = 0;
 		announcement = 'Creating the document MP3.';
@@ -311,7 +333,7 @@
 				class="menu-item"
 				type="button"
 				role="menuitem"
-				disabled={!player.isDocumentPrepared || busy}
+				disabled={busy || player.isGeneratingAll || !speechReady}
 				aria-busy={downloading}
 				onclick={() => void download()}
 			>
@@ -325,7 +347,7 @@
 						{downloading ? `Creating MP3 · ${Math.round(downloadProgress)}%` : 'Download MP3'}
 					</strong>
 					<small
-						>{player.isDocumentPrepared ? 'Whole document' : 'Prepare the document first'}</small
+						>{player.isDocumentPrepared ? 'Whole document' : 'Generates missing audio first'}</small
 					>
 				</span>
 			</button>

@@ -186,6 +186,23 @@
 		);
 	}
 
+	let bookmarkedSegments = $derived(
+		new SvelteSet((book?.bookmarks ?? []).map((bookmark) => bookmark.segmentId))
+	);
+
+	/** Rendered pieces reference the FIRST word sharing a display range — a
+	 * construct's replacement maps several spoken words onto one span. Route
+	 * the live word index to that representative so the whole expression
+	 * stays lit for every word of its reading. */
+	function displayWordIndex(segment: SpeechSegment, wordIndex: number): number | undefined {
+		const active = segment.words[wordIndex];
+		if (!active) return undefined;
+		const first = segment.words.findIndex(
+			(word) => word.start === active.start && word.end === active.end
+		);
+		return first >= 0 ? first : wordIndex;
+	}
+
 	/* ── Construct description panels ─────────────────────────────────────── */
 
 	let llmAvailable = $derived(narrationState.engineAvailable);
@@ -593,13 +610,18 @@
 
 {#snippet renderSegment(block: DocumentBlock, segment: SpeechSegment)}
 	{@const isActive = activeSegmentId === segment.id}
+	{#if bookmarkedSegments.has(segment.id)}
+		<span class="margin-bookmark" aria-hidden="true" title="Bookmarked">
+			<Bookmark size={12} fill="currentColor" strokeWidth={1.6} />
+		</span>
+	{/if}
 	<span
 		class="speech-segment"
 		class:active={isActive}
 		role="button"
 		tabindex="0"
 		aria-label={segment.text}
-		title="Play narration from this passage"
+		title="Play from here"
 		data-segment-id={segment.id}
 		{@attach trackSegment(segment.id)}
 	>
@@ -607,7 +629,7 @@
 			<InlineText
 				run={inline.run}
 				pieces={inline.pieces}
-				activeWordIndex={isActive ? player.currentWordIndex : undefined}
+				activeWordIndex={isActive ? displayWordIndex(segment, player.currentWordIndex) : undefined}
 			/>
 		{/each}
 	</span>
@@ -691,7 +713,7 @@
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || 'Diagram'}
-			title="Play narration for this diagram"
+			title="Play from here"
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
@@ -700,6 +722,7 @@
 					<ConstructPanel
 						noun="Diagram"
 						sourceLabel="Diagram source"
+						sourceLanguage="mermaid"
 						source={block.text}
 						items={[panelItem(block.id, block.id)]}
 						onEdit={editConstruct}
@@ -719,7 +742,7 @@
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || 'Equation'}
-			title="Play narration for this equation"
+			title="Play from here"
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
@@ -728,6 +751,7 @@
 					<ConstructPanel
 						noun="Equation"
 						sourceLabel="LaTeX source"
+						sourceLanguage="latex"
 						source={block.text}
 						items={[panelItem(block.id, block.id)]}
 						onEdit={editConstruct}
@@ -805,7 +829,7 @@
 						class="construct-row"
 						class:active={activeConstructIds.includes(`${block.id}:rh`)}
 						tabindex="0"
-						title="Play narration for this table"
+						title="Play from here"
 						data-segment-id={headerSegs[0]?.id}
 						{@attach trackConstruct(headerSegs.map((segment) => segment.id))}
 					>
@@ -824,7 +848,7 @@
 							class:active={activeConstructIds.includes(`${block.id}:r${rowIndex}`)}
 							class:narration-pending={rowSegs[0]?.narration?.pending}
 							tabindex="0"
-							title="Play narration for this row"
+							title="Play from here"
 							data-segment-id={rowSegs[0]?.id}
 							{@attach trackConstruct(rowSegs.map((segment) => segment.id))}
 						>
@@ -840,6 +864,7 @@
 			<ConstructPanel
 				noun="Table"
 				sourceLabel="Markdown source"
+				sourceLanguage="markdown"
 				source={tableMarkdown(block.table)}
 				items={tablePanelItems(block)}
 				onEdit={editConstruct}
@@ -937,7 +962,7 @@
 		{/if}
 
 		<section class="reader-stage">
-			{#if !installed}
+			{#if !installed && !providersState.elevenLabsReady}
 				<ModelInstallPrompt compact />
 			{/if}
 
@@ -1919,6 +1944,32 @@
 	.table-region td,
 	.table-region th {
 		overflow-wrap: anywhere;
+	}
+
+	.document-body p,
+	.document-body li {
+		position: relative;
+	}
+
+	/* A bookmarked passage leaves a quiet mark in the reading margin, aligned
+	 * with the line it starts on. */
+	.margin-bookmark {
+		position: absolute;
+		left: -2.1em;
+		display: inline-grid;
+		width: 1.4em;
+		height: 1.4em;
+		place-items: center;
+		border-radius: 50%;
+		margin-top: 0.12em;
+		background: var(--bookmark-soft);
+		color: var(--bookmark);
+		opacity: 0.85;
+	}
+
+	.margin-bookmark :global(svg) {
+		width: 0.72em;
+		height: 0.72em;
 	}
 
 	.speech-segment {

@@ -925,16 +925,19 @@ export class VoicebookPlayer {
 
 	private async advanceAfterEnd(): Promise<void> {
 		this.isPlaying = false;
-		this.position = 0;
 		if (!this.book || this.currentSegmentIndex >= this.book.segments.length - 1) {
 			this.currentSegmentIndex = Math.max(
 				0,
 				this.book?.segments.length ? this.book.segments.length - 1 : 0
 			);
+			// The document finished: park the playhead at the very end instead
+			// of rewinding to the last passage's start.
+			this.position = this.currentDuration;
 			await this.persistPosition(true);
 			if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
 			return;
 		}
+		this.position = 0;
 		this.currentSegmentIndex += 1;
 		this.currentWordIndex = 0;
 		this.notifySegmentChange();
