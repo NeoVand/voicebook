@@ -979,6 +979,21 @@ export function repeatedEdgeLines(pages: string[][]): Set<string> {
 	);
 }
 
+/** Join per-page LiteParse output into one markdown document, preferring the
+ * structured markdown and falling back to each page's plain text. */
+export function liteparsePageMarkdown(pages: Array<{ markdown?: string; text?: string }>): string {
+	return pages
+		.map((page) => page.markdown?.trim() || page.text?.trim() || '')
+		.filter(Boolean)
+		.join('\n\n');
+}
+
+/** A text layer this thin means the pages are scans, not embedded text. */
+export function pdfLooksScanned(markdown: string, pageCount: number): boolean {
+	const letters = markdown.replace(/[^\p{L}\p{N}]/gu, '').length;
+	return letters < Math.max(24, pageCount * 8);
+}
+
 /**
  * Preferred PDF path: LiteParse (run-llama's wasm extractor) converts the
  * whole document to markdown — headings, lists, and tables land in the same
@@ -1007,12 +1022,8 @@ async function parsePdfWithLiteparse(file: File): Promise<ParsedSource | null> {
 		} finally {
 			parser.free();
 		}
-		const markdown = result.pages
-			.map((page) => page.markdown?.trim() || page.text?.trim() || '')
-			.filter(Boolean)
-			.join('\n\n');
-		const letters = markdown.replace(/[^\p{L}\p{N}]/gu, '').length;
-		if (letters < Math.max(24, result.pages.length * 8)) {
+		const markdown = liteparsePageMarkdown(result.pages);
+		if (pdfLooksScanned(markdown, result.pages.length)) {
 			throw new ImportError(
 				'This PDF appears to be scanned. OCR support is planned, but is not part of this release.',
 				'scanned-pdf'
