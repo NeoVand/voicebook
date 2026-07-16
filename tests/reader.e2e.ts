@@ -1133,10 +1133,14 @@ test('renders technical Markdown and zooms only the document beneath the navbar'
 	await expect(
 		page.getByRole('figure', { name: 'Mathematical equation' }).locator('.katex-display')
 	).toBeVisible();
-	const code = page.locator('figure.code-block code.hljs');
+	// The construct panel nests a second highlighted copy of the source, so
+	// target the figure's own <pre> directly.
+	const code = page.locator('figure.code-block > pre > code');
 	await expect(code).toContainText('const answer: number = 42;');
 	await expect(code.locator('.hljs-keyword')).toHaveText('const');
 	await expect(page.getByRole('button', { name: 'Copy code' })).toBeVisible();
+	// Code fences narrate: the snippet has a spoken fallback and a panel.
+	await expect(page.getByText('Code source & spoken text')).toBeVisible();
 	await expect(page.getByRole('complementary', { name: 'Footnote privacy' })).toContainText(
 		'Nothing is uploaded.'
 	);

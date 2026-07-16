@@ -64,11 +64,32 @@ describe('speech segmentation', () => {
 		expect(segments[1].text).toContain('Still one unit');
 	});
 
-	it('skips non-speaking content and code unless enabled', () => {
+	it('narrates code blocks and reads them verbatim only when enabled', () => {
 		const code = block({ kind: 'code', text: 'const answer = 42;', speak: false });
 		const silent = block({ id: 'silent', speak: false });
-		expect(segmentBlocks([code, silent])).toEqual([]);
-		expect(segmentBlocks([code], true)).toHaveLength(1);
+		const narrated = segmentBlocks([code, silent]);
+		expect(narrated).toHaveLength(1);
+		expect(narrated[0]).toMatchObject({
+			id: 'b0:n0',
+			narration: { constructIds: ['b0'], kind: 'construct', constructKind: 'code-block' }
+		});
+		// Short plain snippets fall back to their own text; verbatim mode still
+		// reads the raw source directly.
+		expect(narrated[0].normalizedText).toBe('const answer = 42;.');
+		expect(segmentBlocks([code], true)[0].narration).toBeUndefined();
+	});
+
+	it('announces real code and long snippets instead of spelling them', () => {
+		const python = block({
+			id: 'py',
+			kind: 'code',
+			codeLanguage: 'python',
+			text: 'def mean(xs):\n    return sum(xs) / len(xs)',
+			speak: false
+		});
+		const segments = segmentBlocks([python]);
+		expect(segments).toHaveLength(1);
+		expect(segments[0].normalizedText).toBe('A python code snippet with 2 lines is shown here.');
 	});
 
 	it('splits unusually long sentences at clause boundaries', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	codeBlockFallback,
 	NARRATION_PROMPT_VERSION,
 	hashNarrationSource,
 	inlineConstructSpans,
@@ -61,6 +62,22 @@ describe('fallbacks', () => {
 			'A sequence diagram is shown here.'
 		);
 		expect(mermaidFallback('%% nothing known')).toBe('A diagram is shown here.');
+	});
+
+	it('reads short plain-text snippets verbatim and announces real code', () => {
+		expect(codeBlockFallback('+1 per second alive\n-100 if eaten', 'txt')).toBe(
+			'+1 per second alive -100 if eaten.'
+		);
+		expect(codeBlockFallback('def mean(xs):\n    return sum(xs) / len(xs)', 'python')).toBe(
+			'A python code snippet with 2 lines is shown here.'
+		);
+		// Symbol-heavy or long plain text announces itself too.
+		expect(codeBlockFallback('<<<>>> ||| ### $$$', 'txt')).toBe(
+			'A text snippet with 1 line is shown here.'
+		);
+		expect(codeBlockFallback(`${'many words here '.repeat(20)}end`)).toBe(
+			'A text snippet with 1 line is shown here.'
+		);
 	});
 
 	it('announces table columns and zips rows with headers', () => {

@@ -18,6 +18,7 @@
 	import typescript from 'highlight.js/lib/languages/typescript';
 	import xml from 'highlight.js/lib/languages/xml';
 	import yaml from 'highlight.js/lib/languages/yaml';
+	import type { Snippet } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 
 	hljs.registerLanguage('bash', bash);
@@ -42,6 +43,8 @@
 		id: string;
 		source: string;
 		language?: string;
+		/** Optional construct-panel snippet (the spoken-description editor). */
+		panel?: Snippet;
 	}
 
 	const aliases: Record<string, string> = {
@@ -62,7 +65,7 @@
 		yml: 'yaml'
 	};
 
-	let { id, source, language }: Props = $props();
+	let { id, source, language, panel }: Props = $props();
 	let copyState = $state<'idle' | 'copied' | 'error'>('idle');
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 	let lineCount = $derived(source ? source.split('\n').length : 0);
@@ -107,6 +110,7 @@
 		</button>
 	</figcaption>
 	<pre><code {@attach highlightedCode(source, language)}></code></pre>
+	{#if panel}{@render panel()}{/if}
 </figure>
 
 <style>
