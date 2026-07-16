@@ -21,6 +21,7 @@
 		PanelLeftOpen,
 		RefreshCw,
 		Settings2,
+		Sparkles,
 		Sun,
 		ZoomIn,
 		ZoomOut,
@@ -487,6 +488,20 @@
 			>
 				<Cpu size={17} />
 				<span>Voice</span>
+			</a>
+			<a
+				class="nav-link"
+				class:active={page.url.pathname.startsWith(settingsHref) && settingsSection === 'narration'}
+				href={resolve('/settings?section=narration')}
+				aria-label="Narration"
+				aria-current={page.url.pathname.startsWith(settingsHref) && settingsSection === 'narration'
+					? 'page'
+					: undefined}
+				data-tooltip="Narration"
+				onclick={closeNavigation}
+			>
+				<Sparkles size={17} />
+				<span>Narration</span>
 			</a>
 			<a
 				class="nav-link"

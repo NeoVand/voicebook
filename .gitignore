@@ -36,3 +36,7 @@ coverage
 .mcp.json
 CLAUDE.md
 skills-lock.json
+
+# Local agent tooling
+.claude/
+.playwright-mcp/

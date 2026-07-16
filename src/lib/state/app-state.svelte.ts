@@ -94,7 +94,10 @@ async function migrateDocumentNormalization(
 			new File([source], document.sourceName, { type: document.mimeType })
 		);
 		reparsed.includeCode = document.includeCode;
-		reparsed.segments = segmentBlocks(reparsed.blocks, reparsed.includeCode);
+		// Narrations survive re-parsing; block-id shifts are healed by the
+		// content-hash rescue in reconcileNarrations on the next document open.
+		reparsed.narrations = document.narrations;
+		reparsed.segments = segmentBlocks(reparsed.blocks, reparsed.includeCode, reparsed.narrations);
 		reparsed.id = document.id;
 		reparsed.fingerprint = document.fingerprint;
 		reparsed.createdAt = document.createdAt;

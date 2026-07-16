@@ -216,6 +216,28 @@ export async function listAudioVariants(documentId: string): Promise<AudioVarian
 	}));
 }
 
+/**
+ * Purge every stored variant of the given segments. Used when a narration
+ * rewrite changes a segment's spoken text: any cached audio for that segment
+ * id is stale regardless of voice, backend, or quality settings.
+ */
+export async function deleteAudioForSegments(
+	documentId: string,
+	segmentIds: string[]
+): Promise<void> {
+	if (!segmentIds.length) return;
+	const ids = new Set(segmentIds);
+	const db = await database();
+	const records = (await db.getAllFromIndex('audio', 'documentId', documentId)).filter((record) =>
+		ids.has(record.segmentId)
+	);
+	if (!records.length) return;
+	const transaction = db.transaction('audio', 'readwrite');
+	await Promise.all(records.map((record) => transaction.store.delete(record.key)));
+	await transaction.done;
+	await Promise.all(records.flatMap((record) => (record.path ? [removeOpfs(record.path)] : [])));
+}
+
 export async function clearGeneratedAudio(documentId?: string): Promise<void> {
 	const db = await database();
 	const records = documentId

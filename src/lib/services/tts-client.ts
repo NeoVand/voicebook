@@ -45,6 +45,12 @@ export class TtsClient {
 	backend: 'webgpu' | 'wasm' = 'wasm';
 	dtype = 'q8';
 
+	/** True while any load/synthesis request is in flight — the narration
+	 * scheduler yields the GPU to speech work while this holds. */
+	get busy(): boolean {
+		return this.pending.size > 0;
+	}
+
 	private ensureWorker(): Worker {
 		if (!this.worker) {
 			const speechWorker = new Worker(new URL('./tts.worker.ts', import.meta.url), {

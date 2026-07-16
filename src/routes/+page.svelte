@@ -8,14 +8,17 @@
 		FileText,
 		FileUp,
 		Plus,
+		Sparkles,
 		Trash2,
 		X
 	} from '@lucide/svelte';
+	import { onMount } from 'svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
 	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
 	import type { DocumentKind, NormalizedDocument } from '$lib/domain/types';
 	import { appState } from '$lib/state/app-state.svelte';
+	import { llmState } from '$lib/state/llm.svelte';
 
 	let fileInput: HTMLInputElement | undefined;
 	let dragging = $state(false);
@@ -24,6 +27,30 @@
 	let pasteTitle = $state('');
 	let pasteText = $state('');
 	let modelInstalled = $derived(appState.installedModels.includes('supertonic-3'));
+	// The unified installer downloads the voice engine first; keep it on
+	// screen while the narration model stage is still fetching a model that
+	// has never been installed, so its progress stays visible.
+	let llmFirstDownloadActive = $derived(
+		llmState.activeModelId !== null &&
+			!llmState.installedModels.includes(llmState.activeModelId) &&
+			(llmState.phase === 'downloading' ||
+				llmState.phase === 'loading' ||
+				llmState.phase === 'probing')
+	);
+	let showSetup = $derived(!modelInstalled || llmFirstDownloadActive);
+	// Existing installs predate the narration model: offer it once, dismissibly.
+	let narrationOffer = $derived(
+		modelInstalled &&
+			!llmFirstDownloadActive &&
+			llmState.initialized &&
+			llmState.eligible &&
+			llmState.installedModels.length === 0 &&
+			!llmState.narrationHintDismissed
+	);
+
+	onMount(() => {
+		void llmState.initialize();
+	});
 
 	function captureFileInput(node: HTMLInputElement): () => void {
 		fileInput = node;
@@ -131,7 +158,7 @@
 		ondragleave={onDragLeave}
 		ondrop={onDrop}
 	>
-		{#if modelInstalled && appState.documents.length}
+		{#if !showSetup && appState.documents.length}
 			<header class="page-heading">
 				<div>
 					<p class="eyebrow">Local library</p>
@@ -164,11 +191,28 @@
 			onchange={onFileChange}
 		/>
 
-		{#if !modelInstalled}
+		{#if showSetup}
 			<div class="library-welcome setup-welcome">
 				<ModelInstallPrompt />
 			</div>
 		{:else if appState.documents.length}
+			{#if narrationOffer}
+				<aside class="narration-offer" aria-label="Narration setup suggestion">
+					<Sparkles size={16} />
+					<p>
+						<strong>New: spoken equations, tables, and diagrams.</strong>
+						A small on-device model can rewrite them into words the reader voice can speak.
+					</p>
+					<div class="narration-offer-actions">
+						<a class="button primary" href={resolve('/settings?section=narration')}>
+							Set up narration
+						</a>
+						<button class="button" type="button" onclick={() => void llmState.dismissHint()}>
+							Not now
+						</button>
+					</div>
+				</aside>
+			{/if}
 			<section class="library-collection" aria-labelledby="documents-heading">
 				<header class="library-meta">
 					<div>
@@ -420,6 +464,50 @@
 		padding: 0 16px;
 		font-size: 11px;
 		white-space: nowrap;
+	}
+
+	.narration-offer {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 12px 16px;
+		border: 1px solid color-mix(in srgb, var(--primary) 26%, var(--line));
+		border-radius: 10px;
+		margin-bottom: 16px;
+		background: color-mix(in srgb, var(--primary-soft) 58%, transparent);
+		color: var(--text-soft);
+	}
+
+	.narration-offer > :global(svg) {
+		flex: none;
+		color: var(--primary);
+	}
+
+	.narration-offer p {
+		min-width: 0;
+		margin: 0;
+		flex: 1;
+		font-size: 11px;
+		line-height: 1.5;
+	}
+
+	.narration-offer p strong {
+		display: block;
+		color: var(--text);
+		font-weight: 650;
+	}
+
+	.narration-offer-actions {
+		display: flex;
+		flex: none;
+		gap: 8px;
+	}
+
+	@media (max-width: 680px) {
+		.narration-offer {
+			flex-direction: column;
+			align-items: flex-start;
+		}
 	}
 
 	.library-collection {
