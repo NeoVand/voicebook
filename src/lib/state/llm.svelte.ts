@@ -12,12 +12,19 @@ import { deleteLlmModelAssets } from '$lib/services/llm/llm-cache';
 import type { NarrationPromptHashes } from '$lib/domain/narration';
 import {
 	DEFAULT_NARRATION_PROMPTS,
+	NARRATION_GENERATION_PARAMS,
 	narrationPromptHashes,
 	resolveNarrationPrompts,
 	type NarrationPromptKey,
 	type NarrationPromptOverrides,
 	type NarrationPromptTemplates
 } from '$lib/domain/narration-prompts';
+import {
+	getNarrationPreset,
+	isNarrationPresetId,
+	type NarrationParamsMap,
+	type NarrationPresetId
+} from '$lib/domain/narration-presets';
 import { getSetting, setSetting } from '$lib/services/repository';
 import { narrationRuntimePolicy, type NarrationRuntimePolicy } from '$lib/services/runtime-policy';
 import { appState } from './app-state.svelte';
@@ -52,15 +59,41 @@ export class LlmState {
 	acceptedLicenses = $state<string[]>([]);
 	narrationEnabled = $state(true);
 	narrationHintDismissed = $state(false);
+	/** Active description style; 'custom' uses the user's edited templates. */
+	promptPreset = $state<NarrationPresetId>('balanced');
 	/** User-edited prompt templates; absent keys fall back to the defaults. */
 	promptOverrides = $state<NarrationPromptOverrides>({});
 
+	/** The templates the active preset actually sends. */
 	get promptTemplates(): NarrationPromptTemplates {
-		return resolveNarrationPrompts(this.promptOverrides);
+		const preset = getNarrationPreset(this.promptPreset);
+		return preset ? preset.prompts : resolveNarrationPrompts(this.promptOverrides);
+	}
+
+	/** What the rewriter receives as template overrides. */
+	get activePromptOverrides(): NarrationPromptOverrides {
+		const preset = getNarrationPreset(this.promptPreset);
+		return preset ? preset.prompts : this.promptOverrides;
+	}
+
+	/** Per-kind token budgets for the active preset (custom edits keep the
+	 * balanced budgets — they change wording, not spend). */
+	get generationParams(): NarrationParamsMap {
+		return getNarrationPreset(this.promptPreset)?.params ?? NARRATION_GENERATION_PARAMS;
 	}
 
 	get promptHashes(): NarrationPromptHashes {
-		return narrationPromptHashes(this.promptOverrides);
+		// Budgets are part of a style's identity: switching presets that share
+		// a template but differ in spend (Concise's reading-only equations)
+		// still re-queues lazily.
+		const base = narrationPromptHashes(this.activePromptOverrides);
+		const params = this.generationParams;
+		const hashes: NarrationPromptHashes = {};
+		for (const [kind, hash] of Object.entries(base) as Array<[keyof NarrationParamsMap, string]>) {
+			const budget = params[kind];
+			hashes[kind] = `${hash}:${budget.maxNewTokens}:${budget.maxChars}:${budget.mathProse ?? 's'}`;
+		}
+		return hashes;
 	}
 
 	get selectedModel(): LlmModelSpec {
@@ -113,14 +146,15 @@ export class LlmState {
 
 	private async load(): Promise<void> {
 		try {
-			const [installed, selected, accepted, enabled, hintDismissed, promptOverrides] =
+			const [installed, selected, accepted, enabled, hintDismissed, promptOverrides, preset] =
 				await Promise.all([
 					getSetting<string[]>('llm-installed-models', []),
 					getSetting<string | null>('llm-selected-model', null),
 					getSetting<string[]>('llm-accepted-licenses', []),
 					getSetting('narration-enabled', true),
 					getSetting('narration-hint-dismissed', false),
-					getSetting<NarrationPromptOverrides>('narration-prompt-overrides', {})
+					getSetting<NarrationPromptOverrides>('narration-prompt-overrides', {}),
+					getSetting<string>('narration-preset', 'balanced')
 				]);
 			this.installedModels = installed.filter((id) => getLlmModel(id) !== null);
 			this.selectedModelId =
@@ -129,13 +163,32 @@ export class LlmState {
 			this.narrationEnabled = Boolean(enabled);
 			this.narrationHintDismissed = Boolean(hintDismissed);
 			this.promptOverrides = promptOverrides ?? {};
+			this.promptPreset = isNarrationPresetId(preset) ? preset : 'balanced';
 		} finally {
 			this.initialized = true;
 		}
 	}
 
-	/** Save a user-edited prompt template; text equal to the default (or empty)
-	 * removes the override. Affected narrations re-queue on next document open. */
+	/** Choose a description style; affected narrations re-queue lazily. */
+	async setPromptPreset(preset: NarrationPresetId): Promise<void> {
+		this.promptPreset = preset;
+		await setSetting('narration-preset', preset);
+	}
+
+	/** Seed the Custom style from the active preset's templates and switch to
+	 * it — the entry point for "customize this preset". */
+	async customizeActivePreset(): Promise<void> {
+		const preset = getNarrationPreset(this.promptPreset);
+		if (preset) {
+			this.promptOverrides = { ...preset.prompts };
+			await setSetting('narration-prompt-overrides', { ...this.promptOverrides });
+		}
+		await this.setPromptPreset('custom');
+	}
+
+	/** Save a user-edited prompt template into the Custom style; text equal to
+	 * the default (or empty) removes the override. Affected narrations
+	 * re-queue on next document open. */
 	async setPromptTemplate(key: NarrationPromptKey, text: string): Promise<void> {
 		const trimmed = text.replace(/\r\n/g, '\n').trim();
 		const next: NarrationPromptOverrides = { ...this.promptOverrides };
@@ -146,6 +199,7 @@ export class LlmState {
 		}
 		this.promptOverrides = next;
 		await setSetting('narration-prompt-overrides', { ...next });
+		if (this.promptPreset !== 'custom') await this.setPromptPreset('custom');
 	}
 
 	async setLicenseAcceptance(modelId: string, accepted: boolean): Promise<void> {

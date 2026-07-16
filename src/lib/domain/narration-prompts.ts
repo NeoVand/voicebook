@@ -79,6 +79,10 @@ export interface NarrationGenerationParams {
 	/** Per-kind sampling temperature; 0 = greedy. Math kinds decode greedily —
 	 * exemplar faithfulness matters more than variety there. */
 	temperature: number;
+	/** Equation meanings: 'sentence' keeps only the first sentence (default);
+	 * 'explanation' (the educational preset) allows a few sentences up to
+	 * maxChars. */
+	mathProse?: 'sentence' | 'explanation';
 }
 
 export const NARRATION_GENERATION_PARAMS: Record<
@@ -289,7 +293,11 @@ const FORBIDDEN_OUTPUT = /[\\=+^{}[\]|<>~$&@%()/]|[∀-⋿⟨⟩]|\d+\s*[*·]\s*
  * output is unusable (the caller retries once with a strict prompt, then
  * falls back to the deterministic narration).
  */
-export function sanitizeNarration(raw: string, kind: NarrationConstructKind): string | null {
+export function sanitizeNarration(
+	raw: string,
+	kind: NarrationConstructKind,
+	params: NarrationGenerationParams = NARRATION_GENERATION_PARAMS[kind]
+): string | null {
 	let text = (raw ?? '').replace(/<think>[\s\S]*?<\/think>/g, ' ');
 	text = text.replace(/<[^>\n]{0,120}>/g, ' ');
 	const blank = text.search(/\n\s*\n/);
@@ -316,7 +324,7 @@ export function sanitizeNarration(raw: string, kind: NarrationConstructKind): st
 	// than truncated mid-thought.
 	if (kind === 'math-inline') {
 		text = text.replace(/[.!?]+$/, '').trim();
-		if (text.length > NARRATION_GENERATION_PARAMS[kind].maxChars) return null;
+		if (text.length > params.maxChars) return null;
 		return text || null;
 	}
 
@@ -335,10 +343,22 @@ export function sanitizeNarration(raw: string, kind: NarrationConstructKind): st
 		if (!firstSentence || !/\b(?:is|are|stands for|means|denotes)\b/i.test(firstSentence)) {
 			return null;
 		}
-		return firstSentence.trim();
+		// The educational preset keeps the whole explanation (up to its cap,
+		// trimmed at a sentence boundary); everything else keeps one sentence.
+		if (params.mathProse !== 'explanation') return firstSentence.trim();
+		if (params.maxChars > 0 && text.length > params.maxChars) {
+			const slice = text.slice(0, params.maxChars);
+			const sentenceEnd = Math.max(
+				slice.lastIndexOf('. '),
+				slice.lastIndexOf('! '),
+				slice.lastIndexOf('? ')
+			);
+			text = sentenceEnd > 0 ? slice.slice(0, sentenceEnd + 1) : firstSentence;
+		}
+		return text.trim();
 	}
 
-	const cap = NARRATION_GENERATION_PARAMS[kind].maxChars;
+	const cap = params.maxChars;
 	if (cap > 0 && text.length > cap) {
 		const slice = text.slice(0, cap);
 		const sentenceEnd = Math.max(

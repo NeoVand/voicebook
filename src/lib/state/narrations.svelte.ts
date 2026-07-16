@@ -414,7 +414,8 @@ export class NarrationState {
 		const request = {
 			construct,
 			documentContext: documentContextFor(book?.blocks ?? [], construct),
-			promptOverrides: llmState.promptOverrides,
+			promptOverrides: llmState.activePromptOverrides,
+			params: llmState.generationParams[construct.kind],
 			engine
 		};
 		try {

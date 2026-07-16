@@ -8,11 +8,21 @@
 import type { LlmChatMessage } from './llm/llm-client';
 import { PROVIDER_LABELS, type CloudLlmProvider } from '$lib/domain/provider-catalog';
 
+export interface CloudImageAttachment {
+	/** e.g. 'image/png'. */
+	mediaType: string;
+	/** Raw base64 without a data: prefix. */
+	data: string;
+}
+
 export interface CloudGenerateOptions {
 	maxNewTokens?: number;
 	temperature?: number;
 	signal?: AbortSignal;
 	timeoutMs?: number;
+	/** Attached to the final user turn — every offered provider is
+	 * vision-capable. */
+	image?: CloudImageAttachment;
 }
 
 export class CloudLlmError extends Error {
@@ -48,14 +58,29 @@ export function anthropicRequestBody(
 	messages: LlmChatMessage[],
 	options: CloudGenerateOptions = {}
 ): Record<string, unknown> {
+	const turnList = turns(messages);
+	const lastUser = turnList.findLastIndex((message) => message.role === 'user');
 	return {
 		model,
 		max_tokens: cloudTokenBudget(options.maxNewTokens),
 		temperature: Math.max(0, Math.min(1, options.temperature ?? 0.2)),
 		system: systemText(messages),
-		messages: turns(messages).map((message) => ({
+		messages: turnList.map((message, index) => ({
 			role: message.role,
-			content: message.content
+			content:
+				options.image && index === lastUser
+					? [
+							{
+								type: 'image',
+								source: {
+									type: 'base64',
+									media_type: options.image.mediaType,
+									data: options.image.data
+								}
+							},
+							{ type: 'text', text: message.content }
+						]
+					: message.content
 		}))
 	};
 }
@@ -69,11 +94,24 @@ export function openaiRequestBody(
 	options: CloudGenerateOptions = {},
 	reasoningEffort: string | null = 'none'
 ): Record<string, unknown> {
+	const lastUser = messages.findLastIndex((message) => message.role === 'user');
 	return {
 		model,
 		max_completion_tokens: cloudTokenBudget(options.maxNewTokens),
 		...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-		messages: messages.map((message) => ({ role: message.role, content: message.content }))
+		messages: messages.map((message, index) => ({
+			role: message.role,
+			content:
+				options.image && index === lastUser
+					? [
+							{
+								type: 'image_url',
+								image_url: { url: `data:${options.image.mediaType};base64,${options.image.data}` }
+							},
+							{ type: 'text', text: message.content }
+						]
+					: message.content
+		}))
 	};
 }
 
@@ -84,11 +122,19 @@ export function geminiRequestBody(
 	options: CloudGenerateOptions = {}
 ): Record<string, unknown> {
 	const system = systemText(messages);
+	const turnList = turns(messages);
+	const lastUser = turnList.findLastIndex((message) => message.role === 'user');
 	return {
 		...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-		contents: turns(messages).map((message) => ({
+		contents: turnList.map((message, index) => ({
 			role: message.role === 'assistant' ? 'model' : 'user',
-			parts: [{ text: message.content }]
+			parts:
+				options.image && index === lastUser
+					? [
+							{ inlineData: { mimeType: options.image.mediaType, data: options.image.data } },
+							{ text: message.content }
+						]
+					: [{ text: message.content }]
 		})),
 		generationConfig: {
 			maxOutputTokens: cloudTokenBudget(options.maxNewTokens),

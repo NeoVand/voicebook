@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { liteparsePageMarkdown, pdfLooksScanned } from './importers';
+import { liteparsePageMarkdown, pdfLooksScanned, stripBlanketBold } from './importers';
 
 describe('liteparsePageMarkdown', () => {
 	it('prefers page markdown and falls back to plain text', () => {
@@ -16,6 +16,45 @@ describe('liteparsePageMarkdown', () => {
 	it('returns an empty string for no usable pages', () => {
 		expect(liteparsePageMarkdown([])).toBe('');
 		expect(liteparsePageMarkdown([{ markdown: '', text: '' }])).toBe('');
+	});
+});
+
+describe('stripBlanketBold', () => {
+	it('unwraps body paragraphs when nearly everything is bold', () => {
+		const markdown = [
+			'# Field Notes',
+			'',
+			'**Reinforcement learning studies agents that improve through interaction.**',
+			'',
+			'## Core quantities',
+			'',
+			'**The three quantities below appear in nearly every formulation.**',
+			'',
+			'| Symbol | Name |',
+			'|---|---|',
+			'| S | State |'
+		].join('\n');
+		const cleaned = stripBlanketBold(markdown);
+		expect(cleaned).toContain(
+			'Reinforcement learning studies agents that improve through interaction.'
+		);
+		expect(cleaned).not.toContain('**Reinforcement');
+		// Headings and tables are untouched.
+		expect(cleaned).toContain('# Field Notes');
+		expect(cleaned).toContain('| S | State |');
+	});
+
+	it('leaves selective emphasis alone', () => {
+		const markdown = [
+			'Plain paragraph one.',
+			'',
+			'**A deliberately bold callout.**',
+			'',
+			'Plain paragraph two.',
+			'',
+			'Plain paragraph three with **inline bold** kept.'
+		].join('\n');
+		expect(stripBlanketBold(markdown)).toBe(markdown);
 	});
 });
 
