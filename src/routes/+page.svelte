@@ -174,12 +174,18 @@
 					<p class="subtitle">Everything you add stays private on this device.</p>
 				</div>
 				<div class="library-actions heading-actions">
-					<button class="button library-action" type="button" onclick={() => (pasteOpen = true)}>
+					<button
+						class="button library-action"
+						type="button"
+						data-tour="paste-text"
+						onclick={() => (pasteOpen = true)}
+					>
 						<FileText size={16} /> Paste text
 					</button>
 					<button
 						class="button primary library-action"
 						type="button"
+						data-tour="add-document"
 						onclick={() => fileInput?.click()}
 					>
 						<Plus size={16} /> Add document
@@ -290,6 +296,7 @@
 						<button
 							class="button primary library-action"
 							type="button"
+							data-tour="add-document"
 							disabled={appState.importing}
 							onclick={() => fileInput?.click()}
 						>
@@ -298,6 +305,7 @@
 						<button
 							class="button library-action"
 							type="button"
+							data-tour="paste-text"
 							disabled={appState.importing}
 							onclick={() => (pasteOpen = true)}
 						>

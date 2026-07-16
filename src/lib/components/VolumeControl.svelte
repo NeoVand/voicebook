@@ -34,6 +34,7 @@
 		class="volume-trigger"
 		class:open
 		type="button"
+		data-tour="volume"
 		aria-label={`Volume ${Math.round(volume * 100)} percent`}
 		aria-expanded={open}
 		aria-controls="volume-popover"

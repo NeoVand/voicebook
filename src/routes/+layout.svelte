@@ -6,6 +6,7 @@
 	import { page } from '$app/state';
 	import { base, resolve } from '$app/paths';
 	import {
+		CircleHelp,
 		Cpu,
 		Library,
 		List,
@@ -27,6 +28,7 @@
 	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import GitHubOutline from '$lib/components/GitHubOutline.svelte';
 	import { recordRuntimeEvent } from '$lib/services/runtime-diagnostics';
+	import { startTour, type TourContext } from '$lib/services/tours';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { appearanceState } from '$lib/state/appearance.svelte';
 	import { player } from '$lib/state/player.svelte';
@@ -61,6 +63,19 @@
 	let activeReaderDocumentId = $derived(isReader ? readerDocumentId : null);
 	let readerBook = $derived(
 		isReader ? appState.documents.find((document) => document.id === readerDocumentId) : undefined
+	);
+	let tourContext = $derived<TourContext>(
+		isReader
+			? 'reader'
+			: page.url.pathname.startsWith(resolve('/settings'))
+				? settingsSection === 'llm'
+					? 'llm'
+					: settingsSection === 'appearance'
+						? 'appearance'
+						: settingsSection === 'system' || settingsSection === 'storage'
+							? 'system'
+							: 'voice'
+				: 'library'
 	);
 
 	onMount(() => {
@@ -223,6 +238,7 @@
 					class="icon-button mobile-reader-hidden"
 					class:active={readerChrome.outlineOpen}
 					type="button"
+					data-tour="outline"
 					aria-label={readerChrome.outlineOpen ? 'Close document outline' : 'Open document outline'}
 					aria-controls="document-outline"
 					aria-expanded={readerChrome.outlineOpen}
@@ -237,6 +253,7 @@
 							class="zoom-value"
 							class:open={zoomOpen}
 							type="button"
+							data-tour="zoom"
 							aria-label={`Document zoom ${readerChrome.zoomPercent} percent`}
 							aria-expanded={zoomOpen}
 							aria-controls="zoom-popover"
@@ -276,16 +293,28 @@
 						class="icon-button"
 						class:active={isFullscreen}
 						type="button"
+						data-tour="fullscreen"
 						aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
 						title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
 						onclick={() => void toggleFullscreen()}
 					>
 						{#if isFullscreen}<Shrink size={16} />{:else}<Fullscreen size={16} />{/if}
 					</button>
+					<button
+						class="icon-button"
+						type="button"
+						data-tour="help"
+						aria-label="Show me around"
+						title="Show me around"
+						onclick={() => startTour(tourContext)}
+					>
+						<CircleHelp size={16} />
+					</button>
 				</div>
 				<button
 					class="icon-button"
 					type="button"
+					data-tour="theme"
 					aria-label={`Theme: ${appearanceState.themeSpec.label}. Switch to ${appearanceState.nextThemeSpec.label} theme`}
 					title={`${appearanceState.themeSpec.label} · next: ${appearanceState.nextThemeSpec.label}`}
 					onclick={() => appearanceState.cycleTheme()}
@@ -309,6 +338,17 @@
 			<button
 				class="icon-button"
 				type="button"
+				data-tour="help"
+				aria-label="Show me around"
+				title="Show me around"
+				onclick={() => startTour(tourContext)}
+			>
+				<CircleHelp size={16} />
+			</button>
+			<button
+				class="icon-button"
+				type="button"
+				data-tour="theme"
 				aria-label={`Theme: ${appearanceState.themeSpec.label}. Switch to ${appearanceState.nextThemeSpec.label} theme`}
 				title={`${appearanceState.themeSpec.label} · next: ${appearanceState.nextThemeSpec.label}`}
 				onclick={() => appearanceState.cycleTheme()}

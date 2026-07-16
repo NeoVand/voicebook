@@ -212,6 +212,31 @@ test('switches the open reader document from the sidebar library links', async (
 	await expect(page.getByText('The second document takes over.')).toBeVisible();
 });
 
+test('walks through contextual interface tours from the help button', async ({ page }) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByLabel('Title').fill('Tour stop');
+	await page.getByRole('textbox', { name: 'Text' }).fill('A short document for the tour.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page.getByRole('article', { name: 'Tour stop' })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Show me around' }).click();
+	const popover = page.locator('.driver-popover');
+	await expect(popover).toBeVisible();
+	await expect(popover.locator('.driver-popover-title')).toHaveText('Play');
+	await popover.getByRole('button', { name: 'Next' }).click();
+	await expect(popover.locator('.driver-popover-title')).toHaveText('Audio menu');
+	await page.keyboard.press('Escape');
+	await expect(popover).toHaveCount(0);
+
+	// The same button gives a different tour per surface.
+	await page.goto('./settings/?section=llm');
+	await page.getByRole('button', { name: 'Show me around' }).click();
+	await expect(page.locator('.driver-popover-title')).toHaveText('Descriptions engine');
+	await page.keyboard.press('Escape');
+	await expect(page.locator('.driver-popover')).toHaveCount(0);
+});
+
 test('detects and renders pasted Markdown as structured document content', async ({ page }) => {
 	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text', exact: true }).click();

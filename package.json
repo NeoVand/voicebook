@@ -68,6 +68,7 @@
 		"@lucide/svelte": "1.24.0",
 		"@mediabunny/mp3-encoder": "1.50.8",
 		"@soundtouchjs/audio-worklet": "2.1.0",
+		"driver.js": "^1.7.0",
 		"highlight.js": "^11.11.1",
 		"idb": "8.0.3",
 		"katex": "^0.16.22",

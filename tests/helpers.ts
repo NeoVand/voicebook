@@ -1,6 +1,11 @@
 import type { Page } from '@playwright/test';
 
 export async function installFakeTts(page: Page): Promise<void> {
+	// The first-run reader tour would overlay every test; tests that exercise
+	// the tour trigger it explicitly via the help button instead.
+	await page.addInitScript(() => {
+		localStorage.setItem('voicebook:reader-tour-seen', '1');
+	});
 	await page.addInitScript(() => {
 		interface LoggedWorkerMessage {
 			type: string;

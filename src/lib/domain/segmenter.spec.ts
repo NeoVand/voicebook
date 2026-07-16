@@ -23,11 +23,24 @@ function block(overrides: Partial<DocumentBlock> = {}): DocumentBlock {
 }
 
 describe('speech segmentation', () => {
-	it('normalizes spacing and speaks URL hosts instead of paths', () => {
+	it('never speaks link text — every URL becomes a pointer to the document', () => {
 		expect(normalizeForSpeech(' Read   https://www.example.com/deep/path now. ')).toBe(
-			'Read example.com now.'
+			'Read a link in the document now.'
 		);
-		expect(normalizeForSpeech('Read http://% now')).toBe('Read link now');
+		expect(normalizeForSpeech('Read http://% now')).toBe('Read a link in the document now');
+		expect(normalizeForSpeech('See www.arxiv.org/abs/2301.001, then continue.')).toBe(
+			'See a link in the document, then continue.'
+		);
+		expect(normalizeForSpeech('Clone github.com/NeoVand/voicebook today.')).toBe(
+			'Clone a link in the document today.'
+		);
+		expect(normalizeForSpeech('Both https://a.io/x and https://b.io/y work.')).toBe(
+			'Both a link in the document and a link in the document work.'
+		);
+		// Dotted names without a path are prose, not links.
+		expect(normalizeForSpeech('Node.js reads vite.config.ts fine.')).toBe(
+			'Node.js reads vite.config.ts fine.'
+		);
 	});
 
 	it('keeps exact sentence and source boundaries', () => {

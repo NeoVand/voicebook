@@ -126,6 +126,7 @@
 		class:disabled-state={!enabled}
 		class:open
 		type="button"
+		data-tour="llm-chip"
 		aria-label={working
 			? 'Language model is rewriting visuals for speech. Open description options.'
 			: 'Language model description options'}

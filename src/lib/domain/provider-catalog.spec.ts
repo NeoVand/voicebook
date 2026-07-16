@@ -29,8 +29,8 @@ describe('cloud LLM provider catalog', () => {
 });
 
 describe('elevenlabs model catalog', () => {
-	it('defaults to the highest-quality timestamp-capable model', () => {
-		expect(ELEVENLABS_MODELS[0].id).toBe('eleven_multilingual_v2');
+	it('defaults to the cheapest timestamp-capable model', () => {
+		expect(ELEVENLABS_MODELS[0].id).toBe('eleven_flash_v2_5');
 		// v3 has no with-timestamps support — word highlighting depends on it.
 		expect(ELEVENLABS_MODELS.some((model) => model.id === 'eleven_v3')).toBe(false);
 	});

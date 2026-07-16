@@ -20,14 +20,18 @@ import {
 
 export const MAX_SEGMENT_CHARS = 280;
 
+/** Absolute URLs, www-prefixed ones, and bare domains with a path are all
+ * letter soup when spoken — point the listener at the document instead.
+ * Bare domains without a path stay ("Node.js", "vite.config.ts" and short
+ * mentions like "example.com" are readable and must not be swallowed). */
+const LINK_PATTERN =
+	/(?:https?:\/\/|www\.)[^\s<>()]+|\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+\/[^\s<>()]*/gi;
+
 export function normalizeForSpeech(text: string): string {
 	return text
-		.replace(/https?:\/\/\S+/gi, (url) => {
-			try {
-				return new URL(url).hostname.replace(/^www\./, '');
-			} catch {
-				return 'link';
-			}
+		.replace(LINK_PATTERN, (url) => {
+			const trailer = /[.,;:!?'"\]]+$/.exec(url)?.[0] ?? '';
+			return `a link in the document${trailer}`;
 		})
 		.replace(/\s+/g, ' ')
 		.trim();
