@@ -23,7 +23,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-78a98f.svg" alt="MIT license" /></a>
 </p>
 
-Voicebook is a local-first document reader for people who would rather listen. Add a PDF, Word document, Markdown file, plain-text file, or pasted text and Voicebook turns it into a persistent listening experience with natural speech, precise read-along highlighting, bookmarks, and full playback controls.
+Voicebook is a local-first document reader for people who would rather listen. Add a PDF, Word document, Markdown file, plain-text file, or pasted text and Voicebook turns it into a persistent listening experience with natural speech, precise read-along highlighting, and full playback controls.
 
 There is no account and no Voicebook server. Your documents and generated audio stay on your device.
 
@@ -43,9 +43,8 @@ WebGPU provides the best experience. Voicebook can use a compatibility fallback 
 - Change playback speed from 0.5× to 3× without chipmunk-style pitch shifting.
 - Jump backward or forward ten seconds, seek through the document, or start from selected text.
 - Follow narration with sentence and word highlighting, or scroll independently and return to the narrator.
-- Add semantic bookmarks that survive voice changes and regenerated audio.
 - Prepare an entire document for uninterrupted listening and export completed audio as MP3.
-- Use keyboard shortcuts, Media Session controls, fullscreen reading, document zoom, and four reading themes.
+- Use keyboard shortcuts, Media Session controls, fullscreen reading, document zoom, ten color themes, and four reading fonts.
 - Reopen previously prepared documents while offline.
 
 ## Document support
@@ -70,8 +69,7 @@ Useful shortcuts:
 | --------------------------- | --------------------------- |
 | <kbd>Space</kbd>            | Play or pause               |
 | <kbd>J</kbd> / <kbd>L</kbd> | Back or forward ten seconds |
-| <kbd>B</kbd>                | Add or remove a bookmark    |
-| <kbd>[</kbd> / <kbd>]</kbd> | Previous or next passage    |
+| <kbd>[</kbd> / <kbd>]</kbd> | Slower or faster playback   |
 
 ## Local speech
 
@@ -82,7 +80,7 @@ Generation quality is adjustable from 2 to 16 steps, with 10 steps as the defaul
 ## Private by design
 
 - Documents are processed in the browser and are never uploaded to Voicebook.
-- Books, bookmarks, settings, and progress are stored in IndexedDB.
+- Books, settings, and progress are stored in IndexedDB.
 - Original files and generated audio use browser-managed on-device storage.
 - Model installation contacts Hugging Face; normal reading does not require a Voicebook backend.
 - There is no account, analytics, advertising, or telemetry.

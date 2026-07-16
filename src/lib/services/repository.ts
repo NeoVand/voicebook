@@ -258,6 +258,45 @@ export async function setSetting<T>(key: string, value: T): Promise<void> {
 	await (await database()).put('settings', { key, value });
 }
 
+/**
+ * Factory reset: drop Voicebook's entire local footprint — the database
+ * (documents, audio, settings including API keys), OPFS files, and every
+ * CacheStorage bucket (model weights, app shell). Local preferences such as
+ * the theme go too. The caller reloads the app afterwards.
+ */
+export async function eraseAllData(): Promise<void> {
+	try {
+		(await database()).close();
+	} catch {
+		// The database may never have been opened in this session.
+	}
+	databasePromise = undefined;
+	await new Promise<void>((resolve) => {
+		const request = indexedDB.deleteDatabase('voicebook-v1');
+		request.onsuccess = () => resolve();
+		request.onerror = () => resolve();
+		request.onblocked = () => resolve();
+	});
+	try {
+		const root = await opfsRoot();
+		await root?.removeEntry('voicebook', { recursive: true });
+	} catch {
+		// OPFS may be unavailable or already empty.
+	}
+	try {
+		if (typeof caches !== 'undefined') {
+			for (const key of await caches.keys()) await caches.delete(key);
+		}
+	} catch {
+		// CacheStorage may be unavailable (insecure context).
+	}
+	try {
+		localStorage.clear();
+	} catch {
+		// Storage access can be denied in some embedded contexts.
+	}
+}
+
 export async function storageSnapshot(): Promise<StorageSnapshot> {
 	const estimate = await navigator.storage.estimate();
 	return {

@@ -19,6 +19,7 @@
 	import type { DocumentKind, NormalizedDocument } from '$lib/domain/types';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { llmState } from '$lib/state/llm.svelte';
+	import { providersState } from '$lib/state/providers.svelte';
 
 	let fileInput: HTMLInputElement | undefined;
 	let dragging = $state(false);
@@ -37,7 +38,12 @@
 				llmState.phase === 'loading' ||
 				llmState.phase === 'probing')
 	);
-	let showSetup = $derived(!modelInstalled || llmFirstDownloadActive);
+	// A saved ElevenLabs key makes the app speech-capable without any local
+	// download — setup steps aside the moment either path is ready.
+	let speechCapable = $derived(
+		modelInstalled || (providersState.initialized && providersState.elevenLabsReady)
+	);
+	let showSetup = $derived(!speechCapable || llmFirstDownloadActive);
 	// Existing installs predate the narration model: offer it once, dismissibly.
 	let narrationOffer = $derived(
 		modelInstalled &&
@@ -50,6 +56,7 @@
 
 	onMount(() => {
 		void llmState.initialize();
+		void providersState.initialize();
 	});
 
 	function captureFileInput(node: HTMLInputElement): () => void {
@@ -101,7 +108,7 @@
 		event.preventDefault();
 		dragDepth = 0;
 		dragging = false;
-		if (!modelInstalled) return;
+		if (!speechCapable) return;
 		await acceptFiles(Array.from(event.dataTransfer?.files ?? []));
 	}
 

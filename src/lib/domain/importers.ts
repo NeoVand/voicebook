@@ -988,6 +988,32 @@ export function liteparsePageMarkdown(pages: Array<{ markdown?: string; text?: s
 		.join('\n\n');
 }
 
+/**
+ * LiteParse's font-weight heuristics sometimes flag every body paragraph of a
+ * PDF as bold. When emphasis stops being selective — most non-heading lines
+ * are fully wrapped in ** ** — it carries no meaning, so unwrap those lines.
+ * Documents where bold is used sparingly are left untouched.
+ */
+export function stripBlanketBold(markdown: string): string {
+	const lines = markdown.split('\n');
+	const isStructural = (line: string) => /^(#{1,6}\s|\||```|[-*+]\s|\d+[.)]\s|>)/.test(line);
+	const fullyBold = (line: string) =>
+		/^\*\*[^*]/.test(line) && /[^*]\*\*$/.test(line) && !line.slice(2, -2).includes('**');
+	const body = lines.map((line) => line.trim()).filter((line) => line && !isStructural(line));
+	if (!body.length) return markdown;
+	const boldShare = body.filter(fullyBold).length / body.length;
+	if (boldShare < 0.6) return markdown;
+	return lines
+		.map((line) => {
+			const trimmed = line.trim();
+			if (!isStructural(trimmed) && fullyBold(trimmed)) {
+				return line.replace(trimmed, trimmed.slice(2, -2));
+			}
+			return line;
+		})
+		.join('\n');
+}
+
 /** A text layer this thin means the pages are scans, not embedded text. */
 export function pdfLooksScanned(markdown: string, pageCount: number): boolean {
 	const letters = markdown.replace(/[^\p{L}\p{N}]/gu, '').length;
@@ -1022,7 +1048,7 @@ async function parsePdfWithLiteparse(file: File): Promise<ParsedSource | null> {
 		} finally {
 			parser.free();
 		}
-		const markdown = liteparsePageMarkdown(result.pages);
+		const markdown = stripBlanketBold(liteparsePageMarkdown(result.pages));
 		if (pdfLooksScanned(markdown, result.pages.length)) {
 			throw new ImportError(
 				'This PDF appears to be scanned. OCR support is planned, but is not part of this release.',
@@ -1148,7 +1174,6 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 		blocks,
 		segments: segmentBlocks(blocks),
 		outline: outlineFor(blocks),
-		bookmarks: [],
 		warnings: parsed.warnings ?? [],
 		includeCode: false
 	};
@@ -1175,7 +1200,6 @@ export function documentFromText(title: string, text: string): NormalizedDocumen
 		blocks,
 		segments: segmentBlocks(blocks),
 		outline: outlineFor(blocks),
-		bookmarks: [],
 		warnings: parsed.warnings ?? [],
 		includeCode: false
 	};

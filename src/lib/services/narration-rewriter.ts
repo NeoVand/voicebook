@@ -11,14 +11,45 @@ import {
 	buildNarrationMessages,
 	NARRATION_GENERATION_PARAMS,
 	sanitizeNarration,
+	type NarrationGenerationParams,
 	type NarrationPromptOverrides
 } from '$lib/domain/narration-prompts';
 import type { CloudLlmProvider } from '$lib/domain/provider-catalog';
-import { generateCloud } from './cloud-llm';
+import { generateCloud, type CloudImageAttachment } from './cloud-llm';
 import { activeLlmHost, type LlmChatMessage } from './llm/llm-client';
 
 export type NarrationEngine =
 	{ type: 'local' } | { type: 'cloud'; provider: CloudLlmProvider; model: string; apiKey: string };
+
+const MAX_IMAGE_BYTES = 5_000_000;
+
+/**
+ * Load a document image as a base64 attachment for a vision-capable cloud
+ * engine. Returns null when it cannot be used (not an image, too large,
+ * cross-origin refusal) — the caption-only path stands in.
+ */
+export async function loadImageAttachment(src: string): Promise<CloudImageAttachment | null> {
+	try {
+		if (src.startsWith('data:')) {
+			const match = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(src);
+			if (!match || match[2].length * 0.75 > MAX_IMAGE_BYTES) return null;
+			return { mediaType: match[1], data: match[2] };
+		}
+		const response = await fetch(src, { mode: 'cors' });
+		if (!response.ok) return null;
+		const blob = await response.blob();
+		if (!blob.type.startsWith('image/') || blob.size > MAX_IMAGE_BYTES) return null;
+		const buffer = new Uint8Array(await blob.arrayBuffer());
+		let binary = '';
+		const chunk = 0x8000;
+		for (let index = 0; index < buffer.length; index += chunk) {
+			binary += String.fromCharCode(...buffer.subarray(index, index + chunk));
+		}
+		return { mediaType: blob.type, data: btoa(binary) };
+	} catch {
+		return null;
+	}
+}
 
 export class NarrationRewriteError extends Error {
 	constructor(
@@ -34,28 +65,49 @@ export interface NarrationRewriteRequest {
 	construct: NarrationConstruct;
 	/** Prose immediately before the construct, assembled by the scheduler. */
 	documentContext: string;
-	/** User-edited prompt templates from settings, if any. */
+	/** Active preset or user-edited prompt templates from settings, if any. */
 	promptOverrides?: NarrationPromptOverrides;
 	/** Which engine generates; defaults to the on-device worker. */
 	engine?: NarrationEngine;
+	/** Per-kind budgets from the active description style; defaults to the
+	 * balanced tuning. */
+	params?: NarrationGenerationParams;
 }
 
 export async function rewriteConstruct(
 	request: NarrationRewriteRequest,
 	signal?: AbortSignal
 ): Promise<string> {
+	const params = request.params ?? NARRATION_GENERATION_PARAMS[request.construct.kind];
+	// A zero token budget means the preset wants the deterministic text only
+	// (Concise equations): settle without touching any engine.
+	if (params.maxNewTokens <= 0) return request.construct.fallbackText;
 	const engine = request.engine ?? { type: 'local' as const };
+	// Images: cloud engines see the actual pixels; without them a caption is
+	// required (the local model must not invent what it cannot see).
+	let image: CloudImageAttachment | null = null;
+	if (request.construct.kind === 'image') {
+		if (engine.type === 'cloud' && request.construct.imageSrc) {
+			image = await loadImageAttachment(request.construct.imageSrc);
+		}
+		if (!image && !request.construct.source) {
+			throw new NarrationRewriteError(
+				'This image has no caption — a cloud description engine can describe it directly.',
+				'unusable-output'
+			);
+		}
+	}
 	const host = engine.type === 'local' ? activeLlmHost() : null;
 	if (engine.type === 'local' && !host?.ready) {
 		throw new NarrationRewriteError('The narration model is not loaded.', 'no-model');
 	}
-	const params = NARRATION_GENERATION_PARAMS[request.construct.kind];
 	const generate = (messages: LlmChatMessage[]): Promise<string> =>
 		engine.type === 'cloud'
 			? generateCloud(engine.provider, engine.model, engine.apiKey, messages, {
 					maxNewTokens: params.maxNewTokens,
 					temperature: params.temperature,
-					signal
+					signal,
+					...(image ? { image } : {})
 				})
 			: host!.generate(messages, {
 					maxNewTokens: params.maxNewTokens,
@@ -70,6 +122,18 @@ export async function rewriteConstruct(
 			overrides: request.promptOverrides,
 			strict
 		});
+		if (image) {
+			// The model sees the pixels: swap the caption-polish instruction for
+			// a direct describe-the-figure ask on the final user turn.
+			const caption = request.construct.source;
+			messages[messages.length - 1] = {
+				role: 'user',
+				content:
+					`Look at the attached figure${caption ? ` (the document captions it: ${caption})` : ''}. ` +
+					'Tell a listener what it shows in one or two short sentences, in plain words only.' +
+					(strict ? '\nRemember: words only, one or two short sentences.' : '')
+			};
+		}
 		let raw: string;
 		try {
 			raw = await generate(messages);
@@ -79,7 +143,7 @@ export async function rewriteConstruct(
 				'generation-failed'
 			);
 		}
-		const cleaned = sanitizeNarration(raw, request.construct.kind);
+		const cleaned = sanitizeNarration(raw, request.construct.kind, params);
 		if (!cleaned) continue;
 		if (request.construct.kind !== 'math-block') return cleaned;
 		// Equations: the deterministic reading carries the math; the LLM's

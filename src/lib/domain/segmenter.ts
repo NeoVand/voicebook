@@ -273,15 +273,34 @@ export function segmentBlocks(
 				let speech = text;
 				let pending = false;
 				const constructIds: string[] = [];
+				// One entry per SPOKEN word (matching the synthesizer's timing
+				// stream), each holding the DISPLAY range it should light up:
+				// plain words map to themselves, and every word of a construct's
+				// replacement maps to the whole construct span — so the equation
+				// stays highlighted while its reading is spoken.
+				const speechWords: WordSpan[] = [];
 				if (overlapping.length) {
 					let rendered = '';
 					let cursor = start;
+					const pushPlainWords = (chunk: string, displayOffset: number) => {
+						for (const word of wordsFor(chunk)) {
+							speechWords.push({
+								text: word.text,
+								start: displayOffset + word.start,
+								end: displayOffset + word.end
+							});
+						}
+					};
 					for (const span of overlapping) {
 						const from = Math.max(span.start, start);
 						const to = Math.min(span.end, end);
+						pushPlainWords(block.text.slice(cursor, from), cursor - start);
 						rendered += block.text.slice(cursor, from);
 						if (span.start >= start) {
 							const replacement = inlineReplacement(span, narrations);
+							for (const word of wordsFor(replacement.text)) {
+								speechWords.push({ text: word.text, start: from - start, end: to - start });
+							}
 							rendered += replacement.text;
 							pending ||= replacement.pending;
 							// A span only makes this a narration segment when it
@@ -294,6 +313,7 @@ export function segmentBlocks(
 						}
 						cursor = to;
 					}
+					pushPlainWords(block.text.slice(cursor, end), cursor - start);
 					rendered += block.text.slice(cursor, end);
 					speech = rendered;
 				}
@@ -306,9 +326,7 @@ export function segmentBlocks(
 					normalizedText: normalizeForSpeech(speech),
 					start,
 					end,
-					// Word-level highlighting needs displayed text === spoken text;
-					// substituted sentences highlight at the sentence level instead.
-					words: substituted ? [] : wordsFor(text),
+					words: substituted ? speechWords : wordsFor(text),
 					estimatedDuration: estimateDuration(speech),
 					anchor: {
 						...block.anchor,
@@ -330,6 +348,10 @@ export function segmentsEqual(a: SpeechSegment[], b: SpeechSegment[]): boolean {
 		(segment, index) =>
 			segment.id === b[index].id &&
 			segment.normalizedText === b[index].normalizedText &&
+			// Word maps can change shape without the text changing (e.g. the
+			// spoken-word→display-span mapping introduced for substituted
+			// sentences); persisted segments refresh when they do.
+			segment.words.length === b[index].words.length &&
 			(segment.narration?.pending ?? false) === (b[index].narration?.pending ?? false)
 	);
 }
@@ -385,13 +407,6 @@ export function refreshDocumentSegments(document: NormalizedDocument): Normalize
 							(playbackTarget.segment.estimatedDuration * playbackTarget.wordIndex) /
 							Math.max(1, playbackTarget.segment.words.length)
 					}
-				: document.playback,
-		bookmarks: document.bookmarks.map((bookmark) => {
-			const position = semanticPosition(previousSegments, bookmark.segmentId, bookmark.wordIndex);
-			const target = position ? remapPosition(segments, position) : undefined;
-			return target
-				? { ...bookmark, segmentId: target.segment.id, wordIndex: target.wordIndex }
-				: bookmark;
-		})
+				: document.playback
 	};
 }

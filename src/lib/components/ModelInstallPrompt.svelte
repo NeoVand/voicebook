@@ -4,6 +4,7 @@
 		ArrowUpRight,
 		BrainCircuit,
 		Check,
+		Cloud,
 		Download,
 		LoaderCircle,
 		Mic2,
@@ -11,11 +12,18 @@
 		Square
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
+	import ApiKeyField from '$lib/components/ApiKeyField.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { getModel } from '$lib/domain/model-catalog';
 	import { DEFAULT_LLM_ID, getLlmModel } from '$lib/domain/llm-catalog';
+	import {
+		CLOUD_LLM_PROVIDERS,
+		getCloudLlmProvider,
+		type CloudLlmProvider
+	} from '$lib/domain/provider-catalog';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { llmState } from '$lib/state/llm.svelte';
+	import { providersState } from '$lib/state/providers.svelte';
 
 	let { compact = false } = $props<{ compact?: boolean }>();
 
@@ -55,7 +63,35 @@
 
 	onMount(() => {
 		void llmState.initialize();
+		void providersState.initialize();
 	});
+
+	/* ── Optional premium engines (bring your own keys) ─────────────────── */
+
+	let premiumProvider = $state<CloudLlmProvider>('anthropic');
+	let cloudLlmProvider = $derived(
+		providersState.descriptionEngine !== 'local'
+			? getCloudLlmProvider(providersState.descriptionEngine)
+			: null
+	);
+	let premiumSpec = $derived(getCloudLlmProvider(premiumProvider)!);
+
+	async function saveElevenLabsKey(value: string): Promise<void> {
+		await providersState.setKey('elevenlabs', value);
+		if (value.trim()) {
+			await providersState.setSpeechEngine('elevenlabs');
+		} else if (providersState.speechEngine === 'elevenlabs' && !providersState.elevenLabsReady) {
+			await providersState.setSpeechEngine('local');
+		}
+	}
+
+	async function saveCloudLlmKey(value: string): Promise<void> {
+		await providersState.setKey(premiumProvider, value);
+		if (value.trim()) await providersState.setDescriptionEngine(premiumProvider);
+		else if (providersState.descriptionEngine === premiumProvider) {
+			await providersState.setDescriptionEngine('local');
+		}
+	}
 
 	function friendlyError(message?: string): string {
 		if (!message) return 'The voice engine could not be installed.';
@@ -209,6 +245,62 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if !compact}
+		<details class="premium-setup">
+			<summary>
+				<Cloud size={14} aria-hidden="true" />
+				<span>Have API keys? Add premium engines</span>
+				<span class="premium-badges" aria-hidden="true">
+					{#if providersState.elevenLabsReady}<i>ElevenLabs</i>{/if}
+					{#if cloudLlmProvider}<i>{cloudLlmProvider.label}</i>{/if}
+				</span>
+			</summary>
+			<div class="premium-body">
+				<p>
+					Optional — keys stay in this browser and are sent only to their provider. With a premium
+					voice you can start listening without any download. Change engines anytime in Settings.
+				</p>
+				<div class="premium-field">
+					<span class="premium-field-title">Premium reading voice</span>
+					<ApiKeyField
+						label="ElevenLabs API key"
+						placeholder="sk_…"
+						keyUrl="https://elevenlabs.io/app/settings/api-keys"
+						hasKey={providersState.hasKey('elevenlabs')}
+						isDevKey={providersState.isDevKey('elevenlabs')}
+						onSave={saveElevenLabsKey}
+						onClear={() => saveElevenLabsKey('')}
+					/>
+				</div>
+				<div class="premium-field">
+					<span class="premium-field-title">Premium descriptions</span>
+					<div class="premium-providers" role="group" aria-label="Description provider">
+						{#each CLOUD_LLM_PROVIDERS as spec (spec.id)}
+							<button
+								type="button"
+								class:selected={premiumProvider === spec.id}
+								aria-pressed={premiumProvider === spec.id}
+								onclick={() => (premiumProvider = spec.id)}
+							>
+								{spec.label}
+								{#if providersState.hasKey(spec.id)}<Check size={11} strokeWidth={2.6} />{/if}
+							</button>
+						{/each}
+					</div>
+					<ApiKeyField
+						label={`${premiumSpec.vendor} API key`}
+						placeholder={premiumSpec.keyPlaceholder}
+						keyUrl={premiumSpec.keyUrl}
+						hasKey={providersState.hasKey(premiumProvider)}
+						isDevKey={providersState.isDevKey(premiumProvider)}
+						onSave={saveCloudLlmKey}
+						onClear={() => saveCloudLlmKey('')}
+					/>
+				</div>
+			</div>
+		</details>
+	{/if}
 
 	{#if !speechInstalled || llmRelevant}
 		<label class="license-check">
@@ -437,6 +529,110 @@
 		width: 13px;
 		height: 13px;
 		accent-color: var(--primary);
+	}
+
+	.premium-setup {
+		width: 100%;
+		border: 1px solid var(--line);
+		border-radius: 13px;
+		margin-top: 12px;
+		background: color-mix(in srgb, var(--surface, transparent) 40%, transparent);
+	}
+
+	.premium-setup summary {
+		display: flex;
+		min-height: 46px;
+		align-items: center;
+		gap: 9px;
+		padding: 0 16px;
+		color: var(--muted);
+		cursor: pointer;
+		font-size: 10.5px;
+		font-weight: 620;
+		list-style: none;
+	}
+
+	.premium-setup summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.premium-setup summary:hover {
+		color: var(--text);
+	}
+
+	.premium-badges {
+		display: inline-flex;
+		margin-left: auto;
+		gap: 5px;
+	}
+
+	.premium-badges i {
+		padding: 2px 8px;
+		border-radius: 999px;
+		background: var(--primary-soft);
+		color: var(--primary);
+		font-size: 8.5px;
+		font-style: normal;
+		font-weight: 680;
+	}
+
+	.premium-body {
+		display: grid;
+		gap: 14px;
+		padding: 2px 16px 16px;
+		border-top: 1px solid var(--line);
+		text-align: left;
+	}
+
+	.premium-body > p {
+		margin: 10px 0 0;
+		color: var(--faint);
+		font-size: 9.5px;
+		line-height: 1.55;
+	}
+
+	.premium-field {
+		display: grid;
+		gap: 7px;
+	}
+
+	.premium-field-title {
+		color: var(--text-soft);
+		font-size: 10px;
+		font-weight: 660;
+	}
+
+	.premium-providers {
+		display: flex;
+		gap: 5px;
+	}
+
+	.premium-providers button {
+		display: inline-flex;
+		min-height: 28px;
+		align-items: center;
+		gap: 4px;
+		padding: 0 11px;
+		border: 1px solid var(--line-strong);
+		border-radius: 999px;
+		background: transparent;
+		color: var(--muted);
+		cursor: pointer;
+		font-size: 9.5px;
+		font-weight: 640;
+		transition:
+			border-color 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.premium-providers button:hover {
+		color: var(--text);
+	}
+
+	.premium-providers button.selected {
+		border-color: color-mix(in srgb, var(--primary) 60%, var(--line-strong));
+		background: color-mix(in srgb, var(--primary) 8%, transparent);
+		color: var(--text);
 	}
 
 	.license-check {

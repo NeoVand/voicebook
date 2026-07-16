@@ -2,38 +2,33 @@
 	import '@fontsource-variable/instrument-sans/index.css';
 	import '@fontsource-variable/newsreader/index.css';
 	import { browser } from '$app/environment';
+	import { fly } from 'svelte/transition';
 	import { page } from '$app/state';
 	import { base, resolve } from '$app/paths';
 	import {
-		Bookmark,
-		CloudRain,
-		CloudSun,
 		Cpu,
-		HardDrive,
 		Library,
 		List,
-		ListMusic,
-		Maximize2,
+		Fullscreen,
 		Menu,
-		Minimize2,
-		Moon,
 		PanelLeftClose,
 		PanelLeftOpen,
 		BrainCircuit,
 		RefreshCw,
 		Settings2,
-		Sun,
-		ZoomIn,
-		ZoomOut,
+		Palette,
+		Shrink,
 		X
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
 	import BrandMark from '$lib/components/BrandMark.svelte';
+	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
 	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import GitHubOutline from '$lib/components/GitHubOutline.svelte';
 	import { recordRuntimeEvent } from '$lib/services/runtime-diagnostics';
 	import { appState } from '$lib/state/app-state.svelte';
+	import { appearanceState } from '$lib/state/appearance.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 	import './layout.css';
@@ -44,33 +39,10 @@
 	const settingsHref = resolve('/settings');
 	const repositoryHref = 'https://github.com/NeoVand/voicebook';
 	const sidebarStorageKey = 'voicebook:sidebar-collapsed';
-	const themeStorageKey = 'voicebook:theme';
-	type ThemeId = 'sunny' | 'cloudy' | 'rainy' | 'midnight';
-	const themes: readonly ThemeId[] = ['sunny', 'cloudy', 'rainy', 'midnight'];
-	const themeLabels: Record<ThemeId, string> = {
-		sunny: 'Sunny',
-		cloudy: 'Cloudy',
-		rainy: 'Rainy',
-		midnight: 'Midnight'
-	};
-	const themeColors: Record<ThemeId, string> = {
-		sunny: '#f4efe6',
-		cloudy: '#edf1f3',
-		rainy: '#101820',
-		midnight: '#0b0c0f'
-	};
-	function normalizeTheme(value: string | undefined): ThemeId {
-		if (value === 'light') return 'cloudy';
-		if (value === 'dark') return 'midnight';
-		return themes.includes(value as ThemeId) ? (value as ThemeId) : 'midnight';
-	}
 	let sidebarCollapsed = $state(
 		browser && window.localStorage.getItem(sidebarStorageKey) === 'true'
 	);
 	let mobileSidebarOpen = $state(false);
-	let theme = $state<ThemeId>(
-		normalizeTheme(browser ? document.documentElement.dataset.theme : undefined)
-	);
 	let fullscreenElement = $state<Element | null>(null);
 	let waitingServiceWorker = $state<ServiceWorker | null>(null);
 	let updateAvailable = $state(false);
@@ -83,18 +55,12 @@
 			player.isPlaying ||
 			player.isGeneratingAll
 	);
-	let nextTheme = $derived(themes[(themes.indexOf(theme) + 1) % themes.length]);
 	let isReader = $derived(page.url.pathname.startsWith(resolve('/read')));
 	let settingsSection = $derived(page.url.searchParams.get('section') ?? 'models');
 	let readerDocumentId = $derived(page.url.searchParams.get('document'));
 	let activeReaderDocumentId = $derived(isReader ? readerDocumentId : null);
 	let readerBook = $derived(
 		isReader ? appState.documents.find((document) => document.id === readerDocumentId) : undefined
-	);
-	let currentBookmarked = $derived(
-		Boolean(
-			readerBook?.bookmarks.some((bookmark) => bookmark.segmentId === player.currentSegment?.id)
-		)
 	);
 
 	onMount(() => {
@@ -193,11 +159,15 @@
 		readerChrome.closeTransientPanels();
 	}
 
-	function toggleTheme(): void {
-		theme = nextTheme;
-		document.documentElement.dataset.theme = theme;
-		window.localStorage.setItem(themeStorageKey, theme);
-		document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeColors[theme]);
+	let zoomOpen = $state(false);
+	let zoomRoot = $state<HTMLDivElement>();
+
+	function handleZoomPointerDown(event: PointerEvent): void {
+		if (zoomOpen && zoomRoot && !zoomRoot.contains(event.target as Node)) zoomOpen = false;
+	}
+
+	function handleZoomKeydown(event: KeyboardEvent): void {
+		if (zoomOpen && event.key === 'Escape') zoomOpen = false;
 	}
 
 	async function toggleFullscreen(): Promise<void> {
@@ -212,6 +182,7 @@
 </script>
 
 <svelte:document bind:fullscreenElement />
+<svelte:window onpointerdown={handleZoomPointerDown} onkeydown={handleZoomKeydown} />
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
@@ -261,35 +232,46 @@
 					<List size={16} strokeWidth={1.6} />
 				</button>
 				<div class="document-zoom" role="group" aria-label="Document zoom">
-					<button
-						class="icon-button"
-						type="button"
-						disabled={readerChrome.documentZoom <= 0.8}
-						aria-label="Zoom document out"
-						title="Zoom document out"
-						onclick={() => readerChrome.zoomOut()}
-					>
-						<ZoomOut size={16} />
-					</button>
-					<button
-						class="zoom-value"
-						type="button"
-						aria-label={`Reset document zoom, currently ${readerChrome.zoomPercent}%`}
-						title="Reset document zoom"
-						onclick={() => readerChrome.resetZoom()}
-					>
-						{readerChrome.zoomPercent}%
-					</button>
-					<button
-						class="icon-button"
-						type="button"
-						disabled={readerChrome.documentZoom >= 1.6}
-						aria-label="Zoom document in"
-						title="Zoom document in"
-						onclick={() => readerChrome.zoomIn()}
-					>
-						<ZoomIn size={16} />
-					</button>
+					<div class="zoom-control" bind:this={zoomRoot}>
+						<button
+							class="zoom-value"
+							class:open={zoomOpen}
+							type="button"
+							aria-label={`Document zoom ${readerChrome.zoomPercent} percent`}
+							aria-expanded={zoomOpen}
+							aria-controls="zoom-popover"
+							title="Document zoom · double-click resets"
+							onclick={() => (zoomOpen = !zoomOpen)}
+							ondblclick={() => {
+								readerChrome.resetZoom();
+								zoomOpen = false;
+							}}
+						>
+							{readerChrome.zoomPercent}%
+						</button>
+						{#if zoomOpen}
+							<label
+								id="zoom-popover"
+								class="zoom-popover"
+								transition:fly={{ y: -5, duration: 120 }}
+							>
+								<span class="zoom-readout" aria-hidden="true">{readerChrome.zoomPercent}%</span>
+								<input
+									aria-label="Document zoom"
+									type="range"
+									min="80"
+									max="160"
+									step="1"
+									value={readerChrome.zoomPercent}
+									style:--zoom-progress={`${Math.round(((readerChrome.zoomPercent - 80) / 80) * 100)}%`}
+									oninput={(event) =>
+										readerChrome.setDocumentZoom(
+											Number((event.currentTarget as HTMLInputElement).value) / 100
+										)}
+								/>
+							</label>
+						{/if}
+					</div>
 					<button
 						class="icon-button"
 						class:active={isFullscreen}
@@ -298,45 +280,17 @@
 						title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
 						onclick={() => void toggleFullscreen()}
 					>
-						{#if isFullscreen}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
+						{#if isFullscreen}<Shrink size={16} />{:else}<Fullscreen size={16} />{/if}
 					</button>
 				</div>
 				<button
 					class="icon-button"
-					class:marked={currentBookmarked}
 					type="button"
-					aria-label={currentBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-					title={currentBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-					onclick={() => player.toggleBookmark()}
+					aria-label={`Theme: ${appearanceState.themeSpec.label}. Switch to ${appearanceState.nextThemeSpec.label} theme`}
+					title={`${appearanceState.themeSpec.label} · next: ${appearanceState.nextThemeSpec.label}`}
+					onclick={() => appearanceState.cycleTheme()}
 				>
-					<Bookmark size={16} fill={currentBookmarked ? 'currentColor' : 'none'} />
-				</button>
-				<button
-					class="icon-button"
-					class:active={readerChrome.bookmarksOpen}
-					type="button"
-					aria-label={readerChrome.bookmarksOpen ? 'Close bookmarks' : 'Open bookmarks'}
-					title={readerChrome.bookmarksOpen ? 'Close bookmarks' : 'Open bookmarks'}
-					onclick={() => (readerChrome.bookmarksOpen = !readerChrome.bookmarksOpen)}
-				>
-					<ListMusic size={16} />
-				</button>
-				<button
-					class="icon-button"
-					type="button"
-					aria-label={`Theme: ${themeLabels[theme]}. Switch to ${themeLabels[nextTheme]} theme`}
-					title={`${themeLabels[theme]} · next ${themeLabels[nextTheme]}`}
-					onclick={toggleTheme}
-				>
-					{#if theme === 'sunny'}
-						<Sun size={16} />
-					{:else if theme === 'cloudy'}
-						<CloudSun size={16} />
-					{:else if theme === 'rainy'}
-						<CloudRain size={16} />
-					{:else}
-						<Moon size={16} />
-					{/if}
+					<ThemeIcon theme={appearanceState.theme} size={16} />
 				</button>
 				<a
 					class="icon-button github-link"
@@ -355,19 +309,11 @@
 			<button
 				class="icon-button"
 				type="button"
-				aria-label={`Theme: ${themeLabels[theme]}. Switch to ${themeLabels[nextTheme]} theme`}
-				title={`${themeLabels[theme]} · next ${themeLabels[nextTheme]}`}
-				onclick={toggleTheme}
+				aria-label={`Theme: ${appearanceState.themeSpec.label}. Switch to ${appearanceState.nextThemeSpec.label} theme`}
+				title={`${appearanceState.themeSpec.label} · next: ${appearanceState.nextThemeSpec.label}`}
+				onclick={() => appearanceState.cycleTheme()}
 			>
-				{#if theme === 'sunny'}
-					<Sun size={16} />
-				{:else if theme === 'cloudy'}
-					<CloudSun size={16} />
-				{:else if theme === 'rainy'}
-					<CloudRain size={16} />
-				{:else}
-					<Moon size={16} />
-				{/if}
+				<ThemeIcon theme={appearanceState.theme} size={16} />
 			</button>
 			<a
 				class="icon-button github-link"
@@ -505,17 +451,18 @@
 			</a>
 			<a
 				class="nav-link"
-				class:active={page.url.pathname.startsWith(settingsHref) && settingsSection === 'storage'}
-				href={resolve('/settings?section=storage')}
-				aria-label="Storage"
-				aria-current={page.url.pathname.startsWith(settingsHref) && settingsSection === 'storage'
+				class:active={page.url.pathname.startsWith(settingsHref) &&
+					settingsSection === 'appearance'}
+				href={resolve('/settings?section=appearance')}
+				aria-label="Appearance"
+				aria-current={page.url.pathname.startsWith(settingsHref) && settingsSection === 'appearance'
 					? 'page'
 					: undefined}
-				data-tooltip="Storage"
+				data-tooltip="Appearance"
 				onclick={closeNavigation}
 			>
-				<HardDrive size={17} />
-				<span>Storage</span>
+				<Palette size={17} />
+				<span>Appearance</span>
 			</a>
 			<a
 				class="nav-link"

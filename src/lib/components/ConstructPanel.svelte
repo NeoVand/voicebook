@@ -16,18 +16,61 @@
 
 <script lang="ts">
 	import { Check, LoaderCircle, PencilLine, RefreshCw, X } from '@lucide/svelte';
+	import hljs from 'highlight.js/lib/core';
+	import latex from 'highlight.js/lib/languages/latex';
+	import markdown from 'highlight.js/lib/languages/markdown';
+	import type { Attachment } from 'svelte/attachments';
+
+	hljs.registerLanguage('latex', latex);
+	hljs.registerLanguage('markdown', markdown);
 
 	interface Props {
 		/** "Equation", "Diagram", "Table" — builds the summary line. */
 		noun: string;
 		sourceLabel: string;
 		source: string;
+		/** Colors the source block. */
+		sourceLanguage?: 'latex' | 'mermaid' | 'markdown';
 		items: ConstructPanelItem[];
 		onEdit: (constructId: string, text: string) => void | Promise<void>;
 		onRegenerate?: (constructId: string) => void | Promise<void>;
 	}
 
-	let { noun, sourceLabel, source, items, onEdit, onRegenerate }: Props = $props();
+	let { noun, sourceLabel, source, sourceLanguage, items, onEdit, onRegenerate }: Props = $props();
+
+	function escapeHtml(value: string): string {
+		return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+	}
+
+	/** highlight.js has no mermaid grammar; a few token classes cover the
+	 * parts worth coloring. */
+	function highlightMermaid(code: string): string {
+		return escapeHtml(code)
+			.replace(/^(%%.*)$/gm, '<span class="hljs-comment">$1</span>')
+			.replace(
+				/\b(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|pie|mindmap|timeline|journey|participant|actor|subgraph|end|loop|alt|else|opt|note|title|section)\b/g,
+				'<span class="hljs-keyword">$1</span>'
+			)
+			.replace(
+				/(--?&gt;&gt;?|==&gt;|\.-&gt;|--&gt;|&lt;--|---|--)/g,
+				'<span class="hljs-string">$1</span>'
+			)
+			.replace(/(\|[^|\n]*\|)/g, '<span class="hljs-attribute">$1</span>');
+	}
+
+	function highlightedSource(code: string, language?: string): Attachment<HTMLElement> {
+		return (target) => {
+			if (language === 'mermaid') {
+				target.innerHTML = highlightMermaid(code);
+				return;
+			}
+			if (language && hljs.getLanguage(language)) {
+				target.innerHTML = hljs.highlight(code, { language }).value;
+				return;
+			}
+			target.textContent = code;
+		};
+	}
 
 	let editingId = $state<string | null>(null);
 	let draft = $state('');
@@ -65,7 +108,7 @@
 	<div class="construct-panel-body">
 		<section class="panel-source" aria-label={sourceLabel}>
 			<h4>{sourceLabel}</h4>
-			<pre><code>{source}</code></pre>
+			<pre><code class="hljs" {@attach highlightedSource(source, sourceLanguage)}></code></pre>
 		</section>
 		<section class="panel-descriptions" aria-label="Spoken descriptions">
 			<h4>{items.length === 1 ? 'Spoken as' : 'Spoken as, per row'}</h4>
@@ -156,8 +199,9 @@
 
 	.construct-panel-body {
 		display: grid;
-		gap: 14px;
-		margin: 0 0 16px;
+		gap: 13px;
+		padding-bottom: 14px;
+		margin: 0;
 	}
 
 	.panel-source h4,
@@ -171,7 +215,7 @@
 	}
 
 	pre {
-		overflow: auto;
+		overflow-x: hidden;
 		margin: 0;
 		padding: 14px 16px;
 		border-radius: 5px;
@@ -179,7 +223,44 @@
 		color: var(--reader-ink);
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 0.66em;
-		line-height: 1.55;
+		line-height: 1.6;
+	}
+
+	pre code {
+		display: block;
+		overflow-wrap: anywhere;
+		white-space: pre-wrap;
+	}
+
+	pre :global(.hljs-comment) {
+		color: var(--reader-quiet);
+		font-style: italic;
+	}
+
+	pre :global(.hljs-keyword),
+	pre :global(.hljs-built_in),
+	pre :global(.hljs-name),
+	pre :global(.hljs-section) {
+		color: var(--code-keyword, var(--primary));
+		font-weight: 620;
+	}
+
+	pre :global(.hljs-string),
+	pre :global(.hljs-attribute),
+	pre :global(.hljs-literal) {
+		color: var(--code-string, var(--bookmark));
+	}
+
+	pre :global(.hljs-number),
+	pre :global(.hljs-symbol),
+	pre :global(.hljs-variable),
+	pre :global(.hljs-params) {
+		color: var(--code-number, var(--reader-link));
+	}
+
+	pre :global(.hljs-title),
+	pre :global(.hljs-tag) {
+		color: var(--reader-ink-strong);
 	}
 
 	.panel-item {
@@ -289,7 +370,8 @@
 	}
 
 	.panel-item-text {
-		margin: 5px 0 1px;
+		overflow-wrap: anywhere;
+		margin: 5px 0 0;
 		color: var(--reader-ink);
 		font-family: var(--font-reading);
 		font-size: 0.72em;

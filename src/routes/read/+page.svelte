@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import {
 		ArrowLeft,
-		Bookmark,
 		BookOpenText,
 		Check,
 		ChevronLeft,
@@ -14,8 +14,7 @@
 		RotateCcw,
 		RotateCw,
 		Square,
-		Volume2,
-		X
+		Volume2
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
@@ -66,6 +65,8 @@
 	}
 	let narrationStartAction = $state<NarrationStartAction>();
 	let narrationAnnouncement = $state('');
+	let appReady = $state(false);
+	let openDocumentId: string | null = null;
 	const playbackSpeedOptions = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((speed) => ({
 		value: String(speed),
 		label: `${speed}×`
@@ -140,17 +141,7 @@
 				void providersState.refreshElevenLabsVoices();
 		});
 		void appState.initialize().then(() => {
-			const id = new URL(window.location.href).searchParams.get('document');
-			book = appState.documents.find((document) => document.id === id) ?? null;
-			if (book) {
-				player.setDocument(book);
-				activeOutlineBlockId =
-					book.outline.find((item) => item.blockId === player.currentSegment?.blockId)?.blockId ??
-					book.outline[0]?.blockId;
-				void player.warmEngine();
-				void narrationState.open(book);
-				requestAnimationFrame(scheduleVisibleSectionUpdate);
-			}
+			appReady = true;
 		});
 		return () => {
 			cancelAnimationFrame(readerScrollFrame);
@@ -159,6 +150,38 @@
 			narrationState.stop();
 		};
 	});
+
+	// Sidebar links stay on this route and only change ?document, so the open
+	// book must follow the URL — a one-shot read on mount misses every switch.
+	$effect(() => {
+		const id = page.url.searchParams.get('document');
+		if (!appReady || id === openDocumentId) return;
+		openDocumentId = id;
+		openBook(appState.documents.find((document) => document.id === id) ?? null);
+	});
+
+	function openBook(next: NormalizedDocument | null): void {
+		narrationState.stop();
+		narrationStartAction = undefined;
+		outlineNavigationBlockId = undefined;
+		activeOutlineBlockId = undefined;
+		book = next;
+		if (!next) return;
+		player.setDocument(next);
+		activeOutlineBlockId =
+			next.outline.find((item) => item.blockId === player.currentSegment?.blockId)?.blockId ??
+			next.outline[0]?.blockId;
+		void player.warmEngine();
+		void narrationState.open(next);
+		requestAnimationFrame(() => {
+			const element = player.currentSegment
+				? segmentElements.get(player.currentSegment.id)
+				: undefined;
+			if (element) scrollNarrationIntoView(element, false);
+			else readingCanvas?.scrollTo({ top: 0 });
+			scheduleVisibleSectionUpdate();
+		});
+	}
 
 	function trackSegment(id: string) {
 		return (node: HTMLElement) => {
@@ -184,6 +207,19 @@
 		return (segmentsByBlock.get(blockId) ?? []).filter(
 			(segment) => segment.narration?.constructIds[0] === constructId
 		);
+	}
+
+	/** Rendered pieces reference the FIRST word sharing a display range — a
+	 * construct's replacement maps several spoken words onto one span. Route
+	 * the live word index to that representative so the whole expression
+	 * stays lit for every word of its reading. */
+	function displayWordIndex(segment: SpeechSegment, wordIndex: number): number | undefined {
+		const active = segment.words[wordIndex];
+		if (!active) return undefined;
+		const first = segment.words.findIndex(
+			(word) => word.start === active.start && word.end === active.end
+		);
+		return first >= 0 ? first : wordIndex;
 	}
 
 	/* ── Construct description panels ─────────────────────────────────────── */
@@ -579,7 +615,6 @@
 			else void player.toggle();
 		} else if (event.key.toLowerCase() === 'j') void player.seekBy(-10);
 		else if (event.key.toLowerCase() === 'l') void player.seekBy(10);
-		else if (event.key.toLowerCase() === 'b') void player.toggleBookmark();
 		else if (event.key === '[') void player.setRate(player.rate - 0.25);
 		else if (event.key === ']') void player.setRate(player.rate + 0.25);
 	}
@@ -599,7 +634,7 @@
 		role="button"
 		tabindex="0"
 		aria-label={segment.text}
-		title="Play narration from this passage"
+		title="Play from here"
 		data-segment-id={segment.id}
 		{@attach trackSegment(segment.id)}
 	>
@@ -607,7 +642,7 @@
 			<InlineText
 				run={inline.run}
 				pieces={inline.pieces}
-				activeWordIndex={isActive ? player.currentWordIndex : undefined}
+				activeWordIndex={isActive ? displayWordIndex(segment, player.currentWordIndex) : undefined}
 			/>
 		{/each}
 	</span>
@@ -691,7 +726,7 @@
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || 'Diagram'}
-			title="Play narration for this diagram"
+			title="Play from here"
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
@@ -700,6 +735,7 @@
 					<ConstructPanel
 						noun="Diagram"
 						sourceLabel="Diagram source"
+						sourceLanguage="mermaid"
 						source={block.text}
 						items={[panelItem(block.id, block.id)]}
 						onEdit={editConstruct}
@@ -719,7 +755,7 @@
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || 'Equation'}
-			title="Play narration for this equation"
+			title="Play from here"
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
@@ -728,6 +764,7 @@
 					<ConstructPanel
 						noun="Equation"
 						sourceLabel="LaTeX source"
+						sourceLanguage="latex"
 						source={block.text}
 						items={[panelItem(block.id, block.id)]}
 						onEdit={editConstruct}
@@ -805,7 +842,7 @@
 						class="construct-row"
 						class:active={activeConstructIds.includes(`${block.id}:rh`)}
 						tabindex="0"
-						title="Play narration for this table"
+						title="Play from here"
 						data-segment-id={headerSegs[0]?.id}
 						{@attach trackConstruct(headerSegs.map((segment) => segment.id))}
 					>
@@ -824,7 +861,7 @@
 							class:active={activeConstructIds.includes(`${block.id}:r${rowIndex}`)}
 							class:narration-pending={rowSegs[0]?.narration?.pending}
 							tabindex="0"
-							title="Play narration for this row"
+							title="Play from here"
 							data-segment-id={rowSegs[0]?.id}
 							{@attach trackConstruct(rowSegs.map((segment) => segment.id))}
 						>
@@ -840,6 +877,7 @@
 			<ConstructPanel
 				noun="Table"
 				sourceLabel="Markdown source"
+				sourceLanguage="markdown"
 				source={tableMarkdown(block.table)}
 				items={tablePanelItems(block)}
 				onEdit={editConstruct}
@@ -868,11 +906,7 @@
 		<a class="button primary" href={resolve('/')}><ArrowLeft size={16} /> Library</a>
 	</section>
 {:else}
-	<div
-		class="reader-shell"
-		class:outline-closed={!readerChrome.outlineOpen}
-		class:bookmarks-open={readerChrome.bookmarksOpen}
-	>
+	<div class="reader-shell" class:outline-closed={!readerChrome.outlineOpen}>
 		{#if readerChrome.outlineOpen}
 			<aside id="document-outline" class="outline-panel" aria-label="Document outline">
 				<header>
@@ -937,7 +971,7 @@
 		{/if}
 
 		<section class="reader-stage">
-			{#if !installed}
+			{#if !installed && !providersState.elevenLabsReady}
 				<ModelInstallPrompt compact />
 			{/if}
 
@@ -1013,40 +1047,6 @@
 				</button>
 			{/if}
 		</section>
-
-		{#if readerChrome.bookmarksOpen}
-			<aside class="bookmarks-panel" aria-label="Bookmarks">
-				<header>
-					<div><strong>Bookmarks</strong><span>{book.bookmarks.length} saved</span></div>
-					<button
-						class="icon-button"
-						type="button"
-						aria-label="Close bookmarks"
-						onclick={() => (readerChrome.bookmarksOpen = false)}
-					>
-						<X size={17} />
-					</button>
-				</header>
-				{#if book.bookmarks.length}
-					<div class="bookmark-list">
-						{#each book.bookmarks as bookmark (bookmark.id)}
-							<button type="button" onclick={() => player.openBookmark(bookmark)}>
-								<Bookmark size={14} fill="currentColor" />
-								<span>
-									<strong>{bookmark.label}</strong>
-									<small>{new Date(bookmark.createdAt).toLocaleDateString()}</small>
-								</span>
-							</button>
-						{/each}
-					</div>
-				{:else}
-					<div class="empty-bookmarks">
-						<Bookmark size={22} />
-						<p>Press B while listening to save your place.</p>
-					</div>
-				{/if}
-			</aside>
-		{/if}
 
 		<footer class="player-bar" aria-label="Playback controls">
 			<div class="generation-options" role="group" aria-label="Speech generation settings">
@@ -1261,82 +1261,36 @@
 		grid-template-columns: minmax(0, 1fr);
 	}
 
-	.reader-shell.bookmarks-open {
-		grid-template-columns: 252px minmax(0, 1fr) 264px;
-	}
-
-	.reader-shell.outline-closed.bookmarks-open {
-		grid-template-columns: minmax(0, 1fr) 264px;
-	}
-
-	.outline-panel,
-	.bookmarks-panel {
+	.outline-panel {
 		display: flex;
 		min-width: 0;
 		min-height: 0;
 		grid-row: 1;
+		grid-column: 1;
 		background: var(--chrome-surface);
 		-webkit-backdrop-filter: var(--chrome-backdrop);
 		backdrop-filter: var(--chrome-backdrop);
 		flex-direction: column;
 		padding-top: var(--app-header-height);
-	}
-
-	.outline-panel {
-		grid-column: 1;
 		border-right: 1px solid var(--line);
 	}
 
-	.bookmarks-panel {
-		grid-column: 3;
-		border-left: 1px solid var(--line);
-	}
-
-	.outline-closed .bookmarks-panel {
-		grid-column: 2;
-	}
-
-	.outline-panel > header,
-	.bookmarks-panel > header {
+	.outline-panel > header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
 		padding: 0 14px;
-	}
-
-	.outline-panel > header {
 		min-height: 50px;
 	}
 
-	.bookmarks-panel > header {
-		min-height: 68px;
-		border-bottom: 1px solid var(--line);
-	}
-
-	.outline-heading strong,
-	.bookmarks-panel header strong,
-	.bookmarks-panel header span {
+	.outline-heading strong {
 		display: block;
-	}
-
-	.outline-heading strong,
-	.bookmarks-panel header strong {
 		font-family: var(--font-display);
 		font-size: 15px;
 		font-variation-settings: 'opsz' 18;
-		font-weight: 560;
-		letter-spacing: -0.015em;
-	}
-
-	.outline-heading strong {
 		font-weight: 680;
-	}
-
-	.bookmarks-panel header span {
-		margin-top: 3px;
-		color: var(--faint);
-		font-size: 9.5px;
+		letter-spacing: -0.015em;
 	}
 
 	.outline-legend {
@@ -2092,64 +2046,6 @@
 		backdrop-filter: blur(14px);
 	}
 
-	.bookmark-list {
-		display: grid;
-		align-content: start;
-		overflow-y: auto;
-		padding: 8px 8px calc(var(--player-height) + 16px);
-		scroll-padding-bottom: calc(var(--player-height) + 16px);
-	}
-
-	.bookmark-list button {
-		display: grid;
-		min-height: 60px;
-		grid-template-columns: auto 1fr;
-		gap: 9px;
-		padding: 10px;
-		border: 0;
-		border-bottom: 1px solid var(--line);
-		background: transparent;
-		color: var(--bookmark);
-		text-align: left;
-	}
-
-	.bookmark-list button:hover {
-		background: var(--hover);
-	}
-
-	.bookmark-list strong,
-	.bookmark-list small {
-		display: block;
-	}
-
-	.bookmark-list strong {
-		color: var(--text-soft);
-		font-family: var(--font-reading);
-		font-size: 11px;
-		font-weight: 540;
-		line-height: 1.35;
-	}
-
-	.bookmark-list small {
-		margin-top: 4px;
-		color: var(--faint);
-		font-size: 8px;
-	}
-
-	.empty-bookmarks {
-		display: grid;
-		place-items: center;
-		padding: 50px 22px;
-		color: var(--faint);
-		text-align: center;
-	}
-
-	.empty-bookmarks p {
-		margin-top: 12px;
-		font-size: 9px;
-		line-height: 1.5;
-	}
-
 	.player-bar {
 		position: absolute;
 		right: 0;
@@ -2511,26 +2407,12 @@
 	}
 
 	@media (max-width: 1180px) {
-		.reader-shell,
-		.reader-shell.bookmarks-open {
+		.reader-shell {
 			grid-template-columns: 210px minmax(0, 1fr);
 		}
 
-		.reader-shell.outline-closed,
-		.reader-shell.outline-closed.bookmarks-open {
+		.reader-shell.outline-closed {
 			grid-template-columns: minmax(0, 1fr);
-		}
-
-		.bookmarks-panel,
-		.outline-closed .bookmarks-panel {
-			position: absolute;
-			top: 0;
-			right: 0;
-			bottom: 0;
-			z-index: 32;
-			width: 264px;
-			border-left: 1px solid var(--line);
-			box-shadow: -18px 0 42px rgba(0, 0, 0, 0.34);
 		}
 
 		.player-bar {
@@ -2553,9 +2435,7 @@
 
 	@media (max-width: 820px) {
 		.reader-shell,
-		.reader-shell.bookmarks-open,
-		.reader-shell.outline-closed,
-		.reader-shell.outline-closed.bookmarks-open {
+		.reader-shell.outline-closed {
 			grid-template-columns: minmax(0, 1fr);
 		}
 

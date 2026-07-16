@@ -1,6 +1,6 @@
 class ReaderChromeState {
-	outlineOpen = $state(true);
-	bookmarksOpen = $state(false);
+	/** Contents starts closed — the document is the point. */
+	outlineOpen = $state(false);
 	menuOpen = $state(false);
 	documentZoom = $state(1);
 
@@ -19,18 +19,11 @@ class ReaderChromeState {
 	}
 
 	setDocumentZoom(value: number): void {
-		this.documentZoom = Math.round(Math.min(1.6, Math.max(0.8, value)) * 10) / 10;
+		// 1% resolution — the zoom control is a near-continuous slider.
+		this.documentZoom = Math.round(Math.min(1.6, Math.max(0.8, value)) * 100) / 100;
 		if (typeof window !== 'undefined') {
 			window.localStorage.setItem('voicebook:document-zoom', String(this.documentZoom));
 		}
-	}
-
-	zoomIn(): void {
-		this.setDocumentZoom(this.documentZoom + 0.1);
-	}
-
-	zoomOut(): void {
-		this.setDocumentZoom(this.documentZoom - 0.1);
 	}
 
 	resetZoom(): void {
@@ -38,7 +31,6 @@ class ReaderChromeState {
 	}
 
 	closeTransientPanels(): void {
-		this.bookmarksOpen = false;
 		this.menuOpen = false;
 	}
 }

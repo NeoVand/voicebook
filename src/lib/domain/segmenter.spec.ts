@@ -97,18 +97,6 @@ describe('speech segmentation', () => {
 			blocks,
 			segments: oldSegments,
 			outline: [],
-			bookmarks: [
-				{
-					id: 'mark',
-					documentId: 'doc',
-					segmentId: 'b0:s0',
-					wordIndex: 45,
-					excerpt: 'Alpha',
-					label: 'Alpha',
-					note: '',
-					createdAt: 1
-				}
-			],
 			playback: { segmentId: 'b0:s0', wordIndex: 45, offset: 10, updatedAt: 1 },
 			warnings: [],
 			includeCode: false
@@ -120,7 +108,9 @@ describe('speech segmentation', () => {
 		expect(refreshed.segments.every((segment) => segment.text.length <= MAX_SEGMENT_CHARS)).toBe(
 			true
 		);
-		expect(refreshed.playback?.segmentId).toBe(refreshed.bookmarks[0].segmentId);
+		expect(refreshed.segments.some((segment) => segment.id === refreshed.playback?.segmentId)).toBe(
+			true
+		);
 	});
 
 	it('maps word offsets and includes punctuation pauses in estimates', () => {
@@ -250,9 +240,24 @@ describe('narrated construct segmentation', () => {
 			'The bound is the sum from i equals zero to n of x sub i for all n.'
 		);
 		expect(segments[0].narration).toMatchObject({ kind: 'inline' });
-		// Word highlighting is disabled where spoken ≠ displayed…
-		expect(segments[0].words).toEqual([]);
-		// …but stays on for untouched sentences in the same block.
+		// One word entry per SPOKEN word, each carrying a display range: the
+		// plain words map to themselves…
+		const words = segments[0].words;
+		expect(words.map((word) => word.text).join(' ')).toBe(
+			'The bound is the sum from i equals zero to n of x sub i for all n'
+		);
+		const the = words[0];
+		expect(segments[0].text.slice(the.start, the.end)).toBe('The');
+		// …and every word of the reading lights up the whole math span.
+		const mathStart = segments[0].text.indexOf('\\sum');
+		const mathEnd = mathStart + '\\sum_{i=0}^{n} x_i'.length;
+		const readingWords = words.filter((word) => word.text === 'sum' || word.text === 'zero');
+		expect(readingWords).toHaveLength(2);
+		for (const word of readingWords) {
+			expect(word.start).toBe(mathStart);
+			expect(word.end).toBe(mathEnd);
+		}
+		// Untouched sentences in the same block keep their plain word map.
 		expect(segments[1].narration).toBeUndefined();
 		expect(segments[1].words.length).toBeGreaterThan(0);
 	});
@@ -305,7 +310,6 @@ describe('narrated construct segmentation', () => {
 			blocks,
 			segments: before,
 			outline: [],
-			bookmarks: [],
 			playback: { segmentId: 'b5:s0', wordIndex: 0, offset: 0, updatedAt: 1 },
 			narrations: {
 				b1: readyEntry('b1', 'The integral from zero to one of x squared.', mathBlock.text)

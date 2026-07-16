@@ -11,11 +11,11 @@
 		Database,
 		Download,
 		Gauge,
-		HardDrive,
 		Keyboard,
 		LoaderCircle,
 		LockKeyhole,
 		Mic2,
+		PencilLine,
 		Play,
 		RefreshCw,
 		ShieldCheck,
@@ -45,15 +45,19 @@
 		DEFAULT_NARRATION_PROMPTS,
 		type NarrationPromptKey
 	} from '$lib/domain/narration-prompts';
+	import { NARRATION_PRESETS, type NarrationPresetId } from '$lib/domain/narration-presets';
+	import { READER_FONTS, THEMES, appearanceState } from '$lib/state/appearance.svelte';
+	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
 	import type { VoiceDescriptor } from '$lib/domain/types';
 	import { runtimeDiagnosticsReport } from '$lib/services/runtime-diagnostics';
 	import { ttsClient } from '$lib/services/tts-client';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { llmState } from '$lib/state/llm.svelte';
 	import { narrationState } from '$lib/state/narrations.svelte';
-	import { requestPersistentStorage } from '$lib/services/repository';
+	import { resolve } from '$app/paths';
+	import { eraseAllData, requestPersistentStorage } from '$lib/services/repository';
 
-	type SettingsSection = 'models' | 'llm' | 'storage' | 'system';
+	type SettingsSection = 'models' | 'llm' | 'appearance' | 'system';
 	type PreviewState = 'idle' | 'loading' | 'playing' | 'error';
 
 	const model = getModel('supertonic-3');
@@ -76,7 +80,10 @@
 	let activeSection = $derived.by<SettingsSection>(() => {
 		const section = page.url.searchParams.get('section');
 		if (section === 'narration') return 'llm'; // pre-rename links
-		return section === 'storage' || section === 'system' || section === 'llm' ? section : 'models';
+		if (section === 'storage') return 'system'; // storage merged into System
+		return section === 'system' || section === 'llm' || section === 'appearance'
+			? section
+			: 'models';
 	});
 	let progress = $derived(appState.modelProgress['supertonic-3']);
 	let installed = $derived(appState.installedModels.includes('supertonic-3'));
@@ -268,11 +275,7 @@
 	}
 
 	async function clearAudio(): Promise<void> {
-		if (
-			!confirm(
-				'Remove all generated speech? Documents, bookmarks, and reading positions will remain.'
-			)
-		)
+		if (!confirm('Remove all generated speech? Documents and reading positions will remain.'))
 			return;
 		storageBusy = true;
 		try {
@@ -285,6 +288,26 @@
 	async function makePersistent(): Promise<void> {
 		await requestPersistentStorage();
 		await appState.refreshStorage();
+	}
+
+	let resetting = $state(false);
+
+	async function factoryReset(): Promise<void> {
+		if (
+			!confirm(
+				'Erase ALL Voicebook data on this device? Documents, generated audio, downloaded models, API keys, and settings will be gone. This cannot be undone.'
+			)
+		)
+			return;
+		resetting = true;
+		try {
+			player.pause();
+			ttsClient.cancelAll();
+			llmState.cancelActivation();
+			await eraseAllData();
+		} finally {
+			window.location.assign(resolve('/'));
+		}
 	}
 
 	/* ── Narration model management ────────────────────────────────────── */
@@ -496,6 +519,22 @@
 		}
 	});
 
+	function syncPromptDrafts(): void {
+		promptDrafts = { ...llmState.promptTemplates };
+	}
+
+	async function choosePreset(preset: NarrationPresetId): Promise<void> {
+		await llmState.setPromptPreset(preset);
+		if (preset === 'custom') syncPromptDrafts();
+		reopenNarrations();
+	}
+
+	async function customizePreset(): Promise<void> {
+		await llmState.customizeActivePreset();
+		syncPromptDrafts();
+		reopenNarrations();
+	}
+
 	function promptDirty(key: NarrationPromptKey): boolean {
 		return promptDrafts[key].trim() !== llmState.promptTemplates[key].trim();
 	}
@@ -532,8 +571,8 @@
 					? 'Voice'
 					: activeSection === 'llm'
 						? 'LLM'
-						: activeSection === 'storage'
-							? 'Storage'
+						: activeSection === 'appearance'
+							? 'Appearance'
 							: 'System'}
 			</h1>
 			<p>
@@ -541,16 +580,11 @@
 					? 'Pick who reads aloud — the free on-device engine, or premium voices with your own API key.'
 					: activeSection === 'llm'
 						? 'Rewrites equations, tables, and diagrams into speakable words — on-device for free, or with your own API key.'
-						: activeSection === 'storage'
-							? 'See and clean up the data Voicebook keeps on this device.'
-							: 'Browser capabilities, privacy, and reader shortcuts.'}
+						: activeSection === 'appearance'
+							? 'Make the reader yours — theme and reading font.'
+							: 'Storage, capabilities, privacy, and reader shortcuts.'}
 			</p>
 		</div>
-		{#if activeSection === 'storage'}
-			<button class="button" type="button" onclick={() => appState.refreshStorage()}>
-				<RefreshCw size={15} /> Refresh
-			</button>
-		{/if}
 	</header>
 
 	{#if activeSection === 'models'}
@@ -662,91 +696,93 @@
 			</div>
 		</section>
 
-		<section class="settings-section" aria-labelledby="engine-title">
-			<header class="section-title">
-				<div>
-					<h2 id="engine-title">On-device engine</h2>
-					<p>Downloaded once, then everything runs in this browser — even offline.</p>
-				</div>
-				<span class="runtime-state" class:ready={installed}>
-					<span></span>{installed ? 'Installed' : 'Not installed'}
-				</span>
-			</header>
-
-			<div class="engine-hero">
-				<div class="engine-name">
-					<span><Mic2 size={20} /></span>
+		{#if providersState.speechEngine === 'local'}
+			<section class="settings-section" aria-labelledby="engine-title">
+				<header class="section-title">
 					<div>
-						<h3>{model.name}</h3>
-						<p>{model.description}</p>
+						<h2 id="engine-title">On-device engine</h2>
+						<p>Downloaded once, then everything runs in this browser — even offline.</p>
+					</div>
+					<span class="runtime-state" class:ready={installed}>
+						<span></span>{installed ? 'Installed' : 'Not installed'}
+					</span>
+				</header>
+
+				<div class="engine-hero">
+					<div class="engine-name">
+						<span><Mic2 size={20} /></span>
+						<div>
+							<h3>{model.name}</h3>
+							<p>{model.description}</p>
+						</div>
+					</div>
+					<div class="engine-facts">
+						<span><strong>{model.sizeMb} MB</strong><small>download</small></span>
+						<span><strong>{model.languages.length}</strong><small>languages</small></span>
+						<span><strong>{model.voices.length}</strong><small>voices</small></span>
+						<span><strong>fp32</strong><small>WebGPU</small></span>
 					</div>
 				</div>
-				<div class="engine-facts">
-					<span><strong>{model.sizeMb} MB</strong><small>download</small></span>
-					<span><strong>{model.languages.length}</strong><small>languages</small></span>
-					<span><strong>{model.voices.length}</strong><small>voices</small></span>
-					<span><strong>fp32</strong><small>WebGPU</small></span>
-				</div>
-			</div>
 
-			<div class="setting-row license-row">
-				<div>
-					<strong>OpenRAIL license</strong>
-					<p>
-						Review the model’s use restrictions before the one-time download.
-						<a href={model.licenseUrl} target="_blank" rel="external noreferrer">
-							Open terms <ArrowUpRight size={12} />
-						</a>
-					</p>
-				</div>
-				<label class="check-control">
-					<input type="checkbox" checked={licenseAccepted} onchange={updateLicense} />
-					<span>I have reviewed the terms</span>
-				</label>
-			</div>
-
-			{#if progress.status === 'loading'}
-				<div class="install-progress" aria-live="polite">
+				<div class="setting-row license-row">
 					<div>
-						<strong>{progress.message}</strong>
-						<span>{Math.round(progress.progress)}%</span>
+						<strong>OpenRAIL license</strong>
+						<p>
+							Review the model’s use restrictions before the one-time download.
+							<a href={model.licenseUrl} target="_blank" rel="external noreferrer">
+								Open terms <ArrowUpRight size={12} />
+							</a>
+						</p>
 					</div>
-					<progress max="100" value={progress.progress}></progress>
-					<small>{progress.file ?? 'Preparing model files'}</small>
+					<label class="check-control">
+						<input type="checkbox" checked={licenseAccepted} onchange={updateLicense} />
+						<span>I have reviewed the terms</span>
+					</label>
 				</div>
-			{:else if progress.status === 'error'}
-				<div class="inline-error" role="alert">
-					<AlertTriangle size={15} />
-					<span>{friendlyError(progress.message)}</span>
-				</div>
-			{/if}
 
-			<footer class="section-actions">
-				<p>{appState.capabilities.webgpu ? 'Runs on WebGPU' : 'Runs on the WASM fallback'}</p>
-				<div>
-					{#if busy}
-						<button class="button" type="button" onclick={cancelInstall}>
-							<Square size={13} fill="currentColor" /> Stop
-						</button>
-					{:else if installed}
-						<span class="installed-mark"><Check size={14} /> Ready to read</span>
-						<button class="button danger" type="button" onclick={remove}>
-							<Trash2 size={14} /> Remove
-						</button>
-					{:else}
-						<button
-							class="button primary"
-							type="button"
-							disabled={!licenseAccepted}
-							onclick={install}
-						>
-							<Download size={15} />
-							{progress.status === 'error' ? 'Retry install' : 'Install locally'}
-						</button>
-					{/if}
-				</div>
-			</footer>
-		</section>
+				{#if progress.status === 'loading'}
+					<div class="install-progress" aria-live="polite">
+						<div>
+							<strong>{progress.message}</strong>
+							<span>{Math.round(progress.progress)}%</span>
+						</div>
+						<progress max="100" value={progress.progress}></progress>
+						<small>{progress.file ?? 'Preparing model files'}</small>
+					</div>
+				{:else if progress.status === 'error'}
+					<div class="inline-error" role="alert">
+						<AlertTriangle size={15} />
+						<span>{friendlyError(progress.message)}</span>
+					</div>
+				{/if}
+
+				<footer class="section-actions">
+					<p>{appState.capabilities.webgpu ? 'Runs on WebGPU' : 'Runs on the WASM fallback'}</p>
+					<div>
+						{#if busy}
+							<button class="button" type="button" onclick={cancelInstall}>
+								<Square size={13} fill="currentColor" /> Stop
+							</button>
+						{:else if installed}
+							<span class="installed-mark"><Check size={14} /> Ready to read</span>
+							<button class="button danger" type="button" onclick={remove}>
+								<Trash2 size={14} /> Remove
+							</button>
+						{:else}
+							<button
+								class="button primary"
+								type="button"
+								disabled={!licenseAccepted}
+								onclick={install}
+							>
+								<Download size={15} />
+								{progress.status === 'error' ? 'Retry install' : 'Install locally'}
+							</button>
+						{/if}
+					</div>
+				</footer>
+			</section>
+		{/if}
 
 		{#if providersState.speechEngine === 'elevenlabs'}
 			<section class="settings-section voices-section" aria-labelledby="el-voices-title">
@@ -970,151 +1006,154 @@
 			</div>
 		</section>
 
-		<section class="settings-section" aria-labelledby="llm-models-title">
-			<header class="section-title">
-				<div>
-					<h2 id="llm-models-title">On-device models</h2>
-					<p>Downloaded once, then everything runs in this browser.</p>
-				</div>
-				<span class="runtime-state" class:ready={llmState.installed}>
-					<span></span>
-					{llmState.phase === 'probing'
-						? 'Warming up…'
-						: llmState.installed
-							? 'Installed'
-							: 'Not installed'}
-				</span>
-			</header>
-
-			{#if !llmState.eligible}
-				<div class="setting-row">
+		{#if providersState.descriptionEngine === 'local'}
+			<section class="settings-section" aria-labelledby="llm-models-title">
+				<header class="section-title">
 					<div>
-						<strong>Not available on this device</strong>
-						<p>
-							{llmState.policy.reason ?? 'The language model needs a desktop browser with WebGPU.'}
-							A cloud engine above still works here.
-						</p>
+						<h2 id="llm-models-title">On-device models</h2>
+						<p>Downloaded once, then everything runs in this browser.</p>
 					</div>
-					<span class="capability-label"><Cpu size={15} /> WebGPU required</span>
-				</div>
-			{:else}
-				<div class="llm-grid">
-					{#each LLM_CATALOG as spec (spec.id)}
-						{@const specInstalled = llmState.installedModels.includes(spec.id)}
-						{@const specSelected = llmState.selectedModelId === spec.id}
-						{@const specActivating = llmActivating && llmState.activeModelId === spec.id}
-						{@const offer = llmState.canOffer(spec)}
-						<article
-							class="llm-card"
-							class:selected={specSelected}
-							class:unavailable={!offer.ok}
-							aria-label={`${spec.label} language model`}
-						>
-							<header class="llm-card-head">
-								<span class="llm-card-icon"><BrainCircuit size={19} /></span>
-								<div class="llm-card-name">
-									<h3>{spec.label}</h3>
-									<p>{spec.tagline}</p>
-								</div>
-								{#if specSelected && llmState.ready}
-									<span class="llm-card-state active">Active</span>
-								{:else if specSelected}
-									<span class="llm-card-state">Selected</span>
-								{:else if specInstalled}
-									<span class="llm-card-state">Installed</span>
-								{/if}
-							</header>
+					<span class="runtime-state" class:ready={llmState.installed}>
+						<span></span>
+						{llmState.phase === 'probing'
+							? 'Warming up…'
+							: llmState.installed
+								? 'Installed'
+								: 'Not installed'}
+					</span>
+				</header>
 
-							<dl class="llm-card-facts">
-								<div>
-									<dt>Download</dt>
-									<dd>{spec.sizeMb} MB</dd>
-								</div>
-								<div>
-									<dt>Precision</dt>
-									<dd>{spec.dtype}</dd>
-								</div>
-								<div>
-									<dt>License</dt>
-									<dd>
-										<a href={spec.licenseUrl} target="_blank" rel="external noreferrer">
-											{spec.license}
-											<ArrowUpRight size={11} />
-										</a>
-									</dd>
-								</div>
-							</dl>
-
-							{#if specActivating}
-								<div class="install-progress" aria-live="polite">
-									<div>
-										<strong>
-											{llmState.phase === 'downloading'
-												? 'Downloading… keep this tab open.'
-												: llmState.phase === 'probing'
-													? 'Warming up the model…'
-													: 'Loading model files…'}
-										</strong>
-										<span>{llmState.download ? `${llmState.download.percent}%` : ''}</span>
+				{#if !llmState.eligible}
+					<div class="setting-row">
+						<div>
+							<strong>Not available on this device</strong>
+							<p>
+								{llmState.policy.reason ??
+									'The language model needs a desktop browser with WebGPU.'}
+								A cloud engine above still works here.
+							</p>
+						</div>
+						<span class="capability-label"><Cpu size={15} /> WebGPU required</span>
+					</div>
+				{:else}
+					<div class="llm-grid">
+						{#each LLM_CATALOG as spec (spec.id)}
+							{@const specInstalled = llmState.installedModels.includes(spec.id)}
+							{@const specSelected = llmState.selectedModelId === spec.id}
+							{@const specActivating = llmActivating && llmState.activeModelId === spec.id}
+							{@const offer = llmState.canOffer(spec)}
+							<article
+								class="llm-card"
+								class:selected={specSelected}
+								class:unavailable={!offer.ok}
+								aria-label={`${spec.label} language model`}
+							>
+								<header class="llm-card-head">
+									<span class="llm-card-icon"><BrainCircuit size={19} /></span>
+									<div class="llm-card-name">
+										<h3>{spec.label}</h3>
+										<p>{spec.tagline}</p>
 									</div>
-									<progress max="100" value={llmState.download?.percent ?? 0}></progress>
-									<small>{llmState.download?.file ?? 'Preparing model files'}</small>
-								</div>
-							{:else if !specInstalled}
-								<label class="check-control llm-card-license">
-									<input
-										type="checkbox"
-										checked={llmState.acceptedLicenses.includes(spec.id)}
-										onchange={(event) => updateLlmLicense(spec, event)}
-									/>
-									<span>I have reviewed the license terms</span>
-								</label>
-							{/if}
+									{#if specSelected && llmState.ready}
+										<span class="llm-card-state active">Active</span>
+									{:else if specSelected}
+										<span class="llm-card-state">Selected</span>
+									{:else if specInstalled}
+										<span class="llm-card-state">Installed</span>
+									{/if}
+								</header>
 
-							<footer class="llm-card-actions">
-								{#if !offer.ok}
-									<p class="llm-card-note">{offer.reason ?? 'Unavailable on this device'}</p>
-								{:else if specActivating}
-									<button class="button" type="button" onclick={cancelLlmInstall}>
-										<Square size={13} fill="currentColor" /> Stop
-									</button>
-								{:else if specInstalled}
-									{#if !specSelected}
-										<button class="button primary" type="button" onclick={() => useLlm(spec)}>
-											<Check size={14} /> Use this model
+								<dl class="llm-card-facts">
+									<div>
+										<dt>Download</dt>
+										<dd>{spec.sizeMb} MB</dd>
+									</div>
+									<div>
+										<dt>Precision</dt>
+										<dd>{spec.dtype}</dd>
+									</div>
+									<div>
+										<dt>License</dt>
+										<dd>
+											<a href={spec.licenseUrl} target="_blank" rel="external noreferrer">
+												{spec.license}
+												<ArrowUpRight size={11} />
+											</a>
+										</dd>
+									</div>
+								</dl>
+
+								{#if specActivating}
+									<div class="install-progress" aria-live="polite">
+										<div>
+											<strong>
+												{llmState.phase === 'downloading'
+													? 'Downloading… keep this tab open.'
+													: llmState.phase === 'probing'
+														? 'Warming up the model…'
+														: 'Loading model files…'}
+											</strong>
+											<span>{llmState.download ? `${llmState.download.percent}%` : ''}</span>
+										</div>
+										<progress max="100" value={llmState.download?.percent ?? 0}></progress>
+										<small>{llmState.download?.file ?? 'Preparing model files'}</small>
+									</div>
+								{:else if !specInstalled}
+									<label class="check-control llm-card-license">
+										<input
+											type="checkbox"
+											checked={llmState.acceptedLicenses.includes(spec.id)}
+											onchange={(event) => updateLlmLicense(spec, event)}
+										/>
+										<span>I have reviewed the license terms</span>
+									</label>
+								{/if}
+
+								<footer class="llm-card-actions">
+									{#if !offer.ok}
+										<p class="llm-card-note">{offer.reason ?? 'Unavailable on this device'}</p>
+									{:else if specActivating}
+										<button class="button" type="button" onclick={cancelLlmInstall}>
+											<Square size={13} fill="currentColor" /> Stop
+										</button>
+									{:else if specInstalled}
+										{#if !specSelected}
+											<button class="button primary" type="button" onclick={() => useLlm(spec)}>
+												<Check size={14} /> Use this model
+											</button>
+										{/if}
+										<button
+											class="button danger"
+											type="button"
+											disabled={llmBusy}
+											onclick={() => removeLlm(spec)}
+										>
+											<Trash2 size={14} /> Remove
+										</button>
+									{:else}
+										<button
+											class="button primary"
+											type="button"
+											disabled={!llmState.acceptedLicenses.includes(spec.id) || llmBusy}
+											onclick={() => installLlm(spec)}
+										>
+											<Download size={15} /> Download · {spec.sizeMb} MB
 										</button>
 									{/if}
-									<button
-										class="button danger"
-										type="button"
-										disabled={llmBusy}
-										onclick={() => removeLlm(spec)}
-									>
-										<Trash2 size={14} /> Remove
-									</button>
-								{:else}
-									<button
-										class="button primary"
-										type="button"
-										disabled={!llmState.acceptedLicenses.includes(spec.id) || llmBusy}
-										onclick={() => installLlm(spec)}
-									>
-										<Download size={15} /> Download · {spec.sizeMb} MB
-									</button>
-								{/if}
-							</footer>
-						</article>
-					{/each}
-				</div>
-
-				{#if llmError || llmState.error}
-					<div class="inline-error" role="alert">
-						<AlertTriangle size={15} />
-						<span>{llmError || llmState.error}</span>
+								</footer>
+							</article>
+						{/each}
 					</div>
+
+					{#if llmError || llmState.error}
+						<div class="inline-error" role="alert">
+							<AlertTriangle size={15} />
+							<span>{llmError || llmState.error}</span>
+						</div>
+					{/if}
 				{/if}
-			{/if}
-		</section>
+			</section>
+		{/if}
 
 		<section class="settings-section" aria-labelledby="llm-behavior-title">
 			<header class="section-title">
@@ -1168,60 +1207,160 @@
 			</footer>
 		</section>
 
-		<section class="settings-section" aria-labelledby="llm-prompts-title">
+		<section class="settings-section" aria-labelledby="llm-style-title">
 			<header class="section-title">
 				<div>
-					<h2 id="llm-prompts-title">Prompts</h2>
-					<p>
-						Exactly what the model is asked, per element type. Edited prompts rewrite documents the
-						next time they open.
-					</p>
+					<h2 id="llm-style-title">Description style</h2>
+					<p>How much gets said about each equation, table, and diagram.</p>
 				</div>
 			</header>
 
-			{#each PROMPT_FIELDS as field (field.key)}
-				<div class="prompt-editor">
-					<div class="prompt-editor-head">
-						<div>
-							<strong>{field.label}</strong>
-							{#if promptCustom(field.key)}<span class="prompt-custom-badge">Custom</span>{/if}
-							<p>{field.hint}</p>
-						</div>
-						<div class="prompt-editor-actions">
-							{#if promptSavedKey === field.key}
-								<span class="installed-mark"><Check size={13} /> Saved</span>
-							{/if}
-							<button
-								class="button"
-								type="button"
-								disabled={!promptCustom(field.key) && !promptDirty(field.key)}
-								onclick={() => resetPrompt(field.key)}
-							>
-								Reset
-							</button>
-							<button
-								class="button primary"
-								type="button"
-								disabled={!promptDirty(field.key)}
-								onclick={() => savePrompt(field.key)}
-							>
-								Save
-							</button>
-						</div>
+			<div class="preset-grid" role="radiogroup" aria-label="Description style">
+				{#each NARRATION_PRESETS as preset (preset.id)}
+					<button
+						class="preset-card"
+						class:selected={llmState.promptPreset === preset.id}
+						type="button"
+						role="radio"
+						aria-checked={llmState.promptPreset === preset.id}
+						onclick={() => void choosePreset(preset.id)}
+					>
+						<strong>{preset.label}</strong>
+						<small>{preset.tagline}</small>
+					</button>
+				{/each}
+				<button
+					class="preset-card"
+					class:selected={llmState.promptPreset === 'custom'}
+					type="button"
+					role="radio"
+					aria-checked={llmState.promptPreset === 'custom'}
+					onclick={() => void choosePreset('custom')}
+				>
+					<strong>Custom</strong>
+					<small>Your own prompts, saved on this device</small>
+				</button>
+			</div>
+
+			{#if llmState.promptPreset !== 'custom'}
+				<footer class="section-actions">
+					<p>Want different wording? Start from this style and make it yours.</p>
+					<div>
+						<button class="button" type="button" onclick={() => void customizePreset()}>
+							<PencilLine size={14} /> Customize prompts
+						</button>
 					</div>
-					<textarea
-						rows={field.key === 'system' ? 6 : 4}
-						spellcheck="false"
-						aria-label={`${field.label} prompt template`}
-						bind:value={promptDrafts[field.key]}></textarea>
-				</div>
-			{/each}
+				</footer>
+			{:else}
+				{#each PROMPT_FIELDS as field (field.key)}
+					<div class="prompt-editor">
+						<div class="prompt-editor-head">
+							<div>
+								<strong>{field.label}</strong>
+								{#if promptCustom(field.key)}<span class="prompt-custom-badge">Custom</span>{/if}
+								<p>{field.hint}</p>
+							</div>
+							<div class="prompt-editor-actions">
+								{#if promptSavedKey === field.key}
+									<span class="installed-mark"><Check size={13} /> Saved</span>
+								{/if}
+								<button
+									class="button"
+									type="button"
+									disabled={!promptCustom(field.key) && !promptDirty(field.key)}
+									onclick={() => resetPrompt(field.key)}
+								>
+									Reset
+								</button>
+								<button
+									class="button primary"
+									type="button"
+									disabled={!promptDirty(field.key)}
+									onclick={() => savePrompt(field.key)}
+								>
+									Save
+								</button>
+							</div>
+						</div>
+						<textarea
+							rows={field.key === 'system' ? 6 : 4}
+							spellcheck="false"
+							aria-label={`${field.label} prompt template`}
+							bind:value={promptDrafts[field.key]}></textarea>
+					</div>
+				{/each}
+			{/if}
 		</section>
-	{:else if activeSection === 'storage'}
+	{:else if activeSection === 'appearance'}
+		<section class="settings-section" aria-labelledby="theme-title">
+			<header class="section-title">
+				<div>
+					<h2 id="theme-title">Theme</h2>
+					<p>Applies everywhere, instantly.</p>
+				</div>
+			</header>
+			<div class="theme-grid" role="radiogroup" aria-label="Color theme">
+				{#each THEMES as theme (theme.id)}
+					<button
+						class="theme-card"
+						class:selected={appearanceState.theme === theme.id}
+						type="button"
+						role="radio"
+						aria-checked={appearanceState.theme === theme.id}
+						onclick={() => appearanceState.setTheme(theme.id)}
+					>
+						<span class="theme-swatch" style:background={theme.swatch[0]} aria-hidden="true">
+							<i style:background={theme.swatch[1]}>
+								<b style:background={theme.swatch[2]}></b>
+								<b style:background={theme.swatch[3]}></b>
+							</i>
+						</span>
+						<strong><ThemeIcon theme={theme.id} size={13} />{theme.label}</strong>
+						<small>{theme.tagline}</small>
+					</button>
+				{/each}
+			</div>
+		</section>
+
+		<section class="settings-section" aria-labelledby="font-title">
+			<header class="section-title">
+				<div>
+					<h2 id="font-title">Reading font</h2>
+					<p>The voice of the page — chrome and menus keep their own type.</p>
+				</div>
+			</header>
+			<div class="font-grid" role="radiogroup" aria-label="Reading font">
+				{#each READER_FONTS as font (font.id)}
+					<button
+						class="font-card"
+						class:selected={appearanceState.readerFont === font.id}
+						type="button"
+						role="radio"
+						aria-checked={appearanceState.readerFont === font.id}
+						onclick={() => appearanceState.setReaderFont(font.id)}
+					>
+						<span class="font-sample" style:font-family={font.stack} aria-hidden="true">
+							The quiet machinery of ideas, read aloud.
+						</span>
+						<strong>{font.label}</strong>
+						<small>{font.tagline}</small>
+					</button>
+				{/each}
+			</div>
+			<div class="appearance-preview" aria-hidden="true">
+				<p>
+					Voicebook reads your documents in this face — <em
+						>equations, tables, and diagrams included</em
+					>
+					— while the <span class="preview-active">current word</span> glows as it is spoken.
+				</p>
+			</div>
+		</section>
+	{:else}
 		<section class="settings-section" aria-labelledby="storage-title">
 			<header class="section-title">
 				<div>
-					<h2 id="storage-title">Browser storage</h2>
+					<h2 id="storage-title">Storage</h2>
 					<p>Voicebook’s private storage area on this device.</p>
 				</div>
 				<span class="runtime-state" class:ready={appState.storage.persisted}>
@@ -1238,43 +1377,8 @@
 				></progress>
 			</div>
 
-			<div class="setting-row">
-				<div>
-					<strong>Document metadata</strong>
-					<p>Titles, semantic blocks, bookmarks, and reading positions.</p>
-				</div>
-				<Database size={16} />
-			</div>
-			<div class="setting-row">
-				<div>
-					<strong>Original source files</strong>
-					<p>PDF, DOCX, Markdown, and text files retained for local recovery.</p>
-				</div>
-				<HardDrive size={16} />
-			</div>
-			<div class="setting-row">
-				<div>
-					<strong>Generated speech</strong>
-					<p>Audio cached by document, engine revision, voice, and backend.</p>
-				</div>
-				<Mic2 size={16} />
-			</div>
-			{#if llmState.installedModels.length}
-				<div class="setting-row">
-					<div>
-						<strong>Language model weights</strong>
-						<p>
-							{LLM_CATALOG.filter((spec) => llmState.installedModels.includes(spec.id))
-								.map((spec) => `${spec.label} · ~${spec.sizeMb} MB`)
-								.join(', ')} — cached once from Hugging Face. Remove under LLM.
-						</p>
-					</div>
-					<BrainCircuit size={16} />
-				</div>
-			{/if}
-
 			<footer class="section-actions">
-				<p>Clearing audio does not remove documents, bookmarks, or reading progress.</p>
+				<p>Clearing audio keeps documents and reading progress.</p>
 				<div>
 					{#if !appState.storage.persisted}
 						<button class="button" type="button" onclick={makePersistent}>
@@ -1287,7 +1391,25 @@
 				</div>
 			</footer>
 		</section>
-	{:else}
+
+		<section class="settings-section" aria-labelledby="reset-title">
+			<header class="section-title">
+				<div>
+					<h2 id="reset-title">Factory reset</h2>
+					<p>Erase everything on this device: documents, audio, models, API keys, settings.</p>
+				</div>
+			</header>
+			<footer class="section-actions">
+				<p>The app reloads into first-run setup. This cannot be undone.</p>
+				<div>
+					<button class="button danger" type="button" disabled={resetting} onclick={factoryReset}>
+						{#if resetting}<LoaderCircle class="spin" size={15} />{:else}<Trash2 size={15} />{/if}
+						Erase all data
+					</button>
+				</div>
+			</footer>
+		</section>
+
 		<section class="settings-section" aria-labelledby="capabilities-title">
 			<header class="section-title">
 				<div>
@@ -1376,10 +1498,6 @@
 					<div>
 						<dt>Back / forward 10s</dt>
 						<dd><kbd>J</kbd><kbd>L</kbd></dd>
-					</div>
-					<div>
-						<dt>Bookmark</dt>
-						<dd><kbd>B</kbd></dd>
 					</div>
 					<div>
 						<dt>Speed</dt>
@@ -1796,6 +1914,177 @@
 		margin-top: 2px;
 		color: var(--faint);
 		font-size: 8.5px;
+	}
+
+	.preset-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+		gap: 10px;
+		margin: 16px 0;
+	}
+
+	.preset-card {
+		padding: 14px 15px;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		background: color-mix(in srgb, var(--surface, transparent) 60%, transparent);
+		color: var(--muted);
+		cursor: pointer;
+		text-align: left;
+		transition:
+			border-color 150ms var(--ease),
+			box-shadow 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.preset-card:hover {
+		color: var(--text);
+	}
+
+	.preset-card.selected {
+		border-color: color-mix(in srgb, var(--primary) 55%, var(--line));
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent);
+		color: var(--text);
+	}
+
+	.preset-card strong {
+		display: block;
+		font-size: 11.5px;
+		font-weight: 650;
+	}
+
+	.preset-card small {
+		display: block;
+		margin-top: 3px;
+		color: var(--faint);
+		font-size: 9px;
+		line-height: 1.4;
+	}
+
+	.theme-grid,
+	.font-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+		gap: 12px;
+		margin: 18px 0 8px;
+	}
+
+	.theme-card,
+	.font-card {
+		padding: 13px;
+		border: 1px solid var(--line);
+		border-radius: 12px;
+		background: color-mix(in srgb, var(--surface, transparent) 60%, transparent);
+		color: var(--muted);
+		cursor: pointer;
+		text-align: left;
+		transition:
+			border-color 150ms var(--ease),
+			box-shadow 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.theme-card:hover,
+	.font-card:hover {
+		color: var(--text);
+	}
+
+	.theme-card.selected,
+	.font-card.selected {
+		border-color: color-mix(in srgb, var(--primary) 55%, var(--line));
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent);
+		color: var(--text);
+	}
+
+	.theme-card strong,
+	.font-card strong {
+		display: block;
+		margin-top: 10px;
+		font-size: 11px;
+		font-weight: 650;
+	}
+
+	.theme-card strong {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+
+	.theme-card strong :global(svg) {
+		color: var(--muted);
+	}
+
+	.theme-card.selected strong :global(svg) {
+		color: var(--primary);
+	}
+
+	.theme-card small,
+	.font-card small {
+		display: block;
+		margin-top: 2px;
+		color: var(--faint);
+		font-size: 9px;
+	}
+
+	.theme-swatch {
+		display: block;
+		height: 58px;
+		padding: 9px 11px;
+		border: 1px solid rgba(127, 127, 127, 0.25);
+		border-radius: 8px;
+	}
+
+	.theme-swatch i {
+		display: flex;
+		height: 100%;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 5px;
+		padding: 0 9px;
+		border-radius: 5px;
+	}
+
+	.theme-swatch b {
+		display: block;
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+	}
+
+	.font-sample {
+		display: block;
+		overflow: hidden;
+		min-height: 58px;
+		padding: 9px 11px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: var(--reader);
+		color: var(--reader-ink);
+		font-size: 13.5px;
+		line-height: 1.5;
+	}
+
+	.appearance-preview {
+		padding: 20px 24px;
+		border: 1px solid var(--line);
+		border-radius: 12px;
+		margin: 14px 0 6px;
+		background: var(--reader);
+		color: var(--reader-ink);
+		font-family: var(--font-reading);
+		font-size: 15px;
+		line-height: 1.7;
+	}
+
+	.appearance-preview p {
+		margin: 0;
+	}
+
+	.preview-active {
+		border-radius: 0.28em;
+		background: var(--active-word-bg);
+		box-shadow: 0 0 0 0.12em var(--active-word-bg);
+		color: var(--active-word-ink);
 	}
 
 	.el-usage {
