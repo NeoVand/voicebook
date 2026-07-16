@@ -768,7 +768,31 @@
 			</MermaidDiagram>
 		</div>
 	{:else if block.kind === 'code'}
-		<CodeBlock id={block.id} source={block.text} language={block.codeLanguage} />
+		{@const segs = segmentsByBlock.get(block.id) ?? []}
+		<div
+			class="construct-segment code-construct"
+			class:active={activeConstructIds.includes(block.id)}
+			class:narration-pending={segs[0]?.narration?.pending}
+			role="button"
+			tabindex="0"
+			aria-label={segs.map((segment) => segment.text).join(' ') || 'Code snippet'}
+			title="Play from here"
+			data-segment-id={segs[0]?.id}
+			{@attach trackConstruct(segs.map((segment) => segment.id))}
+		>
+			<CodeBlock id={block.id} source={block.text} language={block.codeLanguage}>
+				{#snippet panel()}
+					<!-- The code itself is right above — the panel holds only the
+					     spoken text. -->
+					<ConstructPanel
+						noun="Code"
+						items={[panelItem(block.id, block.id)]}
+						onEdit={editConstruct}
+						onRegenerate={regenerateConstruct}
+					/>
+				{/snippet}
+			</CodeBlock>
+		</div>
 	{:else if block.kind === 'math'}
 		{@const segs = segmentsByBlock.get(block.id) ?? []}
 		<div

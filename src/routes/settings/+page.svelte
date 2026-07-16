@@ -504,6 +504,11 @@
 			hint: 'Placeholders: {{source}}, {{header}}, {{context}}'
 		},
 		{ key: 'mermaid', label: 'Diagrams', hint: 'Placeholders: {{source}}, {{context}}' },
+		{
+			key: 'code-block',
+			label: 'Code blocks',
+			hint: 'Placeholders: {{source}}, {{type}}, {{context}}'
+		},
 		{ key: 'image', label: 'Images', hint: 'Placeholders: {{source}}, {{context}}' }
 	];
 

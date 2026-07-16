@@ -7,6 +7,7 @@ import type {
 	WordSpan
 } from './types';
 import {
+	codeBlockFallback,
 	inlineConstructSpans,
 	inlineMathFallback,
 	mathBlockFallback,
@@ -251,8 +252,22 @@ export function segmentBlocks(
 			continue;
 		}
 
-		if ((!block.speak && block.kind !== 'code') || (block.kind === 'code' && !includeCode))
+		// Code fences narrate like the other constructs: the description (or a
+		// deterministic fallback — verbatim for short plain-text snippets) is
+		// spoken instead of the raw source, unless the read-code-verbatim
+		// switch is on.
+		if (block.kind === 'code' && !includeCode) {
+			const fallback = codeBlockFallback(block.text, block.codeLanguage);
+			const { text, pending } = spokenFor(narrations[block.id], fallback);
+			if (text) {
+				pushConstructSegments(segments, block, block.id, 'code-block', text, pending, {
+					start: 0,
+					end: block.text.length
+				});
+			}
 			continue;
+		}
+		if (!block.speak && block.kind !== 'code') continue;
 
 		const spans = inlineConstructSpans(block);
 		let blockSegmentIndex = 0;

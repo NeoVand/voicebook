@@ -134,7 +134,7 @@ export interface DocumentBlock {
 }
 
 export type NarrationConstructKind =
-	'math-block' | 'math-inline' | 'mermaid' | 'table-header' | 'table-row' | 'image';
+	'math-block' | 'math-inline' | 'mermaid' | 'code-block' | 'table-header' | 'table-row' | 'image';
 
 export type NarrationStatus = 'pending' | 'ready' | 'failed';
 

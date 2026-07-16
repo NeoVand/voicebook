@@ -18,6 +18,7 @@
  */
 import { latexToSpeech } from './latex-speech';
 import {
+	codeNoun,
 	fnv64,
 	mermaidNoun,
 	type NarrationConstruct,
@@ -31,7 +32,7 @@ export interface NarrationPromptMessage {
 }
 
 export type NarrationPromptKey =
-	'system' | 'math-block' | 'math-inline' | 'table-row' | 'mermaid' | 'image';
+	'system' | 'math-block' | 'math-inline' | 'table-row' | 'mermaid' | 'code-block' | 'image';
 
 export type NarrationPromptTemplates = Record<NarrationPromptKey, string>;
 export type NarrationPromptOverrides = Partial<NarrationPromptTemplates>;
@@ -66,6 +67,13 @@ export const DEFAULT_NARRATION_PROMPTS: NarrationPromptTemplates = {
 		'',
 		'{{source}}'
 	].join('\n'),
+	'code-block': [
+		'A document shows this {{type}} snippet:',
+		'',
+		'{{source}}',
+		'',
+		'Read it aloud for a listener in plain words. If it is a short list of rules or values, speak each line naturally with numbers and signs as words; otherwise say what it does in one or two short sentences. Words only.'
+	].join('\n'),
 	image: [
 		'A figure has this caption: {{source}}',
 		'Announce the figure to a listener in one short sentence, mentioning only what the caption says.'
@@ -96,6 +104,7 @@ export const NARRATION_GENERATION_PARAMS: Record<
 	'table-row': { maxNewTokens: 64, maxChars: 200, temperature: 0.2 },
 	'table-header': { maxNewTokens: 0, maxChars: 0, temperature: 0 }, // deterministic — never prompted
 	mermaid: { maxNewTokens: 112, maxChars: 320, temperature: 0.2 },
+	'code-block': { maxNewTokens: 112, maxChars: 320, temperature: 0.2 },
 	image: { maxNewTokens: 64, maxChars: 200, temperature: 0.2 }
 };
 
@@ -125,6 +134,17 @@ const EXEMPLARS: Partial<
 			header: 'Model, Parameters, Accuracy',
 			answer:
 				'The model LFM two point five has one point two billion parameters and seventy one point four percent accuracy.'
+		}
+	],
+	'code-block': [
+		{
+			source: '+1 per second alive\n-100 if eaten',
+			answer: 'Plus one point per second alive, and minus one hundred if eaten.'
+		},
+		{
+			source: 'def mean(xs):\n    return sum(xs) / len(xs)',
+			answer:
+				'A short Python function that returns the mean of a list by dividing its sum by its length.'
 		}
 	],
 	mermaid: [
@@ -161,6 +181,7 @@ function templateKeyFor(kind: NarrationConstructKind): NarrationPromptKey | null
 		kind === 'math-inline' ||
 		kind === 'table-row' ||
 		kind === 'mermaid' ||
+		kind === 'code-block' ||
 		kind === 'image'
 	) {
 		return kind;
@@ -172,7 +193,14 @@ function templateKeyFor(kind: NarrationConstructKind): NarrationPromptKey | null
 export function narrationPromptHashes(overrides?: NarrationPromptOverrides): NarrationPromptHashes {
 	const prompts = resolveNarrationPrompts(overrides);
 	const hashes: NarrationPromptHashes = {};
-	for (const kind of ['math-block', 'math-inline', 'table-row', 'mermaid', 'image'] as const) {
+	for (const kind of [
+		'math-block',
+		'math-inline',
+		'table-row',
+		'mermaid',
+		'code-block',
+		'image'
+	] as const) {
 		hashes[kind] = fnv64(`${prompts.system}\n--\n${prompts[kind]}`);
 	}
 	return hashes;
@@ -213,10 +241,16 @@ export function buildNarrationMessages(
 		.filter(Boolean)
 		.join(', ');
 	const source =
-		construct.kind === 'mermaid' && construct.source.length > MAX_MERMAID_SOURCE_CHARS
-			? `${construct.source.slice(0, MAX_MERMAID_SOURCE_CHARS)}\n%% diagram continues`
+		(construct.kind === 'mermaid' || construct.kind === 'code-block') &&
+		construct.source.length > MAX_MERMAID_SOURCE_CHARS
+			? `${construct.source.slice(0, MAX_MERMAID_SOURCE_CHARS)}\n${construct.kind === 'mermaid' ? '%% diagram continues' : '… snippet continues'}`
 			: construct.source;
 
+	const nounFor = (candidateSource: string, language?: string): string => {
+		if (construct.kind === 'mermaid') return mermaidNoun(candidateSource);
+		if (construct.kind === 'code-block') return codeNoun(language);
+		return '';
+	};
 	const messages: NarrationPromptMessage[] = [{ role: 'system', content: prompts.system }];
 	for (const exemplar of EXEMPLARS[construct.kind] ?? []) {
 		messages.push(
@@ -226,7 +260,7 @@ export function buildNarrationMessages(
 					source: exemplar.source,
 					header: exemplar.header ?? header,
 					context: exemplar.context ?? '',
-					type: construct.kind === 'mermaid' ? mermaidNoun(exemplar.source) : '',
+					type: nounFor(exemplar.source, undefined),
 					reading: exemplar.reading ?? ''
 				})
 			},
@@ -237,7 +271,7 @@ export function buildNarrationMessages(
 		source,
 		header,
 		context: trimContext(documentContext, 480),
-		type: construct.kind === 'mermaid' ? mermaidNoun(construct.source) : '',
+		type: nounFor(construct.source, construct.context?.language),
 		reading:
 			construct.kind === 'math-block' ? (latexToSpeech(construct.source) ?? construct.source) : ''
 	});

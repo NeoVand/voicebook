@@ -34,6 +34,7 @@ const CONCISE_PARAMS: NarrationParamsMap = {
 	'math-block': { maxNewTokens: 0, maxChars: 0, temperature: 0 },
 	'table-row': { maxNewTokens: 48, maxChars: 140, temperature: 0.2 },
 	mermaid: { maxNewTokens: 56, maxChars: 170, temperature: 0.2 },
+	'code-block': { maxNewTokens: 64, maxChars: 180, temperature: 0.2 },
 	image: { maxNewTokens: 40, maxChars: 120, temperature: 0.2 }
 };
 
@@ -42,6 +43,7 @@ const EDUCATIONAL_PARAMS: NarrationParamsMap = {
 	'math-block': { maxNewTokens: 140, maxChars: 440, temperature: 0, mathProse: 'explanation' },
 	'table-row': { maxNewTokens: 96, maxChars: 280, temperature: 0.2 },
 	mermaid: { maxNewTokens: 168, maxChars: 480, temperature: 0.2 },
+	'code-block': { maxNewTokens: 168, maxChars: 480, temperature: 0.2 },
 	image: { maxNewTokens: 96, maxChars: 280, temperature: 0.2 }
 };
 
@@ -61,6 +63,13 @@ export const NARRATION_PRESETS: NarrationPreset[] = [
 				'This code draws {{type}}. Tell a listener what it shows in one short sentence, words only:',
 				'',
 				'{{source}}'
+			].join('\n'),
+			'code-block': [
+				'A document shows this {{type}} snippet:',
+				'',
+				'{{source}}',
+				'',
+				'Tell a listener what it is in one short sentence, words only. Speak a short list of rules or values directly; summarize anything longer.'
 			].join('\n')
 		},
 		params: CONCISE_PARAMS
@@ -93,6 +102,13 @@ export const NARRATION_PRESETS: NarrationPreset[] = [
 				'This code draws {{type}}. In three or four short sentences, walk a listener through what it shows and why the pieces connect the way they do, in words only:',
 				'',
 				'{{source}}'
+			].join('\n'),
+			'code-block': [
+				'A document shows this {{type}} snippet:',
+				'',
+				'{{source}}',
+				'',
+				'In two or three short sentences, walk a listener through it in plain words: speak short rules or values line by line with numbers and signs as words, or explain what the code does and why. Words only.'
 			].join('\n')
 		},
 		params: EDUCATIONAL_PARAMS
