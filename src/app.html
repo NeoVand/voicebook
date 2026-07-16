@@ -11,7 +11,16 @@
 		<meta name="apple-mobile-web-app-title" content="Voicebook" />
 		<script>
 			try {
-				const themes = ['sunny', 'cloudy', 'rainy', 'midnight'];
+				const themes = [
+					'sunny',
+					'cloudy',
+					'rainy',
+					'midnight',
+					'forest',
+					'cocoa',
+					'ocean',
+					'aurora'
+				];
 				const stored = localStorage.getItem('voicebook:theme');
 				const theme =
 					stored === 'light'
@@ -25,10 +34,19 @@
 					sunny: '#f4efe6',
 					cloudy: '#edf1f3',
 					rainy: '#101820',
-					midnight: '#0b0c0f'
+					midnight: '#0b0c0f',
+					forest: '#0a100c',
+					cocoa: '#130d09',
+					ocean: '#08101a',
+					aurora: '#0d0a15'
 				};
 				document.documentElement.dataset.theme = theme;
 				document.querySelector('meta[name="theme-color"]')?.setAttribute('content', colors[theme]);
+				const fonts = ['newsreader', 'instrument', 'classic', 'system'];
+				const font = localStorage.getItem('voicebook:reader-font');
+				if (fonts.includes(font) && font !== 'newsreader') {
+					document.documentElement.dataset.readerFont = font;
+				}
 			} catch {
 				document.documentElement.dataset.theme = 'midnight';
 			}
