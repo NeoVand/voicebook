@@ -8,7 +8,6 @@
 		Check,
 		ChevronLeft,
 		ChevronRight,
-		BrainCircuit,
 		LoaderCircle,
 		LocateFixed,
 		Pause,
@@ -25,7 +24,9 @@
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import CompactSelect from '$lib/components/CompactSelect.svelte';
 	import CodeBlock from '$lib/components/CodeBlock.svelte';
+	import ConstructPanel, { type ConstructPanelItem } from '$lib/components/ConstructPanel.svelte';
 	import InlineText from '$lib/components/InlineText.svelte';
+	import LlmChip from '$lib/components/LlmChip.svelte';
 	import MathFormula from '$lib/components/MathFormula.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
 	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
@@ -39,8 +40,10 @@
 		SpeechSegment,
 		TableCell
 	} from '$lib/domain/types';
+	import { tableMarkdown } from '$lib/domain/narration';
 	import { GENERATION_STEP_OPTIONS } from '$lib/domain/synthesis';
 	import { appState } from '$lib/state/app-state.svelte';
+	import { llmState } from '$lib/state/llm.svelte';
 	import { narrationState } from '$lib/state/narrations.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
@@ -189,6 +192,66 @@
 		return (segmentsByBlock.get(blockId) ?? []).filter(
 			(segment) => segment.narration?.constructIds[0] === constructId
 		);
+	}
+
+	/* ── Construct description panels ─────────────────────────────────────── */
+
+	let llmAvailable = $derived(llmState.eligible && llmState.installed);
+
+	function panelItem(
+		blockId: string,
+		constructId: string,
+		label?: string,
+		canRegenerate = true
+	): ConstructPanelItem {
+		return {
+			constructId,
+			label,
+			spoken:
+				constructSegments(blockId, constructId)
+					.map((segment) => segment.normalizedText)
+					.join(' ') || '—',
+			entry: book?.narrations?.[constructId],
+			canRegenerate: canRegenerate && llmAvailable && llmState.narrationEnabled,
+			regenerating: narrationState.regenerating.has(constructId)
+		};
+	}
+
+	function tablePanelItems(block: DocumentBlock): ConstructPanelItem[] {
+		if (!block.table) return [];
+		const rowLabel = (cells: TableCell[], index: number) => {
+			const first = cells[0]?.text.replace(/\s+/g, ' ').trim();
+			return first ? `Row ${index + 1} — ${first}` : `Row ${index + 1}`;
+		};
+		return [
+			panelItem(block.id, `${block.id}:rh`, 'Header', false),
+			...block.table.rows.map((row, index) =>
+				panelItem(block.id, `${block.id}:r${index}`, rowLabel(row, index))
+			)
+		];
+	}
+
+	function editConstruct(constructId: string, text: string): void {
+		void narrationState.setManualText(constructId, text);
+	}
+
+	function regenerateConstruct(constructId: string): void {
+		void narrationState.regenerateConstruct(constructId);
+	}
+
+	let llmChipVisible = $derived(
+		Boolean(player.narrationStage) ||
+			narrationState.working ||
+			(llmAvailable && Boolean(book && Object.keys(book.narrations ?? {}).length))
+	);
+
+	async function toggleDescriptions(value: boolean): Promise<void> {
+		await llmState.setNarrationEnabled(value);
+		if (book) await narrationState.open(book);
+	}
+
+	async function regenerateDocumentDescriptions(): Promise<void> {
+		await narrationState.regenerateDocument();
 	}
 
 	const trackReadingCanvas: Attachment<HTMLElement> = (element) => {
@@ -393,7 +456,12 @@
 
 	function startClickedPassage(event: MouseEvent): void {
 		if (!(event.target instanceof Element)) return;
-		if (event.target.closest('a, button')) return;
+		// Interactive content inside a construct (the source-and-description
+		// panel, expander summaries, edit fields) must not start playback.
+		if (
+			event.target.closest('a, button, summary, textarea, input, select, label, .construct-panel')
+		)
+			return;
 		const selection = window.getSelection();
 		if (selection && !selection.isCollapsed) return;
 		const segment = segmentForElement(event.target);
@@ -678,7 +746,18 @@
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
-			<MermaidDiagram id={block.id} source={block.text} />
+			<MermaidDiagram id={block.id} source={block.text}>
+				{#snippet panel()}
+					<ConstructPanel
+						noun="Diagram"
+						sourceLabel="Diagram source"
+						source={block.text}
+						items={[panelItem(block.id, block.id)]}
+						onEdit={editConstruct}
+						onRegenerate={regenerateConstruct}
+					/>
+				{/snippet}
+			</MermaidDiagram>
 		</div>
 	{:else if block.kind === 'code'}
 		<CodeBlock id={block.id} source={block.text} language={block.codeLanguage} />
@@ -695,7 +774,18 @@
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
-			<MathFormula id={block.id} formula={block.text} displayMode />
+			<MathFormula id={block.id} formula={block.text} displayMode>
+				{#snippet panel()}
+					<ConstructPanel
+						noun="Equation"
+						sourceLabel="LaTeX source"
+						source={block.text}
+						items={[panelItem(block.id, block.id)]}
+						onEdit={editConstruct}
+						onRegenerate={regenerateConstruct}
+					/>
+				{/snippet}
+			</MathFormula>
 		</div>
 	{:else if block.kind === 'footnote'}
 		<aside
@@ -798,6 +888,14 @@
 					{/each}
 				</tbody>
 			</table>
+			<ConstructPanel
+				noun="Table"
+				sourceLabel="Markdown source"
+				source={tableMarkdown(block.table)}
+				items={tablePanelItems(block)}
+				onEdit={editConstruct}
+				onRegenerate={regenerateConstruct}
+			/>
 		</div>
 	{:else if block.kind === 'divider'}
 		<hr id={block.id} />
@@ -1054,25 +1152,16 @@
 						<AudioLines size={17} />
 					{/if}
 				</button>
-				{#if narrationState.working || player.narrationStage}
-					<a
-						class="narration-chip"
-						class:paused={narrationState.phase === 'paused-gpu'}
-						href={resolve('/settings?section=llm')}
-						title="The on-device language model is rewriting equations, tables, and diagrams for speech"
-						aria-live="polite"
-					>
-						<BrainCircuit size={13} strokeWidth={2.1} />
-						<span class="narration-chip-copy">
-							{player.narrationStage || 'Describing visuals'}
-						</span>
-						<span class="narration-chip-count">{narrationState.done}/{narrationState.total}</span>
-						<i class="narration-chip-track" aria-hidden="true">
-							<i
-								style:width={`${narrationState.total ? Math.round((narrationState.done / narrationState.total) * 100) : 0}%`}
-							></i>
-						</i>
-					</a>
+				{#if llmChipVisible}
+					<LlmChip
+						working={narrationState.working || Boolean(player.narrationStage)}
+						paused={narrationState.phase === 'paused-gpu'}
+						progress={narrationState.total ? narrationState.done / narrationState.total : 0}
+						stageLabel={player.narrationStage}
+						enabled={llmState.narrationEnabled}
+						onToggleEnabled={toggleDescriptions}
+						onRegenerate={regenerateDocumentDescriptions}
+					/>
 				{/if}
 			</div>
 
@@ -2237,85 +2326,6 @@
 		-webkit-mask: radial-gradient(circle, transparent 67%, black 69%);
 		mask: radial-gradient(circle, transparent 67%, black 69%);
 		pointer-events: none;
-	}
-
-	.narration-chip {
-		display: inline-flex;
-		min-width: 0;
-		height: 28px;
-		align-items: center;
-		gap: 7px;
-		padding: 0 11px;
-		border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--primary-soft) 72%, transparent);
-		color: var(--primary);
-		font-size: 10px;
-		font-weight: 620;
-		letter-spacing: 0.01em;
-		line-height: 1;
-		text-decoration: none;
-		white-space: nowrap;
-	}
-
-	.narration-chip-copy {
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.narration-chip-count {
-		color: color-mix(in srgb, var(--primary) 72%, var(--muted));
-		font-variant-numeric: tabular-nums;
-	}
-
-	.narration-chip-track {
-		position: relative;
-		display: block;
-		overflow: hidden;
-		width: 34px;
-		height: 3px;
-		flex: none;
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--primary) 18%, transparent);
-	}
-
-	.narration-chip-track > i {
-		position: absolute;
-		top: 0;
-		bottom: 0;
-		left: 0;
-		border-radius: 999px;
-		background: var(--primary);
-		transition: width 300ms var(--ease);
-	}
-
-	.narration-chip:hover {
-		background: color-mix(in srgb, var(--primary-soft) 70%, var(--primary) 14%);
-	}
-
-	.narration-chip.paused {
-		border-color: var(--line-strong);
-		color: var(--muted);
-		background: var(--hover);
-	}
-
-	.narration-chip.paused .narration-chip-track > i {
-		background: var(--muted);
-	}
-
-	.narration-chip :global(svg) {
-		flex: none;
-		animation: narration-pending-pulse 2.2s ease-in-out infinite;
-	}
-
-	.narration-chip.paused :global(svg) {
-		animation: none;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.narration-chip :global(svg) {
-			animation: none;
-		}
 	}
 
 	.transport {

@@ -1,7 +1,8 @@
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { segmentBlocks, segmentsEqual } from '$lib/domain/segmenter';
 import {
 	NARRATION_PROMPT_VERSION,
+	narrationConstructs,
 	reconcileNarrations,
 	type NarrationConstruct
 } from '$lib/domain/narration';
@@ -26,6 +27,15 @@ function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Keep only the user's pinned edits when clearing narrations in bulk. */
+function manualOnly(narrations: Record<string, NarrationEntry>): Record<string, NarrationEntry> {
+	const kept: Record<string, NarrationEntry> = {};
+	for (const [id, entry] of Object.entries(narrations)) {
+		if (entry.origin === 'manual') kept[id] = entry;
+	}
+	return kept;
+}
+
 /**
  * The background narration scheduler: one document at a time, one LLM call at
  * a time, document order with playhead priority. Results mutate
@@ -40,6 +50,10 @@ export class NarrationState {
 	completed = $state(0);
 	failed = $state(0);
 	error = $state('');
+	/** Constructs being explicitly regenerated right now — their previous text
+	 * keeps playing until the replacement lands; the reader panel shows a
+	 * transient spinner from this set. */
+	regenerating = new SvelteSet<string>();
 
 	private runToken = 0;
 	private queue: NarrationConstruct[] = [];
@@ -137,6 +151,7 @@ export class NarrationState {
 	stop(): void {
 		this.runToken += 1;
 		this.queue = [];
+		this.regenerating.clear();
 		this.dirty = false;
 		if (this.rebindTimer) clearTimeout(this.rebindTimer);
 		this.rebindTimer = null;
@@ -201,20 +216,97 @@ export class NarrationState {
 		}
 	}
 
-	/** Drop every stored narration in the library and rewrite the open
-	 * document immediately; other documents regenerate on their next open. */
+	/** Drop every generated narration in the library (manual edits stay
+	 * pinned) and rewrite the open document immediately; other documents
+	 * regenerate on their next open. */
 	async regenerateAll(): Promise<void> {
 		for (const document of appState.documents) {
 			if (!document.narrations || !Object.keys(document.narrations).length) continue;
 			if (player.book?.id === document.id) continue;
-			await appState.saveDocument({ ...document, narrations: {} });
+			await appState.saveDocument({
+				...document,
+				narrations: manualOnly(document.narrations)
+			});
 		}
+		await this.regenerateDocument();
+	}
+
+	/** Drop the open document's generated narrations (manual edits stay) and
+	 * rewrite it now. */
+	async regenerateDocument(): Promise<void> {
 		const book = player.book;
-		if (book) {
-			book.narrations = {};
-			this.flushRebind();
-			await this.open(book);
+		if (!book) return;
+		book.narrations = manualOnly(book.narrations ?? {});
+		// open() reconciles — constructs re-queue and segments swap once.
+		await this.open(book);
+	}
+
+	/**
+	 * Pin a user-edited description for one construct. Applies (and
+	 * invalidates that construct's cached audio) immediately; survives prompt
+	 * edits and bulk regeneration until the construct's source changes.
+	 */
+	async setManualText(constructId: string, text: string): Promise<void> {
+		const book = player.book;
+		if (!book || book.id !== this.documentId) return;
+		const construct = this.constructById(constructId);
+		const trimmed = text.replace(/\s+/g, ' ').trim();
+		if (!construct || !trimmed) return;
+		// An in-flight or queued LLM rewrite must not overwrite the edit.
+		this.queue = this.queue.filter((candidate) => candidate.id !== constructId);
+		this.regenerating.delete(constructId);
+		book.narrations = {
+			...(book.narrations ?? {}),
+			[constructId]: {
+				constructId,
+				kind: construct.kind,
+				status: 'ready',
+				text: trimmed,
+				sourceHash: construct.sourceHash,
+				promptVersion: NARRATION_PROMPT_VERSION,
+				origin: 'manual',
+				updatedAt: Date.now()
+			}
+		};
+		this.flushRebind();
+		this.schedulePersist();
+	}
+
+	/**
+	 * Rewrite one construct with the current engine, replacing whatever text
+	 * it has (including a manual edit — the button is the explicit consent).
+	 * The previous text keeps playing until the replacement lands.
+	 */
+	async regenerateConstruct(constructId: string): Promise<void> {
+		const book = player.book;
+		if (!book || book.id !== this.documentId || this.regenerating.has(constructId)) return;
+		const construct = this.constructById(constructId);
+		if (!construct) return;
+		this.regenerating.add(constructId);
+		this.queue = [construct, ...this.queue.filter((candidate) => candidate.id !== constructId)];
+		if (this.working) {
+			this.total += 1;
+			return;
 		}
+		const token = ++this.runToken;
+		this.total = this.queue.length;
+		this.completed = 0;
+		this.failed = 0;
+		const ready = await llmState.ensureReadyForNarration();
+		if (token !== this.runToken) return;
+		if (!ready) {
+			this.queue = [];
+			this.regenerating.delete(constructId);
+			this.error = 'The language model is not available right now.';
+			return;
+		}
+		void this.run(token);
+	}
+
+	private constructById(id: string): NarrationConstruct | undefined {
+		const book = player.book;
+		if (!book) return undefined;
+		return narrationConstructs(book.blocks).find((candidate) => candidate.id === id);
 	}
 
 	/* ── Internals ─────────────────────────────────────────────────────── */
@@ -360,6 +452,17 @@ export class NarrationState {
 	private applyResult(construct: NarrationConstruct, text: string): void {
 		const book = player.book;
 		if (!book || book.id !== this.documentId) return;
+		const existing = book.narrations?.[construct.id];
+		const explicit = this.regenerating.delete(construct.id);
+		// A manual edit that landed while this rewrite was in flight wins —
+		// unless the user explicitly asked for this regeneration.
+		if (
+			existing?.origin === 'manual' &&
+			existing.sourceHash === construct.sourceHash &&
+			!explicit
+		) {
+			return;
+		}
 		book.narrations = {
 			...(book.narrations ?? {}),
 			[construct.id]: this.entryFor(construct, text)
@@ -371,6 +474,11 @@ export class NarrationState {
 	private applyFailure(construct: NarrationConstruct): void {
 		const book = player.book;
 		if (!book || book.id !== this.documentId) return;
+		const existing = book.narrations?.[construct.id];
+		this.regenerating.delete(construct.id);
+		// An explicit regenerate that fails keeps the previous good text
+		// instead of downgrading a ready construct to its fallback.
+		if (existing?.status === 'ready' && existing.text) return;
 		book.narrations = { ...(book.narrations ?? {}), [construct.id]: this.entryFor(construct) };
 		this.scheduleRebind();
 		this.schedulePersist();

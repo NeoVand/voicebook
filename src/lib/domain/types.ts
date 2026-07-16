@@ -152,6 +152,10 @@ export interface NarrationEntry {
 	/** Hash of the prompt (system + template) that produced this narration —
 	 * editing a prompt in settings re-queues affected constructs lazily. */
 	promptHash?: string;
+	/** 'manual' pins a user-edited description: it survives prompt edits and
+	 * bulk regeneration, and only source changes or an explicit per-construct
+	 * regenerate replace it. Absent means LLM-generated. */
+	origin?: 'llm' | 'manual';
 	updatedAt: number;
 }
 
@@ -279,11 +283,13 @@ export interface AudioVariantMeta {
 	key: string;
 	documentId: string;
 	segmentId: string;
-	modelId: ModelDescriptor['id'];
+	/** 'supertonic-3' for the on-device engine, or a cloud engine id such as
+	 * 'elevenlabs'. */
+	modelId: string;
 	modelRevision: string;
 	voiceId: string;
 	generationSteps: number;
-	backend: 'webgpu' | 'wasm';
+	backend: 'webgpu' | 'wasm' | 'cloud';
 	dtype: string;
 	duration: number;
 	mimeType: string;

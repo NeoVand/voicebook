@@ -2,14 +2,18 @@
 	import katex from 'katex';
 	import 'katex/dist/katex.min.css';
 	import type { Attachment } from 'svelte/attachments';
+	import type { Snippet } from 'svelte';
 
 	interface Props {
 		formula: string;
 		displayMode?: boolean;
 		id?: string;
+		/** Replaces the built-in source expander (the reader passes its
+		 * construct panel with the spoken description and edit controls). */
+		panel?: Snippet;
 	}
 
-	let { formula, displayMode = false, id }: Props = $props();
+	let { formula, displayMode = false, id, panel }: Props = $props();
 
 	function equation(source: string, block: boolean): Attachment<HTMLElement> {
 		return (target) => {
@@ -33,10 +37,14 @@
 {#if displayMode}
 	<figure class="math-block" {id} aria-label="Mathematical equation">
 		<div class="math-output" {@attach equation(formula, true)}></div>
-		<details>
-			<summary>View equation source</summary>
-			<pre><code>{formula}</code></pre>
-		</details>
+		{#if panel}
+			{@render panel()}
+		{:else}
+			<details>
+				<summary>View equation source</summary>
+				<pre><code>{formula}</code></pre>
+			</details>
+		{/if}
 	</figure>
 {:else}
 	<span class="math-inline" aria-label={`Equation: ${formula}`} {@attach equation(formula, false)}
