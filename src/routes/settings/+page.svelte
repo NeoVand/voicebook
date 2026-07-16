@@ -29,12 +29,16 @@
 	import { LLM_CATALOG, type LlmModelSpec } from '$lib/domain/llm-catalog';
 	import {
 		CLOUD_LLM_PROVIDERS,
+		ELEVENLABS_MODELS,
 		type ApiProvider,
 		type CloudLlmProvider,
-		type DescriptionEngine
+		type DescriptionEngine,
+		type ElevenLabsVoice,
+		type SpeechEngine
 	} from '$lib/domain/provider-catalog';
 	import ApiKeyField from '$lib/components/ApiKeyField.svelte';
 	import { verifyCloudLlmKey } from '$lib/services/cloud-llm';
+	import { elevenLabsUsage, type ElevenLabsUsage } from '$lib/services/elevenlabs';
 	import { player } from '$lib/state/player.svelte';
 	import { providersState } from '$lib/state/providers.svelte';
 	import {
@@ -294,8 +298,81 @@
 
 	onMount(() => {
 		void llmState.initialize();
-		void providersState.initialize();
+		void providersState.initialize().then(() => {
+			if (providersState.speechEngine === 'elevenlabs' && providersState.elevenLabsReady) {
+				void refreshElevenLabs();
+			}
+		});
 	});
+
+	/* ── ElevenLabs speech engine ────────────────────────────────────────── */
+
+	let elUsage = $state<ElevenLabsUsage | null>(null);
+	let elPreviewVoiceId = $state<string | undefined>();
+	let elPreviewAudio: HTMLAudioElement | undefined;
+
+	async function refreshElevenLabs(): Promise<void> {
+		void providersState.refreshElevenLabsVoices();
+		const key = providersState.keyFor('elevenlabs');
+		if (!key) return;
+		try {
+			elUsage = await elevenLabsUsage(key);
+		} catch {
+			elUsage = null;
+		}
+	}
+
+	async function chooseSpeechEngine(engine: SpeechEngine): Promise<void> {
+		await player.chooseSpeechEngine(engine);
+		if (engine === 'elevenlabs' && providersState.elevenLabsReady) void refreshElevenLabs();
+	}
+
+	async function saveElevenLabsKey(value: string): Promise<void> {
+		await providersState.setKey('elevenlabs', value);
+		if (value.trim()) await refreshElevenLabs();
+	}
+
+	async function testElevenLabsKey(): Promise<{ ok: boolean; message: string }> {
+		const key = providersState.keyFor('elevenlabs');
+		if (!key) return { ok: false, message: 'No key saved yet.' };
+		try {
+			const usage = await elevenLabsUsage(key);
+			elUsage = usage;
+			return {
+				ok: true,
+				message: `ElevenLabs accepted the key — ${usage.tier} plan, ${usage.used.toLocaleString()} of ${usage.limit.toLocaleString()} characters used.`
+			};
+		} catch (error) {
+			return {
+				ok: false,
+				message: error instanceof Error ? error.message : 'ElevenLabs rejected the key.'
+			};
+		}
+	}
+
+	function stopElevenLabsPreview(): void {
+		elPreviewAudio?.pause();
+		elPreviewAudio = undefined;
+		elPreviewVoiceId = undefined;
+	}
+
+	function previewElevenLabsVoice(voice: ElevenLabsVoice): void {
+		if (elPreviewVoiceId === voice.id) {
+			stopElevenLabsPreview();
+			return;
+		}
+		stopElevenLabsPreview();
+		if (!voice.previewUrl) return;
+		const audio = new Audio(voice.previewUrl);
+		elPreviewAudio = audio;
+		elPreviewVoiceId = voice.id;
+		audio.onended = () => {
+			if (elPreviewVoiceId === voice.id) stopElevenLabsPreview();
+		};
+		void audio.play().catch(() => stopElevenLabsPreview());
+	}
+
+	onDestroy(() => stopElevenLabsPreview());
 
 	/* ── Description engine (on-device or bring-your-own-key cloud) ──────── */
 
@@ -477,6 +554,114 @@
 	</header>
 
 	{#if activeSection === 'models'}
+		<section class="settings-section" aria-labelledby="speech-engine-choice-title">
+			<header class="section-title">
+				<div>
+					<h2 id="speech-engine-choice-title">Reading voice</h2>
+					<p>
+						Where speech is generated. ElevenLabs voices use your own API key, sent only to
+						ElevenLabs.
+					</p>
+				</div>
+				<span
+					class="runtime-state"
+					class:ready={providersState.speechEngine === 'elevenlabs'
+						? providersState.elevenLabsReady
+						: installed}
+				>
+					<span></span>
+					{providersState.speechEngine === 'elevenlabs'
+						? providersState.elevenLabsReady
+							? 'ElevenLabs active'
+							: 'Key required'
+						: installed
+							? 'On-device active'
+							: 'Not installed'}
+				</span>
+			</header>
+
+			<div class="engine-list" role="radiogroup" aria-label="Speech engine">
+				<div class="engine-option" class:selected={providersState.speechEngine === 'local'}>
+					<button
+						class="engine-row"
+						type="button"
+						role="radio"
+						aria-checked={providersState.speechEngine === 'local'}
+						onclick={() => void chooseSpeechEngine('local')}
+					>
+						<span class="engine-radio" aria-hidden="true"></span>
+						<span class="engine-icon"><Mic2 size={16} /></span>
+						<span class="engine-copy">
+							<strong>On-device <em>· Supertonic 3</em></strong>
+							<small>Private and free — ten studio voices, works offline</small>
+						</span>
+						<span class="engine-state" class:ok={installed}>
+							{installed ? 'Ready' : 'Not installed'}
+						</span>
+					</button>
+				</div>
+				<div class="engine-option" class:selected={providersState.speechEngine === 'elevenlabs'}>
+					<button
+						class="engine-row"
+						type="button"
+						role="radio"
+						aria-checked={providersState.speechEngine === 'elevenlabs'}
+						onclick={() => void chooseSpeechEngine('elevenlabs')}
+					>
+						<span class="engine-radio" aria-hidden="true"></span>
+						<span class="engine-icon cloud"><Cloud size={16} /></span>
+						<span class="engine-copy">
+							<strong>ElevenLabs <em>· premium cloud voices</em></strong>
+							<small>Lifelike narration with word timing — bring your own API key</small>
+						</span>
+						<span class="engine-state" class:ok={providersState.elevenLabsReady}>
+							{providersState.elevenLabsReady ? 'Key saved' : 'API key required'}
+						</span>
+					</button>
+					{#if providersState.speechEngine === 'elevenlabs'}
+						<div class="engine-config">
+							<div class="engine-models" role="group" aria-label="ElevenLabs model">
+								{#each ELEVENLABS_MODELS as model (model.id)}
+									<button
+										type="button"
+										class="engine-model"
+										class:selected={providersState.elevenLabsModelId === model.id}
+										aria-pressed={providersState.elevenLabsModelId === model.id}
+										onclick={() => void providersState.setElevenLabsModel(model.id)}
+									>
+										<strong>{model.label}</strong>
+										<small>{model.tagline}</small>
+									</button>
+								{/each}
+							</div>
+							<ApiKeyField
+								label="ElevenLabs API key"
+								placeholder="sk_…"
+								keyUrl="https://elevenlabs.io/app/settings/api-keys"
+								hasKey={providersState.elevenLabsReady}
+								isDevKey={providersState.isDevKey('elevenlabs')}
+								onSave={saveElevenLabsKey}
+								onClear={() => saveElevenLabsKey('')}
+								onTest={testElevenLabsKey}
+							/>
+							{#if elUsage && elUsage.limit > 0}
+								<div class="el-usage">
+									<div>
+										<strong>{elUsage.tier} plan</strong>
+										<span>
+											{elUsage.used.toLocaleString()} of {elUsage.limit.toLocaleString()} characters used
+											· resets {elUsage.resetsAt.toLocaleDateString()}
+										</span>
+									</div>
+									<progress max={elUsage.limit} value={elUsage.used}></progress>
+								</div>
+							{/if}
+						</div>
+					{/if}
+				</div>
+			</div>
+		</section>
+
 		<section class="settings-section" aria-labelledby="engine-title">
 			<header class="section-title">
 				<div>
@@ -578,71 +763,139 @@
 			</footer>
 		</section>
 
-		<section class="settings-section voices-section" aria-labelledby="voices-title">
-			<header class="section-title">
-				<div>
-					<h2 id="voices-title">Built-in voices</h2>
-					<p>Listen here, then choose the voice you want to use in the reader.</p>
-				</div>
-				<span class="voice-status">
-					{#if previewState === 'loading' && previewVoiceId}
-						Preparing {model.voices.find((voice) => voice.id === previewVoiceId)?.name} · {Math.round(
-							previewProgress
-						)}%
-					{:else if previewState === 'playing' && previewVoiceId}
-						Playing {model.voices.find((voice) => voice.id === previewVoiceId)?.name}
-					{:else}
-						{model.voices.length} voices
-					{/if}
-				</span>
-			</header>
-			<p class="sr-only" aria-live="polite">{previewAnnouncement}</p>
-			<ul class="voice-list" aria-label="Available voices">
-				{#each model.voices as voice (voice.id)}
-					<li class="voice-row" class:selected={appState.selectedVoiceId === voice.id}>
-						<button
-							class="voice-choice"
-							type="button"
-							aria-label={`Use ${voice.name}`}
-							aria-pressed={appState.selectedVoiceId === voice.id}
-							onclick={() => void appState.selectVoice(voice.id)}
-						>
-							<span class="voice-initial">{voice.name.charAt(0)}</span>
-							<span class="voice-copy">
-								<strong>{voice.name}</strong>
-								<small>{voice.gender ?? 'Voice'} · multilingual</small>
-							</span>
-							<span class="voice-check" aria-hidden="true"><Check size={13} /></span>
-						</button>
-						<button
-							class="preview-button"
-							class:active={voice.id === previewVoiceId}
-							type="button"
-							disabled={!installed || busy}
-							aria-label={previewButtonLabel(voice)}
-							title={installed
-								? previewButtonLabel(voice)
-								: 'Install Supertonic 3 to preview voices'}
-							onclick={() => void previewVoice(voice)}
-						>
-							{#if voice.id === previewVoiceId && previewState === 'loading'}
-								<LoaderCircle class="spin" size={15} />
-							{:else if voice.id === previewVoiceId && previewState === 'playing'}
-								<Square size={12} fill="currentColor" />
-							{:else}
-								<Play size={15} fill="currentColor" />
-							{/if}
-						</button>
-					</li>
-				{/each}
-			</ul>
-			{#if previewError}
-				<div class="inline-error preview-error" role="alert">
-					<AlertTriangle size={15} />
-					<span>{previewError}</span>
-				</div>
-			{/if}
-		</section>
+		{#if providersState.speechEngine === 'elevenlabs'}
+			<section class="settings-section voices-section" aria-labelledby="el-voices-title">
+				<header class="section-title">
+					<div>
+						<h2 id="el-voices-title">ElevenLabs voices</h2>
+						<p>Preview each voice, then choose the one the reader uses.</p>
+					</div>
+					<button
+						class="button"
+						type="button"
+						disabled={!providersState.elevenLabsReady}
+						onclick={() => void refreshElevenLabs()}
+					>
+						<RefreshCw size={14} /> Refresh
+					</button>
+				</header>
+				{#if providersState.elevenLabsVoices.length}
+					<ul class="voice-list" aria-label="ElevenLabs voices">
+						{#each providersState.elevenLabsVoices as voice (voice.id)}
+							<li class="voice-row" class:selected={providersState.elevenLabsVoiceId === voice.id}>
+								<button
+									class="voice-choice"
+									type="button"
+									aria-label={`Use ${voice.name}`}
+									aria-pressed={providersState.elevenLabsVoiceId === voice.id}
+									onclick={() => void player.chooseVoice(voice.id)}
+								>
+									<span class="voice-initial">{voice.name.charAt(0)}</span>
+									<span class="voice-copy">
+										<strong>{voice.name}</strong>
+										<small>{voice.description || 'ElevenLabs voice'}</small>
+									</span>
+									<span class="voice-check" aria-hidden="true"><Check size={13} /></span>
+								</button>
+								<button
+									class="preview-button"
+									class:active={elPreviewVoiceId === voice.id}
+									type="button"
+									disabled={!voice.previewUrl}
+									aria-label={elPreviewVoiceId === voice.id
+										? `Stop ${voice.name} preview`
+										: `Preview ${voice.name}`}
+									onclick={() => previewElevenLabsVoice(voice)}
+								>
+									{#if elPreviewVoiceId === voice.id}
+										<Square size={12} fill="currentColor" />
+									{:else}
+										<Play size={15} fill="currentColor" />
+									{/if}
+								</button>
+							</li>
+						{/each}
+					</ul>
+				{:else}
+					<div class="setting-row">
+						<div>
+							<strong>No voices yet</strong>
+							<p>
+								{providersState.elevenLabsReady
+									? 'Refreshing the voice list from your ElevenLabs account…'
+									: 'Save your ElevenLabs API key above to load your voices.'}
+							</p>
+						</div>
+					</div>
+				{/if}
+			</section>
+		{:else}
+			<section class="settings-section voices-section" aria-labelledby="voices-title">
+				<header class="section-title">
+					<div>
+						<h2 id="voices-title">Built-in voices</h2>
+						<p>Listen here, then choose the voice you want to use in the reader.</p>
+					</div>
+					<span class="voice-status">
+						{#if previewState === 'loading' && previewVoiceId}
+							Preparing {model.voices.find((voice) => voice.id === previewVoiceId)?.name} · {Math.round(
+								previewProgress
+							)}%
+						{:else if previewState === 'playing' && previewVoiceId}
+							Playing {model.voices.find((voice) => voice.id === previewVoiceId)?.name}
+						{:else}
+							{model.voices.length} voices
+						{/if}
+					</span>
+				</header>
+				<p class="sr-only" aria-live="polite">{previewAnnouncement}</p>
+				<ul class="voice-list" aria-label="Available voices">
+					{#each model.voices as voice (voice.id)}
+						<li class="voice-row" class:selected={appState.selectedVoiceId === voice.id}>
+							<button
+								class="voice-choice"
+								type="button"
+								aria-label={`Use ${voice.name}`}
+								aria-pressed={appState.selectedVoiceId === voice.id}
+								onclick={() => void appState.selectVoice(voice.id)}
+							>
+								<span class="voice-initial">{voice.name.charAt(0)}</span>
+								<span class="voice-copy">
+									<strong>{voice.name}</strong>
+									<small>{voice.gender ?? 'Voice'} · multilingual</small>
+								</span>
+								<span class="voice-check" aria-hidden="true"><Check size={13} /></span>
+							</button>
+							<button
+								class="preview-button"
+								class:active={voice.id === previewVoiceId}
+								type="button"
+								disabled={!installed || busy}
+								aria-label={previewButtonLabel(voice)}
+								title={installed
+									? previewButtonLabel(voice)
+									: 'Install Supertonic 3 to preview voices'}
+								onclick={() => void previewVoice(voice)}
+							>
+								{#if voice.id === previewVoiceId && previewState === 'loading'}
+									<LoaderCircle class="spin" size={15} />
+								{:else if voice.id === previewVoiceId && previewState === 'playing'}
+									<Square size={12} fill="currentColor" />
+								{:else}
+									<Play size={15} fill="currentColor" />
+								{/if}
+							</button>
+						</li>
+					{/each}
+				</ul>
+				{#if previewError}
+					<div class="inline-error preview-error" role="alert">
+						<AlertTriangle size={15} />
+						<span>{previewError}</span>
+					</div>
+				{/if}
+			</section>
+		{/if}
 	{:else if activeSection === 'llm'}
 		<section class="settings-section" aria-labelledby="llm-engine-title">
 			<header class="section-title">
@@ -1561,6 +1814,32 @@
 		margin-top: 2px;
 		color: var(--faint);
 		font-size: 8.5px;
+	}
+
+	.el-usage {
+		display: grid;
+		gap: 7px;
+		padding: 11px 13px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+	}
+
+	.el-usage strong {
+		font-size: 10px;
+		font-weight: 650;
+		text-transform: capitalize;
+	}
+
+	.el-usage span {
+		display: block;
+		margin-top: 2px;
+		color: var(--faint);
+		font-size: 9px;
+	}
+
+	.el-usage progress {
+		width: 100%;
+		height: 5px;
 	}
 
 	.prompt-editor {

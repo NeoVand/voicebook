@@ -46,6 +46,7 @@
 	import { llmState } from '$lib/state/llm.svelte';
 	import { narrationState } from '$lib/state/narrations.svelte';
 	import { player } from '$lib/state/player.svelte';
+	import { providersState } from '$lib/state/providers.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 
 	let book = $state<NormalizedDocument | null>(null);
@@ -115,8 +116,16 @@
 			: undefined) ?? []
 	);
 	let installed = $derived(appState.installedModels.includes('supertonic-3'));
+	let usesElevenLabs = $derived(providersState.speechEngine === 'elevenlabs');
+	/** The active engine can speak: local model installed, or ElevenLabs keyed. */
+	let speechReady = $derived(usesElevenLabs ? providersState.elevenLabsReady : installed);
 	let voiceOptions = $derived(
-		appState.selectedModel.voices.map((voice) => ({ value: voice.id, label: voice.name }))
+		usesElevenLabs
+			? providersState.elevenLabsVoices.map((voice) => ({ value: voice.id, label: voice.name }))
+			: appState.selectedModel.voices.map((voice) => ({ value: voice.id, label: voice.name }))
+	);
+	let currentVoiceId = $derived(
+		usesElevenLabs ? providersState.elevenLabsVoiceId : appState.selectedVoiceId
 	);
 	let titleBlock = $derived.by(() => {
 		return book?.blocks.find((block) => block.kind === 'heading' && block.level === 1);
@@ -147,6 +156,10 @@
 				if (element) scrollNarrationIntoView(element, false);
 			});
 		};
+		void providersState.initialize().then(() => {
+			if (providersState.speechEngine === 'elevenlabs')
+				void providersState.refreshElevenLabsVoices();
+		});
 		void appState.initialize().then(() => {
 			const id = new URL(window.location.href).searchParams.get('document');
 			book = appState.documents.find((document) => document.id === id) ?? null;
@@ -1104,29 +1117,31 @@
 				<div class="generation-control voice-control">
 					<CompactSelect
 						label="Voice"
-						value={appState.selectedVoiceId}
+						value={currentVoiceId}
 						options={voiceOptions}
 						onChange={changeVoice}
 						triggerWidth="106px"
 						menuWidth="148px"
 					/>
 				</div>
-				<div class="generation-control quality-control">
-					<CompactSelect
-						label="Generation quality"
-						value={String(appState.generationSteps)}
-						options={generationQualityOptions}
-						onChange={changeGenerationQuality}
-						triggerWidth="86px"
-						menuWidth="96px"
-					/>
-				</div>
+				{#if !usesElevenLabs}
+					<div class="generation-control quality-control">
+						<CompactSelect
+							label="Generation quality"
+							value={String(appState.generationSteps)}
+							options={generationQualityOptions}
+							onChange={changeGenerationQuality}
+							triggerWidth="86px"
+							menuWidth="96px"
+						/>
+					</div>
+				{/if}
 				<button
 					class="generate-all icon-button"
 					class:active={player.isGeneratingAll}
 					class:ready={player.isDocumentPrepared}
 					type="button"
-					disabled={player.isDocumentPrepared || (!player.isGeneratingAll && !installed)}
+					disabled={player.isDocumentPrepared || (!player.isGeneratingAll && !speechReady)}
 					aria-busy={player.isGeneratingAll}
 					aria-label={player.isDocumentPrepared
 						? 'Whole document audio is ready'
