@@ -971,7 +971,7 @@
 		{/if}
 
 		<section class="reader-stage">
-			{#if !installed && !providersState.elevenLabsReady}
+			{#if !installed && !providersState.cloudSpeechReady}
 				<ModelInstallPrompt compact />
 			{/if}
 

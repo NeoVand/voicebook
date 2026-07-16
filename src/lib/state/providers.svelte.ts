@@ -161,6 +161,12 @@ export class ProvidersState {
 		return this.hasKey('elevenlabs');
 	}
 
+	/** Cloud speech only counts once the engine is actually selected — a
+	 * stored (or dev .env) key alone must never skip first-run setup. */
+	get cloudSpeechReady(): boolean {
+		return this.speechEngine === 'elevenlabs' && this.hasKey('elevenlabs');
+	}
+
 	async setSpeechEngine(engine: SpeechEngine): Promise<void> {
 		this.speechEngine = engine;
 		await setSetting('speech-engine', engine);

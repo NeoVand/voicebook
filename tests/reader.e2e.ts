@@ -10,7 +10,7 @@ test('completes voice setup before presenting the empty-library import surface',
 	page
 }) => {
 	await page.goto('./');
-	await expect(page.getByRole('heading', { name: 'Set up local listening.' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Choose how Voicebook reads.' })).toBeVisible();
 	const libraryShell = page.locator('.library-page');
 	const setupLogo = page.locator('.model-setup .brand-logo');
 	await expect(libraryShell).toBeVisible();
@@ -30,12 +30,14 @@ test('completes voice setup before presenting the empty-library import surface',
 			}
 		).__voicebookTtsLoadDelayMs = 180;
 	});
-	const includeLlm = page.getByRole('checkbox', { name: 'Include' });
-	if (await includeLlm.isVisible()) await includeLlm.uncheck();
+	const skipDescriptions = page.getByRole('radio', { name: 'Skip' });
+	if (await skipDescriptions.isVisible()) await skipDescriptions.click();
 	await page.getByRole('checkbox', { name: /I accept the model licenses/ }).check();
 	await page.getByRole('button', { name: /^Download ·/ }).click();
 	await expect(setupLogo).toHaveClass(/\bactive\b/);
-	await page.getByRole('heading', { name: 'Set up local listening.' }).waitFor({ state: 'hidden' });
+	await page
+		.getByRole('heading', { name: 'Choose how Voicebook reads.' })
+		.waitFor({ state: 'hidden' });
 
 	const emptyState = page.getByRole('region', { name: 'What would you like to listen to?' });
 	await expect(emptyState).toBeVisible();
@@ -119,7 +121,7 @@ test('keeps the unified welcome flow stable on a phone viewport', async ({ page 
 	await page.setViewportSize({ width: 390, height: 844 });
 	await page.goto('./');
 	const setupLogo = page.locator('.model-setup .brand-logo');
-	await expect(page.getByRole('heading', { name: 'Set up local listening.' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Choose how Voicebook reads.' })).toBeVisible();
 	await expect(setupLogo).toBeVisible();
 	const setupLogoBox = await setupLogo.boundingBox();
 	expect(setupLogoBox).not.toBeNull();
@@ -130,6 +132,9 @@ test('keeps the unified welcome flow stable on a phone viewport', async ({ page 
 	).toBe(true);
 
 	await completeModelSetup(page);
+	// Clicking through the (taller) setup column scrolls the page; the logo
+	// parity below is about layout, not leftover scroll.
+	await page.evaluate(() => window.scrollTo(0, 0));
 	const emptyState = page.getByRole('region', { name: 'What would you like to listen to?' });
 	const emptyLogo = emptyState.locator('.brand-logo');
 	await expect(emptyLogo).toBeVisible();

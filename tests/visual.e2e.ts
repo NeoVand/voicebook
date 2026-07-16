@@ -4,7 +4,7 @@ import { completeModelSetup, installFakeTts } from './helpers';
 test('model onboarding visual baseline', async ({ page }, testInfo) => {
 	await installFakeTts(page);
 	await page.goto('./');
-	await expect(page.getByRole('heading', { name: 'Set up local listening.' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Choose how Voicebook reads.' })).toBeVisible();
 	await expect(page).toHaveScreenshot(`model-onboarding-${testInfo.project.name}.png`, {
 		fullPage: true,
 		animations: 'disabled'
