@@ -120,7 +120,7 @@
 
 <div class="llm-chip-root" {@attach trackRoot}>
 	<button
-		class="llm-chip"
+		class="llm-trigger"
 		class:working
 		class:paused
 		class:disabled-state={!enabled}
@@ -132,25 +132,27 @@
 		aria-controls={`${uid}-menu`}
 		aria-expanded={open}
 		aria-haspopup="menu"
+		aria-busy={working}
 		title={working
-			? 'Rewriting equations, tables, and diagrams for speech'
+			? stageLabel ||
+				(paused
+					? 'Waiting for the voice engine before rewriting visuals'
+					: 'Rewriting equations, tables, and diagrams for speech')
 			: enabled
 				? 'Spoken descriptions'
 				: 'Spoken descriptions are off'}
+		style:--llm-progress={`${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`}
 		onclick={() => (open ? closeMenu() : void openMenu())}
 		onkeydown={handleTriggerKeydown}
 		{@attach trackTrigger}
 	>
-		<BrainCircuit size={14} strokeWidth={2.1} />
-		{#if working}
-			<span class="llm-chip-copy" aria-live="polite">
-				{stageLabel || (paused ? 'Waiting for the voice engine' : 'Describing visuals')}
-			</span>
-			<i class="llm-chip-track" aria-hidden="true">
-				<i style:width={`${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`}></i>
-			</i>
-		{/if}
+		<BrainCircuit size={17} strokeWidth={2} aria-hidden="true" />
 	</button>
+	{#if working}
+		<span class="sr-only" aria-live="polite">
+			{stageLabel || (paused ? 'Waiting for the voice engine' : 'Describing visuals')}
+		</span>
+	{/if}
 
 	{#if open}
 		<div
@@ -210,89 +212,72 @@
 <style>
 	.llm-chip-root {
 		position: relative;
-		display: inline-flex;
-		min-width: 0;
+		width: 36px;
+		flex: 0 0 36px;
 	}
 
-	.llm-chip {
-		display: inline-flex;
-		min-width: 0;
-		height: 28px;
-		align-items: center;
-		gap: 7px;
-		padding: 0 8px;
-		border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--primary-soft) 72%, transparent);
-		color: var(--primary);
+	.llm-trigger {
+		position: relative;
+		display: grid;
+		width: 36px;
+		height: 36px;
+		place-items: center;
+		padding: 0;
+		border: 0;
+		border-radius: 50%;
+		background: transparent;
+		color: var(--muted);
 		cursor: pointer;
-		font-size: 10px;
-		font-weight: 620;
-		letter-spacing: 0.01em;
-		line-height: 1;
-		white-space: nowrap;
 		transition:
 			background 150ms var(--ease),
-			border-color 150ms var(--ease),
 			color 150ms var(--ease);
 	}
 
-	.llm-chip.working {
-		padding: 0 11px;
+	.llm-trigger:hover,
+	.llm-trigger.open {
+		background: var(--control-hover);
+		color: var(--text);
 	}
 
-	.llm-chip:hover,
-	.llm-chip.open {
-		background: color-mix(in srgb, var(--primary-soft) 70%, var(--primary) 14%);
+	.llm-trigger.working {
+		background: var(--primary-soft);
+		color: var(--primary);
 	}
 
-	.llm-chip.paused,
-	.llm-chip.disabled-state {
-		border-color: var(--line-strong);
+	/* Thin progress ring around the icon while the queue drains. */
+	.llm-trigger.working::before {
+		position: absolute;
+		inset: 2px;
+		border-radius: 50%;
+		background: conic-gradient(var(--primary) var(--llm-progress, 0%), var(--line-strong) 0);
+		content: '';
+		-webkit-mask: radial-gradient(circle, transparent 67%, black 69%);
+		mask: radial-gradient(circle, transparent 67%, black 69%);
+		pointer-events: none;
+	}
+
+	.llm-trigger.working.paused {
 		background: var(--hover);
 		color: var(--muted);
 	}
 
-	.llm-chip-copy {
-		overflow: hidden;
-		text-overflow: ellipsis;
+	.llm-trigger.working.paused::before {
+		background: conic-gradient(var(--muted) var(--llm-progress, 0%), var(--line-strong) 0);
 	}
 
-	.llm-chip-track {
-		position: relative;
-		display: block;
-		overflow: hidden;
-		width: 34px;
-		height: 3px;
-		flex: none;
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--primary) 18%, transparent);
+	.llm-trigger.disabled-state {
+		opacity: 0.55;
 	}
 
-	.llm-chip-track > i {
-		position: absolute;
-		top: 0;
-		bottom: 0;
-		left: 0;
-		border-radius: 999px;
-		background: var(--primary);
-		transition: width 300ms var(--ease);
+	.llm-trigger.working :global(svg) {
+		animation: llm-pulse 2.2s ease-in-out infinite;
 	}
 
-	.llm-chip.paused .llm-chip-track > i {
-		background: var(--muted);
-	}
-
-	.llm-chip.working :global(svg) {
-		flex: none;
-		animation: llm-chip-pulse 2.2s ease-in-out infinite;
-	}
-
-	.llm-chip.paused :global(svg) {
+	.llm-trigger.paused :global(svg) {
 		animation: none;
 	}
 
-	@keyframes llm-chip-pulse {
+	@keyframes llm-pulse {
 		0%,
 		100% {
 			opacity: 0.45;
@@ -302,8 +287,18 @@
 		}
 	}
 
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		clip-path: inset(50%);
+	}
+
 	@media (prefers-reduced-motion: reduce) {
-		.llm-chip.working :global(svg) {
+		.llm-trigger.working :global(svg) {
 			animation: none;
 		}
 	}

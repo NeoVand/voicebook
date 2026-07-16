@@ -357,10 +357,13 @@ test('import → install → play → seek → bookmark → reload → offline r
 	expect(readerTypography.outlineOpticalSize).toBe(readerTypography.titleOpticalSize);
 
 	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
-	await expect(page.getByRole('button', { name: 'Prepare whole document audio' })).toBeVisible();
-	await expect(page.getByRole('combobox', { name: 'Generation quality' })).toContainText(
-		'10 steps'
-	);
+	// Everything audio lives in the wave button's action menu now.
+	await page.getByRole('button', { name: 'Document audio options' }).click();
+	await expect(page.getByRole('menuitem', { name: 'Prepare whole document audio' })).toBeEnabled();
+	await expect(
+		page.getByRole('group', { name: 'Generation quality' }).getByText('10 steps')
+	).toBeVisible();
+	await page.keyboard.press('Escape');
 	await page.evaluate(() => {
 		(
 			window as unknown as {
@@ -462,17 +465,22 @@ test('whole-document preparation fills cache coverage and preserves read-along t
 		).__voicebookTtsDelayMs = 120;
 	});
 
-	await page.getByRole('button', { name: 'Prepare whole document audio' }).click();
-	await expect(page.getByRole('button', { name: /Stop preparing whole document/ })).toBeVisible();
+	const audioMenuTrigger = page.getByRole('button', { name: 'Document audio options' });
+	await audioMenuTrigger.click();
+	await page.getByRole('menuitem', { name: 'Prepare whole document audio' }).click();
+	await expect(audioMenuTrigger).toHaveAttribute('aria-busy', 'true');
 	await expect(page.locator('.timeline-band.generating').first()).toBeVisible();
 	await expect(page.locator('.timeline-band.generating').first()).not.toHaveCSS(
 		'background-image',
 		'none'
 	);
-	const ready = page.getByRole('button', { name: 'Whole document audio is ready' });
+	await expect(page.locator('.timeline-band.cached')).toHaveCount(6);
+	await expect(audioMenuTrigger).toHaveAttribute('aria-busy', 'false');
+	await audioMenuTrigger.click();
+	const ready = page.getByRole('menuitem', { name: 'Whole document audio is ready' });
 	await expect(ready).toBeVisible();
 	await expect(ready).toBeDisabled();
-	await expect(page.locator('.timeline-band.cached')).toHaveCount(6);
+	await page.keyboard.press('Escape');
 	await expect(page.locator('.timeline-band.cached').first()).not.toHaveCSS(
 		'background-color',
 		'rgba(0, 0, 0, 0)'
@@ -495,7 +503,9 @@ test('whole-document preparation fills cache coverage and preserves read-along t
 	await expect(page.locator('.timeline-band.listened')).toHaveCount(0);
 	await expect(page.locator('#timeline-coverage-summary')).toContainText('0% audio cached');
 	await expect(page.locator('#timeline-coverage-summary')).toContainText('0% listened');
-	await expect(page.getByRole('button', { name: 'Prepare whole document audio' })).toBeEnabled();
+	await audioMenuTrigger.click();
+	await expect(page.getByRole('menuitem', { name: 'Prepare whole document audio' })).toBeEnabled();
+	await page.keyboard.press('Escape');
 
 	await page.reload();
 	await expect(page.getByRole('heading', { name: 'Prepared Without Pressure' })).toBeVisible();
@@ -509,7 +519,8 @@ test('whole-document preparation fills cache coverage and preserves read-along t
 			}
 		).__voicebookTtsDelayMs = 600;
 	});
-	await page.getByRole('button', { name: 'Prepare whole document audio' }).click();
+	await page.getByRole('button', { name: 'Document audio options' }).click();
+	await page.getByRole('menuitem', { name: 'Prepare whole document audio' }).click();
 	await expect(page.locator('.timeline-band.generating').first()).toBeVisible();
 	await page.getByRole('button', { name: 'Next passage' }).click();
 	await page.getByRole('button', { name: 'Next passage' }).click();
@@ -532,9 +543,15 @@ test('whole-document preparation fills cache coverage and preserves read-along t
 			'Fifth passage follows the new playhead.',
 			'Sixth passage completes the wrapped preparation.'
 		]);
-	await expect(page.getByRole('button', { name: 'Whole document audio is ready' })).toBeVisible();
 	await expect(page.locator('.timeline-band.cached')).toHaveCount(6);
+	await expect(page.getByRole('button', { name: 'Document audio options' })).toHaveAttribute(
+		'aria-busy',
+		'false'
+	);
 	await page.getByRole('button', { name: 'Document audio options' }).click();
+	await expect(
+		page.getByRole('menuitem', { name: 'Whole document audio is ready' })
+	).toBeDisabled();
 	const downloadItem = page.getByRole('menuitem', { name: 'Download MP3 Whole document' });
 	await expect(downloadItem).toBeEnabled();
 	const downloadPromise = page.waitForEvent('download');
@@ -568,10 +585,7 @@ test('keeps the phone reader focused on content and a compact transport', async 
 	await expect(page.getByRole('button', { name: 'Back 10 seconds' })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Forward 10 seconds' })).toBeVisible();
 	await expect(page.getByRole('slider', { name: 'Reading position' })).toBeVisible();
-	await expect(page.getByRole('combobox', { name: 'Voice' })).toBeVisible();
-	await expect(page.getByRole('combobox', { name: 'Generation quality' })).toBeHidden();
 	await expect(page.getByRole('combobox', { name: 'Playback speed' })).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Prepare whole document audio' })).toBeVisible();
 	const volumeButton = page.getByRole('button', { name: /Volume 90 percent/ });
 	await expect(volumeButton).toBeVisible();
 	await volumeButton.click();
@@ -581,11 +595,13 @@ test('keeps the phone reader focused on content and a compact transport', async 
 		'vertical'
 	);
 	await page.getByRole('button', { name: 'Document audio options' }).click();
+	await expect(page.getByRole('group', { name: 'Voice' })).toBeVisible();
 	await expect(page.getByRole('group', { name: 'Generation quality' })).toBeVisible();
-	await expect(page.getByRole('menuitemradio', { name: '10' })).toHaveAttribute(
+	await expect(page.getByRole('menuitemradio', { name: '10', exact: true })).toHaveAttribute(
 		'aria-checked',
 		'true'
 	);
+	await expect(page.getByRole('menuitem', { name: 'Prepare whole document audio' })).toBeVisible();
 	await page.getByRole('button', { name: 'Document audio options' }).click();
 
 	await page.getByRole('button', { name: 'Open navigation' }).click();
@@ -632,7 +648,7 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 			const sidebar = document.querySelector<HTMLElement>('.app-sidebar');
 			const stage = shell?.querySelector<HTMLElement>('.reader-stage');
 			const outline = shell?.querySelector<HTMLElement>('.outline-panel');
-			const volume = options.querySelector<HTMLElement>('.player-volume');
+			const volume = options.querySelector<HTMLElement>('.volume-control');
 			const generation = player?.querySelector<HTMLElement>('.generation-options');
 			const transport = player?.querySelector<HTMLElement>('.transport');
 			const playButton = player?.querySelector<HTMLElement>('.play-button');
@@ -730,14 +746,18 @@ test('keeps the desktop player settings inside the playback dock', async ({ page
 		expect(geometry.singleLine, `${width}px player controls use one line`).toBe(true);
 	}
 
-	const qualitySelect = page.getByRole('combobox', { name: 'Generation quality' });
-	await qualitySelect.click();
-	await page.getByRole('option', { name: '14 steps', exact: true }).click();
-	await expect(qualitySelect).toContainText('14 steps');
+	const audioTrigger = page.getByRole('button', { name: 'Document audio options' });
+	await audioTrigger.click();
+	await page.getByRole('menuitemradio', { name: '14', exact: true }).click();
+	await expect(
+		page.getByRole('group', { name: 'Generation quality' }).getByText('14 steps')
+	).toBeVisible();
+	await page.keyboard.press('Escape');
 	await page.reload();
-	await expect(page.getByRole('combobox', { name: 'Generation quality' })).toContainText(
-		'14 steps'
-	);
+	await audioTrigger.click();
+	await expect(
+		page.getByRole('group', { name: 'Generation quality' }).getByText('14 steps')
+	).toBeVisible();
 });
 
 test('collapses and remembers the desktop sidebar', async ({ page }) => {

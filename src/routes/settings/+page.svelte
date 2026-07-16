@@ -538,9 +538,9 @@
 			</h1>
 			<p>
 				{activeSection === 'models'
-					? 'One fast, local speech engine. No model switching in the reader.'
+					? 'Pick who reads aloud — the free on-device engine, or premium voices with your own API key.'
 					: activeSection === 'llm'
-						? 'A language model, run privately on this device, rewrites equations, tables, and diagrams into words the reader voice can speak.'
+						? 'Rewrites equations, tables, and diagrams into speakable words — on-device for free, or with your own API key.'
 						: activeSection === 'storage'
 							? 'See and clean up the data Voicebook keeps on this device.'
 							: 'Browser capabilities, privacy, and reader shortcuts.'}
@@ -665,8 +665,8 @@
 		<section class="settings-section" aria-labelledby="engine-title">
 			<header class="section-title">
 				<div>
-					<h2 id="engine-title">Speech engine</h2>
-					<p>Downloaded once from Hugging Face, then run entirely in this browser.</p>
+					<h2 id="engine-title">On-device engine</h2>
+					<p>Downloaded once, then everything runs in this browser — even offline.</p>
 				</div>
 				<span class="runtime-state" class:ready={installed}>
 					<span></span>{installed ? 'Installed' : 'Not installed'}
@@ -705,21 +705,6 @@
 				</label>
 			</div>
 
-			<div class="setting-row">
-				<div>
-					<strong>Execution</strong>
-					<p>
-						{appState.capabilities.webgpu
-							? 'WebGPU acceleration is available on this device.'
-							: 'WebGPU is unavailable. Voicebook will use the slower WASM fallback.'}
-					</p>
-				</div>
-				<span class="capability-label">
-					<Cpu size={15} />
-					{appState.capabilities.webgpu ? 'WebGPU' : 'WASM'}
-				</span>
-			</div>
-
 			{#if progress.status === 'loading'}
 				<div class="install-progress" aria-live="polite">
 					<div>
@@ -737,7 +722,7 @@
 			{/if}
 
 			<footer class="section-actions">
-				<p>Apache-2.0 application · OpenRAIL-M model · estimated word timing</p>
+				<p>{appState.capabilities.webgpu ? 'Runs on WebGPU' : 'Runs on the WASM fallback'}</p>
 				<div>
 					{#if busy}
 						<button class="button" type="button" onclick={cancelInstall}>
@@ -901,10 +886,7 @@
 			<header class="section-title">
 				<div>
 					<h2 id="llm-engine-title">Descriptions engine</h2>
-					<p>
-						Which model rewrites equations, tables, and diagrams into speakable prose. Cloud engines
-						use your own API key, sent only to that provider.
-					</p>
+					<p>On-device is free and private. Cloud engines use your own key, sent only there.</p>
 				</div>
 				<span class="runtime-state" class:ready={narrationState.engineAvailable}>
 					<span></span>{narrationState.engineAvailable ? 'Ready' : 'Not configured'}
@@ -992,7 +974,7 @@
 			<header class="section-title">
 				<div>
 					<h2 id="llm-models-title">On-device models</h2>
-					<p>Downloaded once from Hugging Face, then run entirely in this browser.</p>
+					<p>Downloaded once, then everything runs in this browser.</p>
 				</div>
 				<span class="runtime-state" class:ready={llmState.installed}>
 					<span></span>
