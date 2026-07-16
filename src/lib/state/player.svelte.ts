@@ -1115,7 +1115,7 @@ export class VoicebookPlayer {
 			// Settle narration rewrites first so the audio pass runs over final
 			// spoken text instead of fallbacks that would be invalidated later.
 			if (this.ensureNarrationsReady && this.hasPendingNarrations) {
-				this.narrationStage = 'Rewriting visuals for narration…';
+				this.narrationStage = 'Rewriting visuals for speech…';
 				try {
 					await this.ensureNarrationsReady((done, total) => {
 						this.narrationStage = `Rewriting visuals ${done}/${total}…`;

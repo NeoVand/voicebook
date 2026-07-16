@@ -19,9 +19,9 @@
 		Moon,
 		PanelLeftClose,
 		PanelLeftOpen,
+		BrainCircuit,
 		RefreshCw,
 		Settings2,
-		Sparkles,
 		Sun,
 		ZoomIn,
 		ZoomOut,
@@ -491,17 +491,17 @@
 			</a>
 			<a
 				class="nav-link"
-				class:active={page.url.pathname.startsWith(settingsHref) && settingsSection === 'narration'}
-				href={resolve('/settings?section=narration')}
-				aria-label="Narration"
-				aria-current={page.url.pathname.startsWith(settingsHref) && settingsSection === 'narration'
+				class:active={page.url.pathname.startsWith(settingsHref) && settingsSection === 'llm'}
+				href={resolve('/settings?section=llm')}
+				aria-label="LLM"
+				aria-current={page.url.pathname.startsWith(settingsHref) && settingsSection === 'llm'
 					? 'page'
 					: undefined}
-				data-tooltip="Narration"
+				data-tooltip="LLM"
 				onclick={closeNavigation}
 			>
-				<Sparkles size={17} />
-				<span>Narration</span>
+				<BrainCircuit size={17} />
+				<span>LLM</span>
 			</a>
 			<a
 				class="nav-link"

@@ -4,11 +4,11 @@
 	import {
 		ArrowRight,
 		BookOpenText,
+		BrainCircuit,
 		Clock3,
 		FileText,
 		FileUp,
 		Plus,
-		Sparkles,
 		Trash2,
 		X
 	} from '@lucide/svelte';
@@ -197,16 +197,14 @@
 			</div>
 		{:else if appState.documents.length}
 			{#if narrationOffer}
-				<aside class="narration-offer" aria-label="Narration setup suggestion">
-					<Sparkles size={16} />
+				<aside class="narration-offer" aria-label="Language model setup suggestion">
+					<BrainCircuit size={16} />
 					<p>
 						<strong>New: spoken equations, tables, and diagrams.</strong>
-						A small on-device model can rewrite them into words the reader voice can speak.
+						An on-device language model can rewrite them into words the reader voice can speak.
 					</p>
 					<div class="narration-offer-actions">
-						<a class="button primary" href={resolve('/settings?section=narration')}>
-							Set up narration
-						</a>
+						<a class="button primary" href={resolve('/settings?section=llm')}> Set up the LLM </a>
 						<button class="button" type="button" onclick={() => void llmState.dismissHint()}>
 							Not now
 						</button>

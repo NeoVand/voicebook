@@ -19,7 +19,7 @@
 		Play,
 		RefreshCw,
 		ShieldCheck,
-		Sparkles,
+		BrainCircuit,
 		Square,
 		Trash2,
 		Wifi
@@ -38,7 +38,7 @@
 	import { narrationState } from '$lib/state/narrations.svelte';
 	import { requestPersistentStorage } from '$lib/services/repository';
 
-	type SettingsSection = 'models' | 'narration' | 'storage' | 'system';
+	type SettingsSection = 'models' | 'llm' | 'storage' | 'system';
 	type PreviewState = 'idle' | 'loading' | 'playing' | 'error';
 
 	const model = getModel('supertonic-3');
@@ -60,9 +60,8 @@
 	let diagnosticsCopied = $state(false);
 	let activeSection = $derived.by<SettingsSection>(() => {
 		const section = page.url.searchParams.get('section');
-		return section === 'storage' || section === 'system' || section === 'narration'
-			? section
-			: 'models';
+		if (section === 'narration') return 'llm'; // pre-rename links
+		return section === 'storage' || section === 'system' || section === 'llm' ? section : 'models';
 	});
 	let progress = $derived(appState.modelProgress['supertonic-3']);
 	let installed = $derived(appState.installedModels.includes('supertonic-3'));
@@ -297,7 +296,7 @@
 			await llmState.activate(spec.id, { install: true });
 		} catch (error) {
 			llmError =
-				error instanceof Error ? error.message : 'The narration model could not be installed.';
+				error instanceof Error ? error.message : 'The language model could not be installed.';
 		} finally {
 			llmBusy = false;
 		}
@@ -321,7 +320,7 @@
 			await llmState.remove(spec.id);
 		} catch (error) {
 			llmError =
-				error instanceof Error ? error.message : 'The narration model could not be removed.';
+				error instanceof Error ? error.message : 'The language model could not be removed.';
 		} finally {
 			llmBusy = false;
 		}
@@ -420,8 +419,8 @@
 			<h1>
 				{activeSection === 'models'
 					? 'Voice'
-					: activeSection === 'narration'
-						? 'Narration'
+					: activeSection === 'llm'
+						? 'LLM'
 						: activeSection === 'storage'
 							? 'Storage'
 							: 'System'}
@@ -429,8 +428,8 @@
 			<p>
 				{activeSection === 'models'
 					? 'One fast, local speech engine. No model switching in the reader.'
-					: activeSection === 'narration'
-						? 'A small language model, run privately on this device, rewrites equations, tables, and diagrams into words the reader voice can speak.'
+					: activeSection === 'llm'
+						? 'A language model, run privately on this device, rewrites equations, tables, and diagrams into words the reader voice can speak.'
 						: activeSection === 'storage'
 							? 'See and clean up the data Voicebook keeps on this device.'
 							: 'Browser capabilities, privacy, and reader shortcuts.'}
@@ -610,14 +609,14 @@
 				</div>
 			{/if}
 		</section>
-	{:else if activeSection === 'narration'}
+	{:else if activeSection === 'llm'}
 		{#if !llmState.eligible}
-			<section class="settings-section" aria-labelledby="narration-gate-title">
+			<section class="settings-section" aria-labelledby="llm-gate-title">
 				<header class="section-title">
 					<div>
-						<h2 id="narration-gate-title">Not available on this device</h2>
+						<h2 id="llm-gate-title">Not available on this device</h2>
 						<p>
-							{llmState.policy.reason ?? 'Narration needs a desktop browser with WebGPU.'}
+							{llmState.policy.reason ?? 'The language model needs a desktop browser with WebGPU.'}
 							Equations and tables are read with built-in fallbacks instead.
 						</p>
 					</div>
@@ -625,10 +624,10 @@
 				</header>
 			</section>
 		{:else}
-			<section class="settings-section" aria-labelledby="narration-models-title">
+			<section class="settings-section" aria-labelledby="llm-models-title">
 				<header class="section-title">
 					<div>
-						<h2 id="narration-models-title">Narration model</h2>
+						<h2 id="llm-models-title">Models</h2>
 						<p>Downloaded once from Hugging Face, then run entirely in this browser.</p>
 					</div>
 					<span class="runtime-state" class:ready={llmState.installed}>
@@ -641,86 +640,90 @@
 					</span>
 				</header>
 
-				{#each LLM_CATALOG as spec (spec.id)}
-					{@const specInstalled = llmState.installedModels.includes(spec.id)}
-					{@const specSelected = llmState.selectedModelId === spec.id}
-					{@const specActivating = llmActivating && llmState.activeModelId === spec.id}
-					{@const offer = llmState.canOffer(spec)}
-					<div class="llm-card" class:selected={specSelected}>
-						<div class="engine-hero">
-							<div class="engine-name">
-								<span><Sparkles size={20} /></span>
-								<div>
+				<div class="llm-grid">
+					{#each LLM_CATALOG as spec (spec.id)}
+						{@const specInstalled = llmState.installedModels.includes(spec.id)}
+						{@const specSelected = llmState.selectedModelId === spec.id}
+						{@const specActivating = llmActivating && llmState.activeModelId === spec.id}
+						{@const offer = llmState.canOffer(spec)}
+						<article
+							class="llm-card"
+							class:selected={specSelected}
+							class:unavailable={!offer.ok}
+							aria-label={`${spec.label} language model`}
+						>
+							<header class="llm-card-head">
+								<span class="llm-card-icon"><BrainCircuit size={19} /></span>
+								<div class="llm-card-name">
 									<h3>{spec.label}</h3>
 									<p>{spec.tagline}</p>
 								</div>
-							</div>
-							<div class="engine-facts">
-								<span><strong>{spec.sizeMb} MB</strong><small>download</small></span>
-								<span><strong>{spec.dtype}</strong><small>WebGPU</small></span>
-							</div>
-						</div>
+								{#if specSelected && llmState.ready}
+									<span class="llm-card-state active">Active</span>
+								{:else if specSelected}
+									<span class="llm-card-state">Selected</span>
+								{:else if specInstalled}
+									<span class="llm-card-state">Installed</span>
+								{/if}
+							</header>
 
-						{#if !specInstalled}
-							<div class="setting-row license-row">
+							<dl class="llm-card-facts">
 								<div>
-									<strong>{spec.license}</strong>
-									<p>
-										Review the model’s terms before the one-time download.
-										<a href={spec.licenseUrl} target="_blank" rel="external noreferrer">
-											Open terms <ArrowUpRight size={12} />
-										</a>
-									</p>
+									<dt>Download</dt>
+									<dd>{spec.sizeMb} MB</dd>
 								</div>
-								<label class="check-control">
+								<div>
+									<dt>Precision</dt>
+									<dd>{spec.dtype}</dd>
+								</div>
+								<div>
+									<dt>License</dt>
+									<dd>
+										<a href={spec.licenseUrl} target="_blank" rel="external noreferrer">
+											{spec.license}
+											<ArrowUpRight size={11} />
+										</a>
+									</dd>
+								</div>
+							</dl>
+
+							{#if specActivating}
+								<div class="install-progress" aria-live="polite">
+									<div>
+										<strong>
+											{llmState.phase === 'downloading'
+												? 'Downloading… keep this tab open.'
+												: llmState.phase === 'probing'
+													? 'Warming up the model…'
+													: 'Loading model files…'}
+										</strong>
+										<span>{llmState.download ? `${llmState.download.percent}%` : ''}</span>
+									</div>
+									<progress max="100" value={llmState.download?.percent ?? 0}></progress>
+									<small>{llmState.download?.file ?? 'Preparing model files'}</small>
+								</div>
+							{:else if !specInstalled}
+								<label class="check-control llm-card-license">
 									<input
 										type="checkbox"
 										checked={llmState.acceptedLicenses.includes(spec.id)}
 										onchange={(event) => updateLlmLicense(spec, event)}
 									/>
-									<span>I have reviewed the terms</span>
+									<span>I have reviewed the license terms</span>
 								</label>
-							</div>
-						{/if}
+							{/if}
 
-						{#if specActivating}
-							<div class="install-progress" aria-live="polite">
-								<div>
-									<strong>
-										{llmState.phase === 'downloading'
-											? 'Downloading from Hugging Face… keep this tab open.'
-											: llmState.phase === 'probing'
-												? 'Warming up the model…'
-												: 'Loading model files…'}
-									</strong>
-									<span>{llmState.download ? `${llmState.download.percent}%` : ''}</span>
-								</div>
-								<progress max="100" value={llmState.download?.percent ?? 0}></progress>
-								<small>{llmState.download?.file ?? 'Preparing model files'}</small>
-							</div>
-						{/if}
-
-						<footer class="section-actions">
-							<p>
-								{offer.ok
-									? specSelected && llmState.ready
-										? `Active on ${llmState.device === 'webgpu' ? 'WebGPU' : 'WASM'}`
-										: specSelected
-											? 'Selected for narration'
-											: ' '
-									: (offer.reason ?? 'Unavailable on this device')}
-							</p>
-							<div>
-								{#if specActivating}
+							<footer class="llm-card-actions">
+								{#if !offer.ok}
+									<p class="llm-card-note">{offer.reason ?? 'Unavailable on this device'}</p>
+								{:else if specActivating}
 									<button class="button" type="button" onclick={cancelLlmInstall}>
 										<Square size={13} fill="currentColor" /> Stop
 									</button>
 								{:else if specInstalled}
-									{#if specSelected}
-										<span class="installed-mark"><Check size={14} /> In use</span>
-									{:else}
-										<button class="button" type="button" onclick={() => useLlm(spec)}>
-											Use this model
+									{#if !specSelected}
+										<button class="button primary" type="button" onclick={() => useLlm(spec)}>
+											<Check size={14} /> Use this model
 										</button>
 									{/if}
 									<button
@@ -735,16 +738,16 @@
 									<button
 										class="button primary"
 										type="button"
-										disabled={!offer.ok || !llmState.acceptedLicenses.includes(spec.id) || llmBusy}
+										disabled={!llmState.acceptedLicenses.includes(spec.id) || llmBusy}
 										onclick={() => installLlm(spec)}
 									>
 										<Download size={15} /> Download · {spec.sizeMb} MB
 									</button>
 								{/if}
-							</div>
-						</footer>
-					</div>
-				{/each}
+							</footer>
+						</article>
+					{/each}
+				</div>
 
 				{#if llmError || llmState.error}
 					<div class="inline-error" role="alert">
@@ -754,11 +757,11 @@
 				{/if}
 			</section>
 
-			<section class="settings-section" aria-labelledby="narration-behavior-title">
+			<section class="settings-section" aria-labelledby="llm-behavior-title">
 				<header class="section-title">
 					<div>
-						<h2 id="narration-behavior-title">Behavior</h2>
-						<p>How Voicebook uses the narration model while you read.</p>
+						<h2 id="llm-behavior-title">Behavior</h2>
+						<p>How Voicebook uses the language model while you read.</p>
 					</div>
 				</header>
 
@@ -789,7 +792,7 @@
 				{/if}
 
 				<footer class="section-actions">
-					<p>Narrations are stored with each document and only change when the source changes.</p>
+					<p>Descriptions are stored with each document and only change when the source changes.</p>
 					<div>
 						<button
 							class="button"
@@ -800,18 +803,18 @@
 							{#if regenerating}<LoaderCircle class="spin" size={15} />{:else}<RefreshCw
 									size={15}
 								/>{/if}
-							Regenerate all narrations
+							Regenerate all descriptions
 						</button>
 					</div>
 				</footer>
 			</section>
 
-			<section class="settings-section" aria-labelledby="narration-prompts-title">
+			<section class="settings-section" aria-labelledby="llm-prompts-title">
 				<header class="section-title">
 					<div>
-						<h2 id="narration-prompts-title">Prompts</h2>
+						<h2 id="llm-prompts-title">Prompts</h2>
 						<p>
-							Exactly what the model is asked, per element type. Edited prompts re-narrate documents
+							Exactly what the model is asked, per element type. Edited prompts rewrite documents
 							the next time they open.
 						</p>
 					</div>
@@ -901,14 +904,14 @@
 			{#if llmState.installedModels.length}
 				<div class="setting-row">
 					<div>
-						<strong>Narration model weights</strong>
+						<strong>Language model weights</strong>
 						<p>
 							{LLM_CATALOG.filter((spec) => llmState.installedModels.includes(spec.id))
 								.map((spec) => `${spec.label} · ~${spec.sizeMb} MB`)
-								.join(', ')} — cached once from Hugging Face. Remove under Narration.
+								.join(', ')} — cached once from Hugging Face. Remove under LLM.
 						</p>
 					</div>
-					<Sparkles size={16} />
+					<BrainCircuit size={16} />
 				</div>
 			{/if}
 
@@ -1137,25 +1140,137 @@
 		border-bottom: 1px solid var(--line);
 	}
 
+	.llm-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+		gap: 14px;
+		margin-top: 16px;
+	}
+
 	.llm-card {
-		padding: 4px 16px 12px;
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+		padding: 18px;
 		border: 1px solid var(--line);
-		border-radius: 10px;
-		margin-top: 14px;
-		transition: border-color 150ms var(--ease);
+		border-radius: 12px;
+		background: color-mix(in srgb, var(--surface, transparent) 60%, transparent);
+		transition:
+			border-color 150ms var(--ease),
+			box-shadow 150ms var(--ease);
 	}
 
 	.llm-card.selected {
-		border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
+		border-color: color-mix(in srgb, var(--primary) 55%, var(--line));
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent);
 	}
 
-	.llm-card .engine-hero {
-		min-height: 96px;
-		gap: 20px;
+	.llm-card.unavailable {
+		opacity: 0.6;
 	}
 
-	.llm-card .section-actions {
-		margin-top: 10px;
+	.llm-card-head {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+	}
+
+	.llm-card-icon {
+		display: grid;
+		width: 38px;
+		height: 38px;
+		flex: 0 0 38px;
+		place-items: center;
+		border-radius: 9px;
+		background: var(--primary-soft);
+		color: var(--primary);
+	}
+
+	.llm-card-name {
+		min-width: 0;
+		flex: 1;
+	}
+
+	.llm-card-name h3 {
+		margin: 0;
+		font-size: 15px;
+		font-weight: 650;
+		letter-spacing: -0.02em;
+	}
+
+	.llm-card-name p {
+		margin: 2px 0 0;
+		color: var(--muted);
+		font-size: 10.5px;
+	}
+
+	.llm-card-state {
+		flex: none;
+		padding: 3px 9px;
+		border: 1px solid var(--line-strong);
+		border-radius: 999px;
+		color: var(--muted);
+		font-size: 9.5px;
+		font-weight: 650;
+		letter-spacing: 0.02em;
+	}
+
+	.llm-card-state.active {
+		border-color: transparent;
+		background: var(--primary-soft);
+		color: var(--primary);
+	}
+
+	.llm-card-facts {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		padding: 10px 12px;
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		margin: 0;
+		gap: 8px;
+	}
+
+	.llm-card-facts dt {
+		color: var(--faint);
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+
+	.llm-card-facts dd {
+		margin: 3px 0 0;
+		font-size: 11px;
+		font-weight: 620;
+		white-space: nowrap;
+	}
+
+	.llm-card-facts dd a {
+		display: inline-flex;
+		align-items: center;
+		gap: 2px;
+		color: var(--primary);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	.llm-card-license {
+		font-size: 10.5px;
+	}
+
+	.llm-card-actions {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		margin-top: auto;
+		gap: 8px;
+	}
+
+	.llm-card-note {
+		margin: 0 auto 0 0;
+		color: var(--faint);
+		font-size: 10px;
 	}
 
 	.prompt-editor {

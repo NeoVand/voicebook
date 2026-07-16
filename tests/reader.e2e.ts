@@ -30,8 +30,10 @@ test('completes voice setup before presenting the empty-library import surface',
 			}
 		).__voicebookTtsLoadDelayMs = 180;
 	});
-	await page.getByRole('checkbox', { name: /I agree to the Supertonic model terms/ }).check();
-	await page.getByRole('button', { name: 'Download voice engine' }).click();
+	const includeLlm = page.getByRole('checkbox', { name: 'Include' });
+	if (await includeLlm.isVisible()) await includeLlm.uncheck();
+	await page.getByRole('checkbox', { name: /I accept the model licenses/ }).check();
+	await page.getByRole('button', { name: /^Download ·/ }).click();
 	await expect(setupLogo).toHaveClass(/\bactive\b/);
 	await page.getByRole('heading', { name: 'Set up local listening.' }).waitFor({ state: 'hidden' });
 

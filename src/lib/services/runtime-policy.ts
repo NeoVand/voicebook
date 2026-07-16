@@ -61,10 +61,10 @@ export function narrationRuntimePolicy(
 	capabilities: { webgpu: boolean }
 ): NarrationRuntimePolicy {
 	if (isAppleMobileWebKit(identity) || /\bAndroid\b/i.test(identity.userAgent)) {
-		return { eligible: false, reason: 'Narration needs a desktop browser.' };
+		return { eligible: false, reason: 'The language model needs a desktop browser.' };
 	}
 	if (!capabilities.webgpu) {
-		return { eligible: false, reason: 'Narration needs a browser with WebGPU.' };
+		return { eligible: false, reason: 'The language model needs a browser with WebGPU.' };
 	}
 	return { eligible: true };
 }

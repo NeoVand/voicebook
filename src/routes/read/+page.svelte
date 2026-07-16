@@ -8,13 +8,13 @@
 		Check,
 		ChevronLeft,
 		ChevronRight,
+		BrainCircuit,
 		LoaderCircle,
 		LocateFixed,
 		Pause,
 		Play,
 		RotateCcw,
 		RotateCw,
-		Sparkles,
 		Square,
 		Volume2,
 		X
@@ -1058,15 +1058,20 @@
 					<a
 						class="narration-chip"
 						class:paused={narrationState.phase === 'paused-gpu'}
-						href={resolve('/settings?section=narration')}
-						title="A local model is rewriting equations, tables, and diagrams for speech"
+						href={resolve('/settings?section=llm')}
+						title="The on-device language model is rewriting equations, tables, and diagrams for speech"
 						aria-live="polite"
 					>
-						<Sparkles size={13} strokeWidth={2.1} />
-						<span>
-							{player.narrationStage ||
-								`Describing visuals · ${narrationState.done}/${narrationState.total}`}
+						<BrainCircuit size={13} strokeWidth={2.1} />
+						<span class="narration-chip-copy">
+							{player.narrationStage || 'Describing visuals'}
 						</span>
+						<span class="narration-chip-count">{narrationState.done}/{narrationState.total}</span>
+						<i class="narration-chip-track" aria-hidden="true">
+							<i
+								style:width={`${narrationState.total ? Math.round((narrationState.done / narrationState.total) * 100) : 0}%`}
+							></i>
+						</i>
 					</a>
 				{/if}
 			</div>
@@ -2239,10 +2244,11 @@
 		min-width: 0;
 		height: 28px;
 		align-items: center;
-		gap: 6px;
-		padding: 0 10px;
+		gap: 7px;
+		padding: 0 11px;
+		border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
 		border-radius: 999px;
-		background: var(--primary-soft);
+		background: color-mix(in srgb, var(--primary-soft) 72%, transparent);
 		color: var(--primary);
 		font-size: 10px;
 		font-weight: 620;
@@ -2252,9 +2258,35 @@
 		white-space: nowrap;
 	}
 
-	.narration-chip span {
+	.narration-chip-copy {
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	.narration-chip-count {
+		color: color-mix(in srgb, var(--primary) 72%, var(--muted));
+		font-variant-numeric: tabular-nums;
+	}
+
+	.narration-chip-track {
+		position: relative;
+		display: block;
+		overflow: hidden;
+		width: 34px;
+		height: 3px;
+		flex: none;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--primary) 18%, transparent);
+	}
+
+	.narration-chip-track > i {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		border-radius: 999px;
+		background: var(--primary);
+		transition: width 300ms var(--ease);
 	}
 
 	.narration-chip:hover {
@@ -2262,8 +2294,13 @@
 	}
 
 	.narration-chip.paused {
+		border-color: var(--line-strong);
 		color: var(--muted);
 		background: var(--hover);
+	}
+
+	.narration-chip.paused .narration-chip-track > i {
+		background: var(--muted);
 	}
 
 	.narration-chip :global(svg) {
