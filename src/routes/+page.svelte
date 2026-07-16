@@ -38,10 +38,11 @@
 				llmState.phase === 'loading' ||
 				llmState.phase === 'probing')
 	);
-	// A saved ElevenLabs key makes the app speech-capable without any local
-	// download — setup steps aside the moment either path is ready.
+	// Speech-capable means a runnable engine is actually selected: the local
+	// model installed, or ElevenLabs chosen with a key. A stored key alone
+	// (notably the dev .env seed) must not skip setup after a factory reset.
 	let speechCapable = $derived(
-		modelInstalled || (providersState.initialized && providersState.elevenLabsReady)
+		modelInstalled || (providersState.initialized && providersState.cloudSpeechReady)
 	);
 	let showSetup = $derived(!speechCapable || llmFirstDownloadActive);
 	// Existing installs predate the narration model: offer it once, dismissibly.

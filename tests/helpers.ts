@@ -127,7 +127,7 @@ export async function installFakeTts(page: Page): Promise<void> {
 
 export async function completeModelSetup(page: Page): Promise<void> {
 	const setup = page.getByRole('heading', {
-		name: 'Set up local listening.'
+		name: 'Choose how Voicebook reads.'
 	});
 	const readyLibrary = page.getByRole('button', { name: 'Add document', exact: true });
 	await Promise.race([
@@ -135,10 +135,10 @@ export async function completeModelSetup(page: Page): Promise<void> {
 		readyLibrary.waitFor({ state: 'visible' })
 	]);
 	if (!(await setup.isVisible())) return;
-	// Only the (fake) voice engine installs in tests — leave the real
-	// language-model download out of the run.
-	const includeLlm = page.getByRole('checkbox', { name: 'Include' });
-	if (await includeLlm.isVisible()) await includeLlm.uncheck();
+	// Only the (fake) voice engine installs in tests — skip the real
+	// language-model download.
+	const skipDescriptions = page.getByRole('radio', { name: 'Skip' });
+	if (await skipDescriptions.isVisible()) await skipDescriptions.click();
 	await page.getByRole('checkbox', { name: /I accept the model licenses/ }).check();
 	await page.getByRole('button', { name: /^Download ·/ }).click();
 	await setup.waitFor({ state: 'hidden' });

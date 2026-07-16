@@ -48,6 +48,7 @@
 	import { NARRATION_PRESETS, type NarrationPresetId } from '$lib/domain/narration-presets';
 	import { READER_FONTS, THEMES, appearanceState } from '$lib/state/appearance.svelte';
 	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
+	import ProviderLogo from '$lib/components/ProviderLogo.svelte';
 	import type { VoiceDescriptor } from '$lib/domain/types';
 	import { runtimeDiagnosticsReport } from '$lib/services/runtime-diagnostics';
 	import { ttsClient } from '$lib/services/tts-client';
@@ -964,7 +965,7 @@
 							onclick={() => void chooseDescriptionEngine(spec.id)}
 						>
 							<span class="engine-radio" aria-hidden="true"></span>
-							<span class="engine-icon cloud"><Cloud size={16} /></span>
+							<span class="engine-icon cloud"><ProviderLogo provider={spec.id} size={16} /></span>
 							<span class="engine-copy">
 								<strong>{spec.label} <em>· {spec.vendor}</em></strong>
 								<small>{spec.tagline}</small>
