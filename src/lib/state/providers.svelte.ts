@@ -27,19 +27,19 @@ import { getSetting, setSetting } from '$lib/services/repository';
 type KeyMap = Partial<Record<ApiProvider, string>>;
 
 function devKeyDefaults(): KeyMap {
+	// Static member accesses only: Vite constant-folds the DEV guard, making
+	// everything below unreachable in production builds — the minifier then
+	// strips it, so a local build with a populated .env ships no key material.
 	if (!import.meta.env.DEV) return {};
-	const env = import.meta.env as Record<string, string | undefined>;
 	const keys: KeyMap = {};
-	const sources: Record<ApiProvider, string> = {
-		anthropic: 'VITE_DEV_ANTHROPIC_API_KEY',
-		openai: 'VITE_DEV_OPENAI_API_KEY',
-		gemini: 'VITE_DEV_GEMINI_API_KEY',
-		elevenlabs: 'VITE_DEV_ELEVENLABS_API_KEY'
+	const add = (provider: ApiProvider, value: string | undefined) => {
+		const trimmed = value?.trim();
+		if (trimmed) keys[provider] = trimmed;
 	};
-	for (const [provider, name] of Object.entries(sources) as Array<[ApiProvider, string]>) {
-		const value = env[name]?.trim();
-		if (value) keys[provider] = value;
-	}
+	add('anthropic', import.meta.env.VITE_DEV_ANTHROPIC_API_KEY);
+	add('openai', import.meta.env.VITE_DEV_OPENAI_API_KEY);
+	add('gemini', import.meta.env.VITE_DEV_GEMINI_API_KEY);
+	add('elevenlabs', import.meta.env.VITE_DEV_ELEVENLABS_API_KEY);
 	return keys;
 }
 

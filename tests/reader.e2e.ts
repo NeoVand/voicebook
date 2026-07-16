@@ -999,7 +999,13 @@ test('renders Mermaid fences as accessible diagrams with a source fallback', asy
 
 	await expect(page.getByRole('figure', { name: /Diagram/ })).toBeVisible();
 	await expect(page.getByRole('img', { name: 'Mermaid diagram' })).toBeVisible();
-	await expect(page.getByText('View diagram source')).toBeVisible();
+	// The source expander is now the construct panel: source plus the exact
+	// spoken text, with edit controls.
+	await expect(page.getByText('Diagram source & spoken text')).toBeVisible();
+	await page.getByText('Diagram source & spoken text').click();
+	await expect(page.getByText('sequenceDiagram')).toBeVisible();
+	await expect(page.getByText('A sequence diagram is shown here.')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Edit the spoken text' })).toBeVisible();
 	await expect(page.locator('figure.mermaid-diagram')).toHaveAttribute('data-status', 'ready');
 	await expect(page.getByText('Diagram unavailable')).toBeHidden();
 	const diagramSvg = page.locator('.mermaid-diagram .diagram-output svg');
