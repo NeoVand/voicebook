@@ -250,9 +250,24 @@ describe('narrated construct segmentation', () => {
 			'The bound is the sum from i equals zero to n of x sub i for all n.'
 		);
 		expect(segments[0].narration).toMatchObject({ kind: 'inline' });
-		// Word highlighting is disabled where spoken ≠ displayed…
-		expect(segments[0].words).toEqual([]);
-		// …but stays on for untouched sentences in the same block.
+		// One word entry per SPOKEN word, each carrying a display range: the
+		// plain words map to themselves…
+		const words = segments[0].words;
+		expect(words.map((word) => word.text).join(' ')).toBe(
+			'The bound is the sum from i equals zero to n of x sub i for all n'
+		);
+		const the = words[0];
+		expect(segments[0].text.slice(the.start, the.end)).toBe('The');
+		// …and every word of the reading lights up the whole math span.
+		const mathStart = segments[0].text.indexOf('\\sum');
+		const mathEnd = mathStart + '\\sum_{i=0}^{n} x_i'.length;
+		const readingWords = words.filter((word) => word.text === 'sum' || word.text === 'zero');
+		expect(readingWords).toHaveLength(2);
+		for (const word of readingWords) {
+			expect(word.start).toBe(mathStart);
+			expect(word.end).toBe(mathEnd);
+		}
+		// Untouched sentences in the same block keep their plain word map.
 		expect(segments[1].narration).toBeUndefined();
 		expect(segments[1].words.length).toBeGreaterThan(0);
 	});

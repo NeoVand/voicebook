@@ -99,7 +99,16 @@
 		{Math.round((run.progress.value / run.progress.max) * 100)}%
 	</progress>
 {:else if run.math}
-	<MathFormula formula={content.map((piece) => piece.text).join('')} />
+	{@const mathWordIndex = content.find((piece) => piece.wordIndex !== undefined)?.wordIndex}
+	{@const mathActive =
+		activeWordIndex !== undefined && content.some((piece) => piece.wordIndex === activeWordIndex)}
+	<span
+		class="spoken-word spoken-math"
+		class:active-word={mathActive}
+		data-word-index={mathWordIndex}
+	>
+		<MathFormula formula={content.map((piece) => piece.text).join('')} />
+	</span>
 {:else}
 	{@render wrapped(0)}
 {/if}
@@ -107,6 +116,12 @@
 <style>
 	.spoken-word {
 		border-radius: 0.28em;
+	}
+
+	/* The whole expression lights up while its spoken reading plays. */
+	.spoken-math {
+		display: inline-block;
+		transition: background 140ms var(--ease, ease);
 	}
 
 	.active-word {
