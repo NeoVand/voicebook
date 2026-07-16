@@ -265,10 +265,7 @@ test('fills a rolling three-passage buffer while the current passage is playing'
 	await expect(page.locator('.speech-segment.active')).toContainText(passages[0]);
 });
 
-test('import → install → play → seek → bookmark → reload → offline reopen', async ({
-	page,
-	context
-}) => {
+test('import → install → play → seek → reload → offline reopen', async ({ page, context }) => {
 	await page.goto('./');
 	await completeModelSetup(page);
 	await expect(
@@ -289,33 +286,23 @@ test('import → install → play → seek → bookmark → reload → offline r
 	await page.getByRole('button', { name: 'Add to library' }).click();
 	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
 	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
-	// Contents starts closed; these surface checks need both panels open.
+	// Contents starts closed; these surface checks need the panel open.
 	await page.getByRole('button', { name: 'Open document outline' }).click();
-	await page.getByRole('button', { name: 'Open bookmarks' }).click();
 	const readerSurfaceColors = () =>
 		page.evaluate(() => {
 			const header = document.querySelector<HTMLElement>('.app-header');
 			const sidebar = document.querySelector<HTMLElement>('.app-sidebar');
 			const outline = document.querySelector<HTMLElement>('.outline-panel');
-			const bookmarks = document.querySelector<HTMLElement>('.bookmarks-panel');
 			const playerBar = document.querySelector<HTMLElement>('.player-bar');
 			const readerStage = document.querySelector<HTMLElement>('.reader-stage');
 			const readingCanvas = document.querySelector<HTMLElement>('.reading-canvas');
-			if (
-				!header ||
-				!sidebar ||
-				!outline ||
-				!bookmarks ||
-				!playerBar ||
-				!readerStage ||
-				!readingCanvas
-			)
+			if (!header || !sidebar || !outline || !playerBar || !readerStage || !readingCanvas)
 				throw new Error('Reader surfaces are unavailable');
 			return {
-				chrome: [header, sidebar, outline, bookmarks, playerBar].map(
+				chrome: [header, sidebar, outline, playerBar].map(
 					(element) => getComputedStyle(element).backgroundColor
 				),
-				chromeBackdrop: [header, sidebar, outline, bookmarks, playerBar].map((element) => {
+				chromeBackdrop: [header, sidebar, outline, playerBar].map((element) => {
 					const style = getComputedStyle(element);
 					return style.backdropFilter && style.backdropFilter !== 'none'
 						? style.backdropFilter
@@ -347,15 +334,11 @@ test('import → install → play → seek → bookmark → reload → offline r
 		expect(
 			surfaces.chromeBackdrop,
 			`${theme} chrome surfaces should share the frosted backdrop`
-		).toEqual(Array(5).fill('blur(22px) saturate(1.35)'));
+		).toEqual(Array(4).fill('blur(22px) saturate(1.35)'));
 		expect(new Set(surfaces.document).size, `${theme} document surfaces should match`).toBe(1);
 		await readerThemeButton.click();
 	}
 	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
-	await page
-		.getByRole('complementary', { name: 'Bookmarks' })
-		.getByRole('button', { name: 'Close bookmarks' })
-		.click();
 	await expect(page.getByRole('banner', { name: 'Voicebook header' })).toHaveCount(1);
 	await expect(page.locator('.reader-header')).toHaveCount(0);
 	await expect(
@@ -465,32 +448,11 @@ test('import → install → play → seek → bookmark → reload → offline r
 		).__voicebookTtsMessages.find((message) => message.type === 'synthesize')
 	);
 	expect(synthesisRequest?.totalSteps).toBe(10);
-	await page.getByRole('button', { name: 'Add bookmark' }).click();
-	await expect
-		.poll(() =>
-			page.evaluate(
-				() =>
-					new Promise<number>((resolve, reject) => {
-						const request = indexedDB.open('voicebook-v1');
-						request.onerror = () => reject(request.error);
-						request.onsuccess = () => {
-							const transaction = request.result.transaction('documents');
-							const documents = transaction.objectStore('documents').getAll();
-							documents.onerror = () => reject(documents.error);
-							documents.onsuccess = () => resolve(documents.result[0]?.bookmarks?.length ?? 0);
-						};
-					})
-			)
-		)
-		.toBe(1);
 	await page.getByRole('button', { name: 'Forward 10 seconds' }).click();
 
 	await page.reload();
 	await expect(page.getByRole('heading', { name: 'The Quiet Machine' })).toBeVisible();
-	// Contents starts closed; these surface checks need both panels open.
 	await page.getByRole('button', { name: 'Open document outline' }).click();
-	await page.getByRole('button', { name: 'Open bookmarks' }).click();
-	await expect(page.getByText('1 saved')).toBeVisible();
 	const readerA11y = await new AxeBuilder({ page }).analyze();
 	expect(
 		readerA11y.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))

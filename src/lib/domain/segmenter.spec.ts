@@ -97,18 +97,6 @@ describe('speech segmentation', () => {
 			blocks,
 			segments: oldSegments,
 			outline: [],
-			bookmarks: [
-				{
-					id: 'mark',
-					documentId: 'doc',
-					segmentId: 'b0:s0',
-					wordIndex: 45,
-					excerpt: 'Alpha',
-					label: 'Alpha',
-					note: '',
-					createdAt: 1
-				}
-			],
 			playback: { segmentId: 'b0:s0', wordIndex: 45, offset: 10, updatedAt: 1 },
 			warnings: [],
 			includeCode: false
@@ -120,7 +108,9 @@ describe('speech segmentation', () => {
 		expect(refreshed.segments.every((segment) => segment.text.length <= MAX_SEGMENT_CHARS)).toBe(
 			true
 		);
-		expect(refreshed.playback?.segmentId).toBe(refreshed.bookmarks[0].segmentId);
+		expect(refreshed.segments.some((segment) => segment.id === refreshed.playback?.segmentId)).toBe(
+			true
+		);
 	});
 
 	it('maps word offsets and includes punctuation pauses in estimates', () => {
@@ -320,7 +310,6 @@ describe('narrated construct segmentation', () => {
 			blocks,
 			segments: before,
 			outline: [],
-			bookmarks: [],
 			playback: { segmentId: 'b5:s0', wordIndex: 0, offset: 0, updatedAt: 1 },
 			narrations: {
 				b1: readyEntry('b1', 'The integral from zero to one of x squared.', mathBlock.text)

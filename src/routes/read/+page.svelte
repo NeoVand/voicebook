@@ -3,7 +3,6 @@
 	import { page } from '$app/state';
 	import {
 		ArrowLeft,
-		Bookmark,
 		BookOpenText,
 		Check,
 		ChevronLeft,
@@ -15,8 +14,7 @@
 		RotateCcw,
 		RotateCw,
 		Square,
-		Volume2,
-		X
+		Volume2
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
@@ -210,10 +208,6 @@
 			(segment) => segment.narration?.constructIds[0] === constructId
 		);
 	}
-
-	let bookmarkedSegments = $derived(
-		new SvelteSet((book?.bookmarks ?? []).map((bookmark) => bookmark.segmentId))
-	);
 
 	/** Rendered pieces reference the FIRST word sharing a display range — a
 	 * construct's replacement maps several spoken words onto one span. Route
@@ -621,7 +615,6 @@
 			else void player.toggle();
 		} else if (event.key.toLowerCase() === 'j') void player.seekBy(-10);
 		else if (event.key.toLowerCase() === 'l') void player.seekBy(10);
-		else if (event.key.toLowerCase() === 'b') void player.toggleBookmark();
 		else if (event.key === '[') void player.setRate(player.rate - 0.25);
 		else if (event.key === ']') void player.setRate(player.rate + 0.25);
 	}
@@ -635,11 +628,6 @@
 
 {#snippet renderSegment(block: DocumentBlock, segment: SpeechSegment)}
 	{@const isActive = activeSegmentId === segment.id}
-	{#if bookmarkedSegments.has(segment.id)}
-		<span class="margin-bookmark" aria-hidden="true" title="Bookmarked">
-			<Bookmark size={12} fill="currentColor" strokeWidth={1.6} />
-		</span>
-	{/if}
 	<span
 		class="speech-segment"
 		class:active={isActive}
@@ -918,11 +906,7 @@
 		<a class="button primary" href={resolve('/')}><ArrowLeft size={16} /> Library</a>
 	</section>
 {:else}
-	<div
-		class="reader-shell"
-		class:outline-closed={!readerChrome.outlineOpen}
-		class:bookmarks-open={readerChrome.bookmarksOpen}
-	>
+	<div class="reader-shell" class:outline-closed={!readerChrome.outlineOpen}>
 		{#if readerChrome.outlineOpen}
 			<aside id="document-outline" class="outline-panel" aria-label="Document outline">
 				<header>
@@ -1063,40 +1047,6 @@
 				</button>
 			{/if}
 		</section>
-
-		{#if readerChrome.bookmarksOpen}
-			<aside class="bookmarks-panel" aria-label="Bookmarks">
-				<header>
-					<div><strong>Bookmarks</strong><span>{book.bookmarks.length} saved</span></div>
-					<button
-						class="icon-button"
-						type="button"
-						aria-label="Close bookmarks"
-						onclick={() => (readerChrome.bookmarksOpen = false)}
-					>
-						<X size={17} />
-					</button>
-				</header>
-				{#if book.bookmarks.length}
-					<div class="bookmark-list">
-						{#each book.bookmarks as bookmark (bookmark.id)}
-							<button type="button" onclick={() => player.openBookmark(bookmark)}>
-								<Bookmark size={14} fill="currentColor" />
-								<span>
-									<strong>{bookmark.label}</strong>
-									<small>{new Date(bookmark.createdAt).toLocaleDateString()}</small>
-								</span>
-							</button>
-						{/each}
-					</div>
-				{:else}
-					<div class="empty-bookmarks">
-						<Bookmark size={22} />
-						<p>Press B while listening to save your place.</p>
-					</div>
-				{/if}
-			</aside>
-		{/if}
 
 		<footer class="player-bar" aria-label="Playback controls">
 			<div class="generation-options" role="group" aria-label="Speech generation settings">
@@ -1311,82 +1261,36 @@
 		grid-template-columns: minmax(0, 1fr);
 	}
 
-	.reader-shell.bookmarks-open {
-		grid-template-columns: 252px minmax(0, 1fr) 264px;
-	}
-
-	.reader-shell.outline-closed.bookmarks-open {
-		grid-template-columns: minmax(0, 1fr) 264px;
-	}
-
-	.outline-panel,
-	.bookmarks-panel {
+	.outline-panel {
 		display: flex;
 		min-width: 0;
 		min-height: 0;
 		grid-row: 1;
+		grid-column: 1;
 		background: var(--chrome-surface);
 		-webkit-backdrop-filter: var(--chrome-backdrop);
 		backdrop-filter: var(--chrome-backdrop);
 		flex-direction: column;
 		padding-top: var(--app-header-height);
-	}
-
-	.outline-panel {
-		grid-column: 1;
 		border-right: 1px solid var(--line);
 	}
 
-	.bookmarks-panel {
-		grid-column: 3;
-		border-left: 1px solid var(--line);
-	}
-
-	.outline-closed .bookmarks-panel {
-		grid-column: 2;
-	}
-
-	.outline-panel > header,
-	.bookmarks-panel > header {
+	.outline-panel > header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
 		padding: 0 14px;
-	}
-
-	.outline-panel > header {
 		min-height: 50px;
 	}
 
-	.bookmarks-panel > header {
-		min-height: 68px;
-		border-bottom: 1px solid var(--line);
-	}
-
-	.outline-heading strong,
-	.bookmarks-panel header strong,
-	.bookmarks-panel header span {
+	.outline-heading strong {
 		display: block;
-	}
-
-	.outline-heading strong,
-	.bookmarks-panel header strong {
 		font-family: var(--font-display);
 		font-size: 15px;
 		font-variation-settings: 'opsz' 18;
-		font-weight: 560;
-		letter-spacing: -0.015em;
-	}
-
-	.outline-heading strong {
 		font-weight: 680;
-	}
-
-	.bookmarks-panel header span {
-		margin-top: 3px;
-		color: var(--faint);
-		font-size: 9.5px;
+		letter-spacing: -0.015em;
 	}
 
 	.outline-legend {
@@ -1971,32 +1875,6 @@
 		overflow-wrap: anywhere;
 	}
 
-	.document-body p,
-	.document-body li {
-		position: relative;
-	}
-
-	/* A bookmarked passage leaves a quiet mark in the reading margin, aligned
-	 * with the line it starts on. */
-	.margin-bookmark {
-		position: absolute;
-		left: -2.1em;
-		display: inline-grid;
-		width: 1.4em;
-		height: 1.4em;
-		place-items: center;
-		border-radius: 50%;
-		margin-top: 0.12em;
-		background: var(--bookmark-soft);
-		color: var(--bookmark);
-		opacity: 0.85;
-	}
-
-	.margin-bookmark :global(svg) {
-		width: 0.72em;
-		height: 0.72em;
-	}
-
 	.speech-segment {
 		position: relative;
 		border-radius: 2px;
@@ -2166,64 +2044,6 @@
 		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38);
 		color: var(--text);
 		backdrop-filter: blur(14px);
-	}
-
-	.bookmark-list {
-		display: grid;
-		align-content: start;
-		overflow-y: auto;
-		padding: 8px 8px calc(var(--player-height) + 16px);
-		scroll-padding-bottom: calc(var(--player-height) + 16px);
-	}
-
-	.bookmark-list button {
-		display: grid;
-		min-height: 60px;
-		grid-template-columns: auto 1fr;
-		gap: 9px;
-		padding: 10px;
-		border: 0;
-		border-bottom: 1px solid var(--line);
-		background: transparent;
-		color: var(--bookmark);
-		text-align: left;
-	}
-
-	.bookmark-list button:hover {
-		background: var(--hover);
-	}
-
-	.bookmark-list strong,
-	.bookmark-list small {
-		display: block;
-	}
-
-	.bookmark-list strong {
-		color: var(--text-soft);
-		font-family: var(--font-reading);
-		font-size: 11px;
-		font-weight: 540;
-		line-height: 1.35;
-	}
-
-	.bookmark-list small {
-		margin-top: 4px;
-		color: var(--faint);
-		font-size: 8px;
-	}
-
-	.empty-bookmarks {
-		display: grid;
-		place-items: center;
-		padding: 50px 22px;
-		color: var(--faint);
-		text-align: center;
-	}
-
-	.empty-bookmarks p {
-		margin-top: 12px;
-		font-size: 9px;
-		line-height: 1.5;
 	}
 
 	.player-bar {
@@ -2587,26 +2407,12 @@
 	}
 
 	@media (max-width: 1180px) {
-		.reader-shell,
-		.reader-shell.bookmarks-open {
+		.reader-shell {
 			grid-template-columns: 210px minmax(0, 1fr);
 		}
 
-		.reader-shell.outline-closed,
-		.reader-shell.outline-closed.bookmarks-open {
+		.reader-shell.outline-closed {
 			grid-template-columns: minmax(0, 1fr);
-		}
-
-		.bookmarks-panel,
-		.outline-closed .bookmarks-panel {
-			position: absolute;
-			top: 0;
-			right: 0;
-			bottom: 0;
-			z-index: 32;
-			width: 264px;
-			border-left: 1px solid var(--line);
-			box-shadow: -18px 0 42px rgba(0, 0, 0, 0.34);
 		}
 
 		.player-bar {
@@ -2629,9 +2435,7 @@
 
 	@media (max-width: 820px) {
 		.reader-shell,
-		.reader-shell.bookmarks-open,
-		.reader-shell.outline-closed,
-		.reader-shell.outline-closed.bookmarks-open {
+		.reader-shell.outline-closed {
 			grid-template-columns: minmax(0, 1fr);
 		}
 

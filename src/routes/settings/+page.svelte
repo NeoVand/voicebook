@@ -275,11 +275,7 @@
 	}
 
 	async function clearAudio(): Promise<void> {
-		if (
-			!confirm(
-				'Remove all generated speech? Documents, bookmarks, and reading positions will remain.'
-			)
-		)
+		if (!confirm('Remove all generated speech? Documents and reading positions will remain.'))
 			return;
 		storageBusy = true;
 		try {
@@ -1382,7 +1378,7 @@
 			</div>
 
 			<footer class="section-actions">
-				<p>Clearing audio keeps documents, bookmarks, and reading progress.</p>
+				<p>Clearing audio keeps documents and reading progress.</p>
 				<div>
 					{#if !appState.storage.persisted}
 						<button class="button" type="button" onclick={makePersistent}>
@@ -1502,10 +1498,6 @@
 					<div>
 						<dt>Back / forward 10s</dt>
 						<dd><kbd>J</kbd><kbd>L</kbd></dd>
-					</div>
-					<div>
-						<dt>Bookmark</dt>
-						<dd><kbd>B</kbd></dd>
 					</div>
 					<div>
 						<dt>Speed</dt>

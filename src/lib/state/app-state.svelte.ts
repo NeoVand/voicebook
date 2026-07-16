@@ -104,16 +104,6 @@ async function migrateDocumentNormalization(
 		reparsed.updatedAt = document.updatedAt;
 		reparsed.sourcePath = document.sourcePath;
 		reparsed.sourceBlob = document.sourceBlob;
-		reparsed.bookmarks = document.bookmarks.map((bookmark) => {
-			const segment = findMigratedSegment(document, reparsed, bookmark.segmentId, bookmark.excerpt);
-			return segment
-				? {
-						...bookmark,
-						segmentId: segment.id,
-						wordIndex: Math.min(bookmark.wordIndex, Math.max(0, segment.words.length - 1))
-					}
-				: bookmark;
-		});
 		if (document.playback) {
 			const segment = findMigratedSegment(document, reparsed, document.playback.segmentId);
 			reparsed.playback = segment

@@ -407,13 +407,6 @@ export function refreshDocumentSegments(document: NormalizedDocument): Normalize
 							(playbackTarget.segment.estimatedDuration * playbackTarget.wordIndex) /
 							Math.max(1, playbackTarget.segment.words.length)
 					}
-				: document.playback,
-		bookmarks: document.bookmarks.map((bookmark) => {
-			const position = semanticPosition(previousSegments, bookmark.segmentId, bookmark.wordIndex);
-			const target = position ? remapPosition(segments, position) : undefined;
-			return target
-				? { ...bookmark, segmentId: target.segment.id, wordIndex: target.wordIndex }
-				: bookmark;
-		})
+				: document.playback
 	};
 }

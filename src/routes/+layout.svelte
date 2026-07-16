@@ -6,11 +6,9 @@
 	import { page } from '$app/state';
 	import { base, resolve } from '$app/paths';
 	import {
-		Bookmark,
 		Cpu,
 		Library,
 		List,
-		ListMusic,
 		Fullscreen,
 		Menu,
 		PanelLeftClose,
@@ -63,11 +61,6 @@
 	let activeReaderDocumentId = $derived(isReader ? readerDocumentId : null);
 	let readerBook = $derived(
 		isReader ? appState.documents.find((document) => document.id === readerDocumentId) : undefined
-	);
-	let currentBookmarked = $derived(
-		Boolean(
-			readerBook?.bookmarks.some((bookmark) => bookmark.segmentId === player.currentSegment?.id)
-		)
 	);
 
 	onMount(() => {
@@ -290,26 +283,6 @@
 						{#if isFullscreen}<Shrink size={16} />{:else}<Fullscreen size={16} />{/if}
 					</button>
 				</div>
-				<button
-					class="icon-button"
-					class:marked={currentBookmarked}
-					type="button"
-					aria-label={currentBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-					title={currentBookmarked ? 'Remove bookmark' : 'Add bookmark'}
-					onclick={() => player.toggleBookmark()}
-				>
-					<Bookmark size={16} fill={currentBookmarked ? 'currentColor' : 'none'} />
-				</button>
-				<button
-					class="icon-button"
-					class:active={readerChrome.bookmarksOpen}
-					type="button"
-					aria-label={readerChrome.bookmarksOpen ? 'Close bookmarks' : 'Open bookmarks'}
-					title={readerChrome.bookmarksOpen ? 'Close bookmarks' : 'Open bookmarks'}
-					onclick={() => (readerChrome.bookmarksOpen = !readerChrome.bookmarksOpen)}
-				>
-					<ListMusic size={16} />
-				</button>
 				<button
 					class="icon-button"
 					type="button"

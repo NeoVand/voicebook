@@ -946,11 +946,6 @@ h3 {
 	color: var(--text);
 }
 
-.reader-commandbar .icon-button.marked {
-	background: var(--bookmark-soft);
-	color: var(--bookmark);
-}
-
 .reader-commandbar-title {
 	position: absolute;
 	left: 50%;

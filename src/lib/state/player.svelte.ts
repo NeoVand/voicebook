@@ -4,7 +4,6 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getModel } from '$lib/domain/model-catalog';
 import type {
 	AudioVariantMeta,
-	Bookmark,
 	NormalizedDocument,
 	SpeechSegment,
 	TimingMap
@@ -1174,44 +1173,6 @@ export class VoicebookPlayer {
 		this.cacheCoverageSignature = '';
 		this.cachedSegments.clear();
 		await this.refreshCacheCoverage(true);
-	}
-
-	async toggleBookmark(): Promise<void> {
-		if (!this.book || !this.currentSegment) return;
-		const existing = this.book.bookmarks.find(
-			(bookmark) => bookmark.segmentId === this.currentSegment?.id
-		);
-		if (existing)
-			this.book.bookmarks = this.book.bookmarks.filter((bookmark) => bookmark.id !== existing.id);
-		else {
-			const words = this.currentSegment.words;
-			// Narrated/substituted segments carry no word spans; fall back to
-			// the segment text for the excerpt.
-			const excerpt = words.length
-				? words
-						.slice(Math.max(0, this.currentWordIndex - 3), this.currentWordIndex + 8)
-						.map((word) => word.text)
-						.join(' ')
-				: this.currentSegment.text.slice(0, 60);
-			const bookmark: Bookmark = {
-				id: crypto.randomUUID(),
-				documentId: this.book.id,
-				segmentId: this.currentSegment.id,
-				wordIndex: this.currentWordIndex,
-				excerpt,
-				label: excerpt || 'Bookmark',
-				note: '',
-				createdAt: Date.now()
-			};
-			this.book.bookmarks = [...this.book.bookmarks, bookmark];
-		}
-		await appState.saveDocument(this.book);
-	}
-
-	async openBookmark(bookmark: Bookmark): Promise<void> {
-		if (!this.book) return;
-		const index = this.book.segments.findIndex((segment) => segment.id === bookmark.segmentId);
-		if (index >= 0) await this.goToSegment(index);
 	}
 
 	async generateAll(): Promise<void> {

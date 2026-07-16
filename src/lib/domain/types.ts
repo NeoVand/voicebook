@@ -203,17 +203,6 @@ export interface ListenedRange {
 	end: number;
 }
 
-export interface Bookmark {
-	id: string;
-	documentId: string;
-	segmentId: string;
-	wordIndex: number;
-	excerpt: string;
-	label: string;
-	note: string;
-	createdAt: number;
-}
-
 export interface NormalizedDocument {
 	normalizationVersion?: number;
 	id: string;
@@ -228,7 +217,6 @@ export interface NormalizedDocument {
 	blocks: DocumentBlock[];
 	segments: SpeechSegment[];
 	outline: OutlineEntry[];
-	bookmarks: Bookmark[];
 	playback?: PlaybackPosition;
 	listened?: Record<string, ListenedRange[]>;
 	narrations?: Record<string, NarrationEntry>;

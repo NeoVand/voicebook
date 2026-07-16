@@ -1,7 +1,6 @@
 class ReaderChromeState {
 	/** Contents starts closed — the document is the point. */
 	outlineOpen = $state(false);
-	bookmarksOpen = $state(false);
 	menuOpen = $state(false);
 	documentZoom = $state(1);
 
@@ -32,7 +31,6 @@ class ReaderChromeState {
 	}
 
 	closeTransientPanels(): void {
-		this.bookmarksOpen = false;
 		this.menuOpen = false;
 	}
 }

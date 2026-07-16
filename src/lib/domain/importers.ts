@@ -1174,7 +1174,6 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 		blocks,
 		segments: segmentBlocks(blocks),
 		outline: outlineFor(blocks),
-		bookmarks: [],
 		warnings: parsed.warnings ?? [],
 		includeCode: false
 	};
@@ -1201,7 +1200,6 @@ export function documentFromText(title: string, text: string): NormalizedDocumen
 		blocks,
 		segments: segmentBlocks(blocks),
 		outline: outlineFor(blocks),
-		bookmarks: [],
 		warnings: parsed.warnings ?? [],
 		includeCode: false
 	};
