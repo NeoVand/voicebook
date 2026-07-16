@@ -1849,7 +1849,7 @@ textarea {
 	font-size: 9px;
 }
 
-.driver-popover.driver-popover .driver-popover-navigation-btns button {
+.driver-popover.driver-popover .driver-popover-footer-btn {
 	padding: 6px 12px;
 	border: 1px solid var(--control-border);
 	border-radius: 7px;
@@ -1861,8 +1861,12 @@ textarea {
 	text-shadow: none;
 }
 
-.driver-popover.driver-popover .driver-popover-navigation-btns button:hover {
+/* driver.css paints hover AND focus light gray — and it focuses the Next
+ * button on every step, so both states must follow the theme. */
+.driver-popover.driver-popover .driver-popover-footer-btn:hover,
+.driver-popover.driver-popover .driver-popover-footer-btn:focus {
 	background: var(--control-hover);
+	color: var(--text);
 }
 
 .driver-popover.driver-popover .driver-popover-next-btn {
@@ -1871,16 +1875,24 @@ textarea {
 	color: var(--primary-ink);
 }
 
-.driver-popover.driver-popover .driver-popover-next-btn:hover {
+.driver-popover.driver-popover .driver-popover-next-btn:hover,
+.driver-popover.driver-popover .driver-popover-next-btn:focus {
+	border-color: var(--primary-hover);
 	background: var(--primary-hover);
 	color: var(--primary-ink);
+}
+
+.driver-popover.driver-popover .driver-popover-footer-btn:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
 }
 
 .driver-popover.driver-popover .driver-popover-close-btn {
 	color: var(--faint);
 }
 
-.driver-popover.driver-popover .driver-popover-close-btn:hover {
+.driver-popover.driver-popover .driver-popover-close-btn:hover,
+.driver-popover.driver-popover .driver-popover-close-btn:focus {
 	color: var(--text);
 }
 

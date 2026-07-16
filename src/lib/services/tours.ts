@@ -12,21 +12,17 @@ export type TourContext = 'reader' | 'library' | 'voice' | 'llm' | 'appearance' 
 const READER_TOUR_SEEN_KEY = 'voicebook:reader-tour-seen';
 
 const TOURS: Record<TourContext, DriveStep[]> = {
+	// Reader steps sweep the player bar left to right, then the navbar left
+	// to right — the spotlight never jumps back and forth.
 	reader: [
-		{
-			element: '[data-tour="play"]',
-			popover: {
-				title: 'Play',
-				description:
-					'Reads aloud from the current passage. You can also click any sentence in the document to start from there.'
-			}
-		},
 		{
 			element: '[data-tour="audio-menu"]',
 			popover: {
 				title: 'Audio menu',
 				description:
-					'Everything about the voice: pick who reads, prepare the whole document ahead of time, download it as an MP3, or clear cached audio.'
+					'Everything about the voice: pick who reads, prepare the whole document ahead of time, download it as an MP3, or clear cached audio.',
+				side: 'top',
+				align: 'start'
 			}
 		},
 		{
@@ -34,21 +30,19 @@ const TOURS: Record<TourContext, DriveStep[]> = {
 			popover: {
 				title: 'Spoken descriptions',
 				description:
-					'The brain rewrites equations, tables, and diagrams into words the voice can speak. Click it to pause, regenerate, or tune the style.'
+					'The brain rewrites equations, tables, and diagrams into words the voice can speak. Click it to pause, regenerate, or tune the style.',
+				side: 'top',
+				align: 'start'
 			}
 		},
 		{
-			element: '[data-tour="speed"]',
+			element: '[data-tour="play"]',
 			popover: {
-				title: 'Speed',
-				description: 'From 0.5× to 3×, without the chipmunk effect.'
-			}
-		},
-		{
-			element: '[data-tour="volume"]',
-			popover: {
-				title: 'Volume',
-				description: 'Click for a slider.'
+				title: 'Play',
+				description:
+					'Reads aloud from the current passage. You can also click any sentence in the document to start from there.',
+				side: 'top',
+				align: 'center'
 			}
 		},
 		{
@@ -56,36 +50,54 @@ const TOURS: Record<TourContext, DriveStep[]> = {
 			popover: {
 				title: 'Timeline',
 				description:
-					'Shows what you have listened to, what audio is already prepared, and what is generating right now. Drag to seek.'
+					'Shows what you have listened to, what audio is already prepared, and what is generating right now. Drag to seek.',
+				side: 'top',
+				align: 'center'
+			}
+		},
+		{
+			element: '[data-tour="speed"]',
+			popover: {
+				title: 'Speed',
+				description: 'From 0.5× to 3×, without the chipmunk effect.',
+				side: 'top',
+				align: 'end'
+			}
+		},
+		{
+			element: '[data-tour="volume"]',
+			popover: {
+				title: 'Volume',
+				description: 'Click for a slider.',
+				side: 'top',
+				align: 'end'
 			}
 		},
 		{
 			element: '[data-tour="outline"]',
 			popover: {
 				title: 'Contents',
-				description: 'The document outline — jump between sections from here.'
+				description: 'The document outline — jump between sections from here.',
+				side: 'bottom',
+				align: 'end'
 			}
 		},
 		{
 			element: '[data-tour="zoom"]',
 			popover: {
 				title: 'Zoom',
-				description: 'Click the percentage for a size slider. Double-click resets.'
+				description: 'Click the percentage for a size slider. Double-click resets.',
+				side: 'bottom',
+				align: 'end'
 			}
 		},
 		{
 			element: '[data-tour="fullscreen"]',
 			popover: {
 				title: 'Fullscreen',
-				description: 'Just you and the document.'
-			}
-		},
-		{
-			element: '[data-tour="theme"]',
-			popover: {
-				title: 'Theme',
-				description:
-					'One click, one theme — keep going around. The full palette and reading fonts live in Appearance.'
+				description: 'Just you and the document.',
+				side: 'bottom',
+				align: 'end'
 			}
 		},
 		{
@@ -93,7 +105,19 @@ const TOURS: Record<TourContext, DriveStep[]> = {
 			popover: {
 				title: 'This tour lives here',
 				description:
-					'The help button adapts to wherever you are — it explains the Voice, LLM, and Appearance pages too.'
+					'The help button adapts to wherever you are — it explains the Voice, LLM, and Appearance pages too.',
+				side: 'bottom',
+				align: 'end'
+			}
+		},
+		{
+			element: '[data-tour="theme"]',
+			popover: {
+				title: 'Theme',
+				description:
+					'One click, one theme — keep going around. The full palette and reading fonts live in Appearance.',
+				side: 'bottom',
+				align: 'end'
 			}
 		}
 	],
