@@ -223,9 +223,11 @@ test('walks through contextual interface tours from the help button', async ({ p
 	await page.getByRole('button', { name: 'Show me around' }).click();
 	const popover = page.locator('.driver-popover');
 	await expect(popover).toBeVisible();
-	await expect(popover.locator('.driver-popover-title')).toHaveText('Play');
-	await popover.getByRole('button', { name: 'Next' }).click();
+	// The tour sweeps the player bar left to right: the wave button leads,
+	// then the brain chip when it is on screen, then the transport.
 	await expect(popover.locator('.driver-popover-title')).toHaveText('Audio menu');
+	await popover.getByRole('button', { name: 'Next' }).click();
+	await expect(popover.locator('.driver-popover-title')).toHaveText(/Spoken descriptions|Play/);
 	await page.keyboard.press('Escape');
 	await expect(popover).toHaveCount(0);
 
