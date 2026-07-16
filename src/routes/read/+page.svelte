@@ -782,10 +782,10 @@
 		>
 			<CodeBlock id={block.id} source={block.text} language={block.codeLanguage}>
 				{#snippet panel()}
+					<!-- The code itself is right above — the panel holds only the
+					     spoken text. -->
 					<ConstructPanel
 						noun="Code"
-						sourceLabel="Snippet source"
-						source={block.text}
 						items={[panelItem(block.id, block.id)]}
 						onEdit={editConstruct}
 						onRegenerate={regenerateConstruct}

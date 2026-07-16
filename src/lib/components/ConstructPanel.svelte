@@ -27,8 +27,10 @@
 	interface Props {
 		/** "Equation", "Diagram", "Table" — builds the summary line. */
 		noun: string;
-		sourceLabel: string;
-		source: string;
+		/** Omit both to show only the spoken text (code blocks already display
+		 * their source right above the panel). */
+		sourceLabel?: string;
+		source?: string;
 		/** Colors the source block. */
 		sourceLanguage?: 'latex' | 'mermaid' | 'markdown';
 		items: ConstructPanelItem[];
@@ -104,12 +106,14 @@
 </script>
 
 <details class="construct-panel">
-	<summary>{noun} source & spoken text</summary>
+	<summary>{source === undefined ? 'Spoken text' : `${noun} source & spoken text`}</summary>
 	<div class="construct-panel-body">
-		<section class="panel-source" aria-label={sourceLabel}>
-			<h4>{sourceLabel}</h4>
-			<pre><code class="hljs" {@attach highlightedSource(source, sourceLanguage)}></code></pre>
-		</section>
+		{#if source !== undefined}
+			<section class="panel-source" aria-label={sourceLabel}>
+				<h4>{sourceLabel}</h4>
+				<pre><code class="hljs" {@attach highlightedSource(source, sourceLanguage)}></code></pre>
+			</section>
+		{/if}
 		<section class="panel-descriptions" aria-label="Spoken descriptions">
 			<h4>{items.length === 1 ? 'Spoken as' : 'Spoken as, per row'}</h4>
 			{#each items as item (item.constructId)}
@@ -188,9 +192,12 @@
 		font-family: var(--font-ui);
 	}
 
+	/* The disclosure arrow needs air from the host's border — panels sit
+	 * flush inside code figures, equations, and diagram cards alike. */
 	summary {
 		width: fit-content;
-		padding: 10px 0;
+		padding: 10px 4px;
+		margin-left: 14px;
 		color: var(--reader-quiet);
 		cursor: pointer;
 		font-size: 0.62em;
@@ -200,7 +207,7 @@
 	.construct-panel-body {
 		display: grid;
 		gap: 13px;
-		padding-bottom: 14px;
+		padding: 0 14px 14px;
 		margin: 0;
 	}
 

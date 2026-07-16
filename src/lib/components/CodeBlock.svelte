@@ -76,8 +76,19 @@
 			target.textContent = code;
 			const requested = requestedLanguage?.trim().toLowerCase();
 			const normalized = requested ? (aliases[requested] ?? requested) : undefined;
-			if (normalized && hljs.getLanguage(normalized)) target.className = `language-${normalized}`;
-			else target.removeAttribute('class');
+			// Add/remove classes individually — overwriting className would strip
+			// Svelte's scoping class and detach every themed .hljs-* color rule.
+			for (const existing of [...target.classList]) {
+				if (existing.startsWith('language-') || existing === 'hljs') {
+					target.classList.remove(existing);
+				}
+			}
+			delete target.dataset.highlighted;
+			if (normalized && hljs.getLanguage(normalized)) {
+				target.classList.add(`language-${normalized}`);
+			} else {
+				target.classList.add('language-plaintext');
+			}
 			hljs.highlightElement(target);
 		};
 	}
