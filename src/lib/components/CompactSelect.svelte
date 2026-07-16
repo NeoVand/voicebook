@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Check, ChevronDown } from '@lucide/svelte';
+	import { Check } from '@lucide/svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
 
@@ -139,7 +139,6 @@
 		{@attach trackTrigger}
 	>
 		<span>{selectedLabel}</span>
-		<ChevronDown size={13} aria-hidden="true" />
 	</button>
 
 	{#if open}
@@ -212,16 +211,6 @@
 		white-space: nowrap;
 	}
 
-	.select-trigger :global(svg) {
-		flex: 0 0 auto;
-		color: var(--faint);
-		transition: transform 150ms var(--ease);
-	}
-
-	.select-trigger.open :global(svg) {
-		transform: rotate(180deg);
-	}
-
 	.select-menu {
 		position: absolute;
 		bottom: calc(100% + 7px);
@@ -280,11 +269,5 @@
 
 	.select-option.selected .option-check {
 		visibility: visible;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.select-trigger :global(svg) {
-			transition: none;
-		}
 	}
 </style>

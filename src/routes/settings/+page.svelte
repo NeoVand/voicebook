@@ -2166,6 +2166,15 @@
 		gap: 8px;
 	}
 
+	/* Short labels at full control height read as chunky squares — keep
+	 * these inline editors' actions compact. */
+	.prompt-editor-actions :global(.button) {
+		height: 30px;
+		min-height: 30px;
+		padding: 0 12px;
+		font-size: 10px;
+	}
+
 	.prompt-editor textarea {
 		width: 100%;
 		padding: 10px 12px;

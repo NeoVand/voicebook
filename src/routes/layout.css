@@ -1991,3 +1991,14 @@ textarea {
 .driver-popover-arrow-side-right.driver-popover-arrow {
 	border-right-color: var(--surface-overlay);
 }
+
+/* @tailwindcss/forms paints input/textarea/select focus rings in its stock
+ * blue; every theme has its own focus color — use it. */
+input:focus,
+textarea:focus,
+select:focus,
+[type='checkbox']:focus,
+[type='radio']:focus {
+	--tw-ring-color: color-mix(in srgb, var(--focus) 55%, transparent);
+	border-color: var(--focus);
+}

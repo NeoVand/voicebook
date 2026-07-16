@@ -7,7 +7,6 @@
 		Check,
 		ChevronLeft,
 		ChevronRight,
-		LoaderCircle,
 		LocateFixed,
 		Pause,
 		Play,
@@ -21,6 +20,7 @@
 	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import AudioActionsMenu from '$lib/components/AudioActionsMenu.svelte';
+	import BrandMark from '$lib/components/BrandMark.svelte';
 	import CompactSelect from '$lib/components/CompactSelect.svelte';
 	import CodeBlock from '$lib/components/CodeBlock.svelte';
 	import ConstructPanel, { type ConstructPanelItem } from '$lib/components/ConstructPanel.svelte';
@@ -408,6 +408,16 @@
 		if (!readingCanvas) return;
 		const canvasRect = readingCanvas.getBoundingClientRect();
 		const elementRect = element.getBoundingClientRect();
+		// A passage already comfortably on screen stays put — re-centering the
+		// sentence the user just clicked yanks the whole page for nothing.
+		const settledMargin = 72;
+		if (
+			elementRect.top >= canvasRect.top + settledMargin &&
+			elementRect.bottom <= canvasRect.bottom - settledMargin
+		) {
+			scheduleVisibleSectionUpdate();
+			return;
+		}
 		const centeredTop =
 			readingCanvas.scrollTop +
 			elementRect.top -
@@ -648,6 +658,15 @@
 <svelte:head>
 	<title>{book ? book.title + ' — Voicebook' : 'Reader — Voicebook'}</title>
 </svelte:head>
+
+{#snippet readerLoading(title: string)}
+	<div class="reader-loading" role="status">
+		<BrandMark size={54} active />
+		<span class="loading-eyebrow" aria-hidden="true">Opening</span>
+		<p class="loading-title">{title}</p>
+		<span class="sr-only">Opening {title}</span>
+	</div>
+{/snippet}
 
 {#snippet renderSegment(block: DocumentBlock, segment: SpeechSegment)}
 	{@const isActive = activeSegmentId === segment.id}
@@ -941,15 +960,9 @@
 {/snippet}
 
 {#if !appState.initialized}
-	<div class="reader-loading">
-		<LoaderCircle class="spin" size={24} />
-		<p>Opening your local library…</p>
-	</div>
+	{@render readerLoading('your library')}
 {:else if openingTitle && !book}
-	<div class="reader-loading">
-		<LoaderCircle class="spin" size={24} />
-		<p>Opening “{openingTitle}”…</p>
-	</div>
+	{@render readerLoading(openingTitle)}
 {:else if !book}
 	<section class="missing-book">
 		<BookOpenText size={30} />
@@ -1283,7 +1296,52 @@
 	}
 
 	.reader-loading {
-		color: var(--muted);
+		display: grid;
+		min-height: calc(100dvh - var(--app-header-height));
+		place-content: center;
+		justify-items: center;
+		padding: 24px;
+		animation: loading-rise 360ms var(--ease) both;
+		text-align: center;
+	}
+
+	.loading-eyebrow {
+		margin-top: 24px;
+		color: var(--primary);
+		font-size: 9.5px;
+		font-weight: 720;
+		letter-spacing: 0.16em;
+		text-transform: uppercase;
+	}
+
+	.loading-title {
+		display: -webkit-box;
+		overflow: hidden;
+		max-width: min(560px, 82vw);
+		margin: 8px 0 0;
+		-webkit-box-orient: vertical;
+		color: var(--text);
+		font-family: var(--font-display);
+		font-size: clamp(1.5rem, 3vw, 2.1rem);
+		font-variation-settings: 'opsz' 32;
+		font-weight: 560;
+		letter-spacing: -0.03em;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		line-height: 1.15;
+	}
+
+	@keyframes loading-rise {
+		from {
+			opacity: 0;
+			transform: translateY(6px);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.reader-loading {
+			animation: none;
+		}
 	}
 
 	.missing-book h1 {
@@ -1983,8 +2041,8 @@
 	}
 
 	.speech-segment.active {
-		background: color-mix(in srgb, var(--primary) 9%, transparent);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 9%, transparent);
+		background: color-mix(in srgb, var(--primary) 13%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
 		color: var(--reader-ink-strong);
 	}
 
@@ -2010,15 +2068,15 @@
 	}
 
 	.construct-segment.active {
-		background: color-mix(in srgb, var(--primary) 9%, transparent);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 9%, transparent);
+		background: color-mix(in srgb, var(--primary) 13%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
 	}
 
 	/* Diagrams get the subtler treatment — a large highlighted area reads
 	   louder than an inline sentence. */
 	.construct-segment.diagram-construct.active {
-		background: color-mix(in srgb, var(--primary) 4%, transparent);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 4%, transparent);
+		background: color-mix(in srgb, var(--primary) 7%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 7%, transparent);
 	}
 
 	/* Small pulsing dot while an LLM rewrite for the construct is pending. */
@@ -2072,7 +2130,7 @@
 	}
 
 	tr.construct-row.active {
-		background: color-mix(in srgb, var(--primary) 9%, transparent);
+		background: color-mix(in srgb, var(--primary) 13%, transparent);
 		box-shadow: inset 2px 0 0 var(--primary);
 	}
 

@@ -68,7 +68,6 @@
 	let { id, source, language, panel }: Props = $props();
 	let copyState = $state<'idle' | 'copied' | 'error'>('idle');
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
-	let lineCount = $derived(source ? source.split('\n').length : 0);
 	let languageLabel = $derived(language?.trim() || 'Plain text');
 
 	function highlightedCode(code: string, requestedLanguage?: string): Attachment<HTMLElement> {
@@ -107,7 +106,7 @@
 
 <figure class="code-block" {id}>
 	<figcaption>
-		<span>{languageLabel} · {lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>
+		<span>{languageLabel}</span>
 		<button
 			type="button"
 			aria-label={copyState === 'copied' ? 'Code copied' : 'Copy code'}
