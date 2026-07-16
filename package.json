@@ -64,6 +64,7 @@
 		"@fontsource-variable/newsreader": "5.2.10",
 		"@huggingface/hub": "^2.13.3",
 		"@huggingface/transformers": "^4.2.0",
+		"@llamaindex/liteparse-wasm": "^2.6.0",
 		"@lucide/svelte": "1.24.0",
 		"@mediabunny/mp3-encoder": "1.50.8",
 		"@soundtouchjs/audio-worklet": "2.1.0",
