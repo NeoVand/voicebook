@@ -13,13 +13,11 @@
 		ListMusic,
 		Fullscreen,
 		Menu,
-		Moon,
 		PanelLeftClose,
 		PanelLeftOpen,
 		BrainCircuit,
 		RefreshCw,
 		Settings2,
-		Sun,
 		Palette,
 		Shrink,
 		X
@@ -27,6 +25,7 @@
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
 	import BrandMark from '$lib/components/BrandMark.svelte';
+	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
 	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import GitHubOutline from '$lib/components/GitHubOutline.svelte';
 	import { recordRuntimeEvent } from '$lib/services/runtime-diagnostics';
@@ -314,15 +313,11 @@
 				<button
 					class="icon-button"
 					type="button"
-					aria-label={`Theme: ${appearanceState.themeSpec.label}. Switch to ${appearanceState.themeSpec.dark ? 'Sunny' : 'Midnight'} theme`}
-					title={`${appearanceState.themeSpec.label} · more in Appearance settings`}
-					onclick={() => appearanceState.toggleLightDark()}
+					aria-label={`Theme: ${appearanceState.themeSpec.label}. Switch to ${appearanceState.nextThemeSpec.label} theme`}
+					title={`${appearanceState.themeSpec.label} · next: ${appearanceState.nextThemeSpec.label}`}
+					onclick={() => appearanceState.cycleTheme()}
 				>
-					{#if appearanceState.themeSpec.dark}
-						<Moon size={16} />
-					{:else}
-						<Sun size={16} />
-					{/if}
+					<ThemeIcon theme={appearanceState.theme} size={16} />
 				</button>
 				<a
 					class="icon-button github-link"
@@ -341,15 +336,11 @@
 			<button
 				class="icon-button"
 				type="button"
-				aria-label={`Theme: ${appearanceState.themeSpec.label}. Switch to ${appearanceState.themeSpec.dark ? 'Sunny' : 'Midnight'} theme`}
-				title={`${appearanceState.themeSpec.label} · more in Appearance settings`}
-				onclick={() => appearanceState.toggleLightDark()}
+				aria-label={`Theme: ${appearanceState.themeSpec.label}. Switch to ${appearanceState.nextThemeSpec.label} theme`}
+				title={`${appearanceState.themeSpec.label} · next: ${appearanceState.nextThemeSpec.label}`}
+				onclick={() => appearanceState.cycleTheme()}
 			>
-				{#if appearanceState.themeSpec.dark}
-					<Moon size={16} />
-				{:else}
-					<Sun size={16} />
-				{/if}
+				<ThemeIcon theme={appearanceState.theme} size={16} />
 			</button>
 			<a
 				class="icon-button github-link"

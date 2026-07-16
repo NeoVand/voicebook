@@ -5,7 +5,16 @@
  * document data.
  */
 export type ThemeId =
-	'sunny' | 'cloudy' | 'rainy' | 'midnight' | 'forest' | 'cocoa' | 'ocean' | 'aurora';
+	| 'sunny'
+	| 'cloudy'
+	| 'meadow'
+	| 'sakura'
+	| 'rainy'
+	| 'midnight'
+	| 'forest'
+	| 'cocoa'
+	| 'ocean'
+	| 'aurora';
 
 export interface ThemeSpec {
 	id: ThemeId;
@@ -33,6 +42,22 @@ export const THEMES: ThemeSpec[] = [
 		tagline: 'Cool gray overcast',
 		meta: '#edf1f3',
 		swatch: ['#edf1f3', '#fbfcfc', '#5b7189', '#8a6b36'],
+		dark: false
+	},
+	{
+		id: 'meadow',
+		label: 'Meadow',
+		tagline: 'Fresh grass in morning light',
+		meta: '#eaf1e6',
+		swatch: ['#eaf1e6', '#fafdf6', '#4f7a4e', '#97742c'],
+		dark: false
+	},
+	{
+		id: 'sakura',
+		label: 'Sakura',
+		tagline: 'Cherry blossom in spring',
+		meta: '#f6edee',
+		swatch: ['#f6edee', '#fdf8f7', '#a05a6e', '#9c7030'],
 		dark: false
 	},
 	{
@@ -146,7 +171,13 @@ export class AppearanceState {
 	);
 
 	get themeSpec(): ThemeSpec {
-		return THEMES.find((theme) => theme.id === this.theme) ?? THEMES[3];
+		return THEMES.find((theme) => theme.id === this.theme) ?? THEMES[0];
+	}
+
+	/** Where one more click of the header button lands. */
+	get nextThemeSpec(): ThemeSpec {
+		const index = THEMES.findIndex((theme) => theme.id === this.theme);
+		return THEMES[(index + 1) % THEMES.length];
 	}
 
 	setTheme(theme: ThemeId): void {
@@ -159,10 +190,10 @@ export class AppearanceState {
 			?.setAttribute('content', this.themeSpec.meta);
 	}
 
-	/** The header button flips between the light and dark side of the aisle,
-	 * keeping the full pick in Settings → Appearance. */
-	toggleLightDark(): void {
-		this.setTheme(this.themeSpec.dark ? 'sunny' : 'midnight');
+	/** The header button steps through every theme in order, wrapping around —
+	 * one click, one theme. */
+	cycleTheme(): void {
+		this.setTheme(this.nextThemeSpec.id);
 	}
 
 	setReaderFont(font: ReaderFontId): void {

@@ -47,6 +47,7 @@
 	} from '$lib/domain/narration-prompts';
 	import { NARRATION_PRESETS, type NarrationPresetId } from '$lib/domain/narration-presets';
 	import { READER_FONTS, THEMES, appearanceState } from '$lib/state/appearance.svelte';
+	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
 	import type { VoiceDescriptor } from '$lib/domain/types';
 	import { runtimeDiagnosticsReport } from '$lib/services/runtime-diagnostics';
 	import { ttsClient } from '$lib/services/tts-client';
@@ -1318,7 +1319,7 @@
 								<b style:background={theme.swatch[3]}></b>
 							</i>
 						</span>
-						<strong>{theme.label}</strong>
+						<strong><ThemeIcon theme={theme.id} size={13} />{theme.label}</strong>
 						<small>{theme.tagline}</small>
 					</button>
 				{/each}
@@ -2009,6 +2010,20 @@
 		margin-top: 10px;
 		font-size: 11px;
 		font-weight: 650;
+	}
+
+	.theme-card strong {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+
+	.theme-card strong :global(svg) {
+		color: var(--muted);
+	}
+
+	.theme-card.selected strong :global(svg) {
+		color: var(--primary);
 	}
 
 	.theme-card small,

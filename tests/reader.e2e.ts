@@ -75,8 +75,19 @@ test('completes voice setup before presenting the empty-library import surface',
 	await expect(page.getByText('Drop to add to your library', { exact: true })).toHaveCount(0);
 
 	const themeButton = page.getByRole('button', { name: /^Theme:/ });
-	// The header button flips light/dark; the full palette lives in Appearance.
-	for (const theme of ['midnight', 'sunny', 'midnight', 'sunny']) {
+	// The header button cycles through every theme in order, wrapping around.
+	for (const theme of [
+		'midnight',
+		'forest',
+		'cocoa',
+		'ocean',
+		'aurora',
+		'sunny',
+		'cloudy',
+		'meadow',
+		'sakura',
+		'rainy'
+	]) {
 		await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 		await addDocument.hover();
 		await expect
@@ -163,6 +174,37 @@ test('highlights only the document currently open in the reader', async ({ page 
 	await page.getByRole('link', { name: 'Voicebook library' }).click();
 	await expect(currentDocument).not.toHaveAttribute('aria-current', 'page');
 	await expect(currentDocument).not.toHaveClass(/\bactive\b/);
+});
+
+test('switches the open reader document from the sidebar library links', async ({ page }) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByLabel('Title').fill('First document');
+	await page.getByRole('textbox', { name: 'Text' }).fill('The first document speaks first.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page.getByRole('article', { name: 'First document' })).toBeVisible();
+
+	await page.getByRole('link', { name: 'Voicebook library' }).click();
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByLabel('Title').fill('Second document');
+	await page.getByRole('textbox', { name: 'Text' }).fill('The second document takes over.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page.getByRole('article', { name: 'Second document' })).toBeVisible();
+
+	// Same route, different ?document — the reader must swap books in place.
+	const recentDocuments = page.getByRole('navigation', { name: 'Recent documents' });
+	await recentDocuments.getByRole('link', { name: 'First document' }).click();
+	const firstArticle = page.getByRole('article', { name: 'First document' });
+	await expect(firstArticle).toBeVisible();
+	await expect(firstArticle.getByText('The first document speaks first.')).toBeVisible();
+	await expect(recentDocuments.getByRole('link', { name: 'First document' })).toHaveAttribute(
+		'aria-current',
+		'page'
+	);
+
+	await recentDocuments.getByRole('link', { name: 'Second document' }).click();
+	await expect(page.getByRole('article', { name: 'Second document' })).toBeVisible();
+	await expect(page.getByText('The second document takes over.')).toBeVisible();
 });
 
 test('detects and renders pasted Markdown as structured document content', async ({ page }) => {
@@ -285,8 +327,19 @@ test('import → install → play → seek → bookmark → reload → offline r
 			};
 		});
 	const readerThemeButton = page.getByRole('button', { name: /^Theme:/ });
-	// The header button flips light/dark; the full palette lives in Appearance.
-	for (const theme of ['midnight', 'sunny', 'midnight', 'sunny']) {
+	// One full lap of the theme cycle keeps every palette's chrome honest.
+	for (const theme of [
+		'midnight',
+		'forest',
+		'cocoa',
+		'ocean',
+		'aurora',
+		'sunny',
+		'cloudy',
+		'meadow',
+		'sakura',
+		'rainy'
+	]) {
 		await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
 		const surfaces = await readerSurfaceColors();
 		expect(new Set(surfaces.chrome).size, `${theme} chrome surfaces should match`).toBe(1);
@@ -812,18 +865,18 @@ test('collapses and remembers the desktop sidebar', async ({ page }) => {
 	await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
 
 	const themeButton = page.getByRole('button', { name: /^Theme:/ });
-	await expect(themeButton).toHaveAccessibleName('Theme: Midnight. Switch to Sunny theme');
+	await expect(themeButton).toHaveAccessibleName('Theme: Midnight. Switch to Forest theme');
 	await themeButton.click();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
-	await expect(themeButton).toHaveAccessibleName('Theme: Sunny. Switch to Midnight theme');
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'forest');
+	await expect(themeButton).toHaveAccessibleName('Theme: Forest. Switch to Cocoa theme');
 	await themeButton.click();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'midnight');
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'cocoa');
 	await themeButton.click();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'ocean');
 	await page.reload();
-	await expect(page.locator('html')).toHaveAttribute('data-theme', 'sunny');
+	await expect(page.locator('html')).toHaveAttribute('data-theme', 'ocean');
 	await expect(page.getByRole('button', { name: /^Theme:/ })).toHaveAccessibleName(
-		'Theme: Sunny. Switch to Midnight theme'
+		'Theme: Ocean. Switch to Aurora theme'
 	);
 	await expect(page.getByRole('button', { name: 'Enter fullscreen' })).toHaveCount(0);
 	await expect(page.getByRole('link', { name: 'Open Voicebook on GitHub' })).toHaveAttribute(
@@ -1040,7 +1093,7 @@ test('renders Mermaid fences as accessible diagrams with a source fallback', asy
 	const diagramThemeToken = () =>
 		diagramSvg.evaluate((svg) => getComputedStyle(svg).getPropertyValue('--diagram-node').trim());
 	const midnightToken = await diagramThemeToken();
-	await page.getByRole('button', { name: 'Theme: Midnight. Switch to Sunny theme' }).click();
+	await page.getByRole('button', { name: 'Theme: Midnight. Switch to Forest theme' }).click();
 	await expect
 		.poll(diagramThemeToken, {
 			message: 'Mermaid should recolor for the active reader theme'

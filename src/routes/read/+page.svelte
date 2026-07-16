@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import {
 		ArrowLeft,
 		Bookmark,
@@ -66,6 +67,8 @@
 	}
 	let narrationStartAction = $state<NarrationStartAction>();
 	let narrationAnnouncement = $state('');
+	let appReady = $state(false);
+	let openDocumentId: string | null = null;
 	const playbackSpeedOptions = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((speed) => ({
 		value: String(speed),
 		label: `${speed}×`
@@ -140,17 +143,7 @@
 				void providersState.refreshElevenLabsVoices();
 		});
 		void appState.initialize().then(() => {
-			const id = new URL(window.location.href).searchParams.get('document');
-			book = appState.documents.find((document) => document.id === id) ?? null;
-			if (book) {
-				player.setDocument(book);
-				activeOutlineBlockId =
-					book.outline.find((item) => item.blockId === player.currentSegment?.blockId)?.blockId ??
-					book.outline[0]?.blockId;
-				void player.warmEngine();
-				void narrationState.open(book);
-				requestAnimationFrame(scheduleVisibleSectionUpdate);
-			}
+			appReady = true;
 		});
 		return () => {
 			cancelAnimationFrame(readerScrollFrame);
@@ -159,6 +152,38 @@
 			narrationState.stop();
 		};
 	});
+
+	// Sidebar links stay on this route and only change ?document, so the open
+	// book must follow the URL — a one-shot read on mount misses every switch.
+	$effect(() => {
+		const id = page.url.searchParams.get('document');
+		if (!appReady || id === openDocumentId) return;
+		openDocumentId = id;
+		openBook(appState.documents.find((document) => document.id === id) ?? null);
+	});
+
+	function openBook(next: NormalizedDocument | null): void {
+		narrationState.stop();
+		narrationStartAction = undefined;
+		outlineNavigationBlockId = undefined;
+		activeOutlineBlockId = undefined;
+		book = next;
+		if (!next) return;
+		player.setDocument(next);
+		activeOutlineBlockId =
+			next.outline.find((item) => item.blockId === player.currentSegment?.blockId)?.blockId ??
+			next.outline[0]?.blockId;
+		void player.warmEngine();
+		void narrationState.open(next);
+		requestAnimationFrame(() => {
+			const element = player.currentSegment
+				? segmentElements.get(player.currentSegment.id)
+				: undefined;
+			if (element) scrollNarrationIntoView(element, false);
+			else readingCanvas?.scrollTo({ top: 0 });
+			scheduleVisibleSectionUpdate();
+		});
+	}
 
 	function trackSegment(id: string) {
 		return (node: HTMLElement) => {
