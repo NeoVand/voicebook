@@ -2,13 +2,11 @@
 	import { resolve } from '$app/paths';
 	import {
 		ArrowLeft,
-		AudioLines,
 		Bookmark,
 		BookOpenText,
 		Check,
 		ChevronLeft,
 		ChevronRight,
-		BrainCircuit,
 		LoaderCircle,
 		LocateFixed,
 		Pause,
@@ -23,13 +21,15 @@
 	import type { Attachment } from 'svelte/attachments';
 	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import AudioActionsMenu from '$lib/components/AudioActionsMenu.svelte';
 	import CompactSelect from '$lib/components/CompactSelect.svelte';
 	import CodeBlock from '$lib/components/CodeBlock.svelte';
+	import ConstructPanel, { type ConstructPanelItem } from '$lib/components/ConstructPanel.svelte';
 	import InlineText from '$lib/components/InlineText.svelte';
+	import LlmChip from '$lib/components/LlmChip.svelte';
 	import MathFormula from '$lib/components/MathFormula.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
 	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
-	import PlayerActionsMenu from '$lib/components/PlayerActionsMenu.svelte';
 	import SafeHtml from '$lib/components/SafeHtml.svelte';
 	import VolumeControl from '$lib/components/VolumeControl.svelte';
 	import type {
@@ -39,17 +39,15 @@
 		SpeechSegment,
 		TableCell
 	} from '$lib/domain/types';
-	import { GENERATION_STEP_OPTIONS } from '$lib/domain/synthesis';
+	import { tableMarkdown } from '$lib/domain/narration';
 	import { appState } from '$lib/state/app-state.svelte';
+	import { llmState } from '$lib/state/llm.svelte';
 	import { narrationState } from '$lib/state/narrations.svelte';
 	import { player } from '$lib/state/player.svelte';
+	import { providersState } from '$lib/state/providers.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 
 	let book = $state<NormalizedDocument | null>(null);
-	let clearingAudio = $state(false);
-	let downloadingAudio = $state(false);
-	let downloadProgress = $state(0);
-	let audioMenuAnnouncement = $state('');
 	let activeOutlineBlockId = $state<string>();
 	let outlineAnnouncement = $state('');
 	let readingCanvas = $state<HTMLElement>();
@@ -71,10 +69,6 @@
 	const playbackSpeedOptions = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((speed) => ({
 		value: String(speed),
 		label: `${speed}×`
-	}));
-	const generationQualityOptions = GENERATION_STEP_OPTIONS.map((steps) => ({
-		value: String(steps),
-		label: `${steps} steps`
 	}));
 
 	let segmentsByBlock = $derived.by(() => {
@@ -112,9 +106,6 @@
 			: undefined) ?? []
 	);
 	let installed = $derived(appState.installedModels.includes('supertonic-3'));
-	let voiceOptions = $derived(
-		appState.selectedModel.voices.map((voice) => ({ value: voice.id, label: voice.name }))
-	);
 	let titleBlock = $derived.by(() => {
 		return book?.blocks.find((block) => block.kind === 'heading' && block.level === 1);
 	});
@@ -144,6 +135,10 @@
 				if (element) scrollNarrationIntoView(element, false);
 			});
 		};
+		void providersState.initialize().then(() => {
+			if (providersState.speechEngine === 'elevenlabs')
+				void providersState.refreshElevenLabsVoices();
+		});
 		void appState.initialize().then(() => {
 			const id = new URL(window.location.href).searchParams.get('document');
 			book = appState.documents.find((document) => document.id === id) ?? null;
@@ -189,6 +184,66 @@
 		return (segmentsByBlock.get(blockId) ?? []).filter(
 			(segment) => segment.narration?.constructIds[0] === constructId
 		);
+	}
+
+	/* ── Construct description panels ─────────────────────────────────────── */
+
+	let llmAvailable = $derived(narrationState.engineAvailable);
+
+	function panelItem(
+		blockId: string,
+		constructId: string,
+		label?: string,
+		canRegenerate = true
+	): ConstructPanelItem {
+		return {
+			constructId,
+			label,
+			spoken:
+				constructSegments(blockId, constructId)
+					.map((segment) => segment.normalizedText)
+					.join(' ') || '—',
+			entry: book?.narrations?.[constructId],
+			canRegenerate: canRegenerate && llmAvailable && llmState.narrationEnabled,
+			regenerating: narrationState.regenerating.has(constructId)
+		};
+	}
+
+	function tablePanelItems(block: DocumentBlock): ConstructPanelItem[] {
+		if (!block.table) return [];
+		const rowLabel = (cells: TableCell[], index: number) => {
+			const first = cells[0]?.text.replace(/\s+/g, ' ').trim();
+			return first ? `Row ${index + 1} — ${first}` : `Row ${index + 1}`;
+		};
+		return [
+			panelItem(block.id, `${block.id}:rh`, 'Header', false),
+			...block.table.rows.map((row, index) =>
+				panelItem(block.id, `${block.id}:r${index}`, rowLabel(row, index))
+			)
+		];
+	}
+
+	function editConstruct(constructId: string, text: string): void {
+		void narrationState.setManualText(constructId, text);
+	}
+
+	function regenerateConstruct(constructId: string): void {
+		void narrationState.regenerateConstruct(constructId);
+	}
+
+	let llmChipVisible = $derived(
+		Boolean(player.narrationStage) ||
+			narrationState.working ||
+			(llmAvailable && Boolean(book && Object.keys(book.narrations ?? {}).length))
+	);
+
+	async function toggleDescriptions(value: boolean): Promise<void> {
+		await llmState.setNarrationEnabled(value);
+		if (book) await narrationState.open(book);
+	}
+
+	async function regenerateDocumentDescriptions(): Promise<void> {
+		await narrationState.regenerateDocument();
 	}
 
 	const trackReadingCanvas: Attachment<HTMLElement> = (element) => {
@@ -393,7 +448,12 @@
 
 	function startClickedPassage(event: MouseEvent): void {
 		if (!(event.target instanceof Element)) return;
-		if (event.target.closest('a, button')) return;
+		// Interactive content inside a construct (the source-and-description
+		// panel, expander summaries, edit fields) must not start playback.
+		if (
+			event.target.closest('a, button, summary, textarea, input, select, label, .construct-panel')
+		)
+			return;
 		const selection = window.getSelection();
 		if (selection && !selection.isCollapsed) return;
 		const segment = segmentForElement(event.target);
@@ -507,49 +567,6 @@
 		const minutes = Math.floor(Math.max(0, seconds) / 60);
 		const remainder = Math.floor(Math.max(0, seconds) % 60);
 		return minutes + ':' + remainder.toString().padStart(2, '0');
-	}
-
-	async function changeVoice(voiceId: string): Promise<void> {
-		await player.chooseVoice(voiceId);
-	}
-
-	async function changeGenerationQuality(value: string): Promise<void> {
-		await player.chooseGenerationSteps(Number(value));
-	}
-
-	async function clearCachedAudio(): Promise<void> {
-		if (clearingAudio || downloadingAudio) return;
-		clearingAudio = true;
-		audioMenuAnnouncement = '';
-		const cleared = await player.clearDocumentAudio();
-		audioMenuAnnouncement = cleared
-			? 'Cached audio and listening history cleared for this document.'
-			: 'Cached audio could not be cleared.';
-		clearingAudio = false;
-	}
-
-	async function downloadDocumentAudio(): Promise<void> {
-		if (downloadingAudio || clearingAudio || !player.isDocumentPrepared) return;
-		downloadingAudio = true;
-		downloadProgress = 0;
-		audioMenuAnnouncement = 'Creating the document MP3.';
-		try {
-			const { blob, filename } = await player.exportDocumentMp3((progress) => {
-				downloadProgress = progress * 100;
-			});
-			const url = URL.createObjectURL(blob);
-			const link = document.createElement('a');
-			link.href = url;
-			link.download = filename;
-			link.click();
-			setTimeout(() => URL.revokeObjectURL(url), 1_000);
-			audioMenuAnnouncement = 'The document MP3 is ready to download.';
-		} catch (error) {
-			audioMenuAnnouncement =
-				error instanceof Error ? error.message : 'The document MP3 could not be created.';
-		} finally {
-			downloadingAudio = false;
-		}
 	}
 
 	function handleKeydown(event: KeyboardEvent): void {
@@ -678,7 +695,18 @@
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
-			<MermaidDiagram id={block.id} source={block.text} />
+			<MermaidDiagram id={block.id} source={block.text}>
+				{#snippet panel()}
+					<ConstructPanel
+						noun="Diagram"
+						sourceLabel="Diagram source"
+						source={block.text}
+						items={[panelItem(block.id, block.id)]}
+						onEdit={editConstruct}
+						onRegenerate={regenerateConstruct}
+					/>
+				{/snippet}
+			</MermaidDiagram>
 		</div>
 	{:else if block.kind === 'code'}
 		<CodeBlock id={block.id} source={block.text} language={block.codeLanguage} />
@@ -695,7 +723,18 @@
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
-			<MathFormula id={block.id} formula={block.text} displayMode />
+			<MathFormula id={block.id} formula={block.text} displayMode>
+				{#snippet panel()}
+					<ConstructPanel
+						noun="Equation"
+						sourceLabel="LaTeX source"
+						source={block.text}
+						items={[panelItem(block.id, block.id)]}
+						onEdit={editConstruct}
+						onRegenerate={regenerateConstruct}
+					/>
+				{/snippet}
+			</MathFormula>
 		</div>
 	{:else if block.kind === 'footnote'}
 		<aside
@@ -798,6 +837,14 @@
 					{/each}
 				</tbody>
 			</table>
+			<ConstructPanel
+				noun="Table"
+				sourceLabel="Markdown source"
+				source={tableMarkdown(block.table)}
+				items={tablePanelItems(block)}
+				onEdit={editConstruct}
+				onRegenerate={regenerateConstruct}
+			/>
 		</div>
 	{:else if block.kind === 'divider'}
 		<hr id={block.id} />
@@ -1003,76 +1050,17 @@
 
 		<footer class="player-bar" aria-label="Playback controls">
 			<div class="generation-options" role="group" aria-label="Speech generation settings">
-				<div class="generation-control voice-control">
-					<CompactSelect
-						label="Voice"
-						value={appState.selectedVoiceId}
-						options={voiceOptions}
-						onChange={changeVoice}
-						triggerWidth="106px"
-						menuWidth="148px"
+				<AudioActionsMenu />
+				{#if llmChipVisible}
+					<LlmChip
+						working={narrationState.working || Boolean(player.narrationStage)}
+						paused={narrationState.phase === 'paused-gpu'}
+						progress={narrationState.total ? narrationState.done / narrationState.total : 0}
+						stageLabel={player.narrationStage}
+						enabled={llmState.narrationEnabled}
+						onToggleEnabled={toggleDescriptions}
+						onRegenerate={regenerateDocumentDescriptions}
 					/>
-				</div>
-				<div class="generation-control quality-control">
-					<CompactSelect
-						label="Generation quality"
-						value={String(appState.generationSteps)}
-						options={generationQualityOptions}
-						onChange={changeGenerationQuality}
-						triggerWidth="86px"
-						menuWidth="96px"
-					/>
-				</div>
-				<button
-					class="generate-all icon-button"
-					class:active={player.isGeneratingAll}
-					class:ready={player.isDocumentPrepared}
-					type="button"
-					disabled={player.isDocumentPrepared || (!player.isGeneratingAll && !installed)}
-					aria-busy={player.isGeneratingAll}
-					aria-label={player.isDocumentPrepared
-						? 'Whole document audio is ready'
-						: player.isGeneratingAll
-							? `Stop preparing whole document, ${Math.round(player.generationProgress)} percent complete`
-							: 'Prepare whole document audio'}
-					title={player.isDocumentPrepared
-						? 'Whole document audio is ready'
-						: player.isGeneratingAll
-							? `Stop preparing · ${Math.round(player.generationProgress)}%`
-							: 'Prepare whole document audio'}
-					style:--generation-progress={`${Math.round(player.generationProgress)}%`}
-					onclick={() => {
-						if (player.isGeneratingAll) player.cancelGeneration();
-						else void player.generateAll();
-					}}
-				>
-					{#if player.isDocumentPrepared}
-						<Check size={17} strokeWidth={2.2} />
-					{:else if player.isGeneratingAll}
-						<Square size={13} fill="currentColor" />
-					{:else}
-						<AudioLines size={17} />
-					{/if}
-				</button>
-				{#if narrationState.working || player.narrationStage}
-					<a
-						class="narration-chip"
-						class:paused={narrationState.phase === 'paused-gpu'}
-						href={resolve('/settings?section=llm')}
-						title="The on-device language model is rewriting equations, tables, and diagrams for speech"
-						aria-live="polite"
-					>
-						<BrainCircuit size={13} strokeWidth={2.1} />
-						<span class="narration-chip-copy">
-							{player.narrationStage || 'Describing visuals'}
-						</span>
-						<span class="narration-chip-count">{narrationState.done}/{narrationState.total}</span>
-						<i class="narration-chip-track" aria-hidden="true">
-							<i
-								style:width={`${narrationState.total ? Math.round((narrationState.done / narrationState.total) * 100) : 0}%`}
-							></i>
-						</i>
-					</a>
 				{/if}
 			</div>
 
@@ -1221,19 +1209,6 @@
 					/>
 				</div>
 				<VolumeControl volume={player.volume} onChange={(volume) => player.setVolume(volume)} />
-				<PlayerActionsMenu
-					canDownload={player.isDocumentPrepared}
-					canClear={player.hasDocumentAudioState}
-					downloading={downloadingAudio}
-					clearing={clearingAudio}
-					{downloadProgress}
-					generationSteps={appState.generationSteps}
-					generationStepOptions={GENERATION_STEP_OPTIONS}
-					onDownload={downloadDocumentAudio}
-					onClear={clearCachedAudio}
-					onGenerationStepsChange={(steps) => changeGenerationQuality(String(steps))}
-				/>
-				<span class="sr-only" aria-live="polite">{audioMenuAnnouncement}</span>
 			</div>
 
 			{#if player.errorMessage}
@@ -2184,7 +2159,7 @@
 		display: grid;
 		height: var(--player-height);
 		min-width: 0;
-		grid-template-columns: 236px minmax(260px, 1fr) 208px;
+		grid-template-columns: 96px minmax(260px, 1fr) 132px;
 		align-items: center;
 		gap: 10px;
 		padding: 1px 16px 0;
@@ -2206,116 +2181,6 @@
 	.generation-control,
 	.speed-control {
 		display: contents;
-	}
-
-	.generate-all {
-		position: relative;
-		width: 36px;
-		height: 36px;
-		flex: 0 0 36px;
-		color: var(--muted);
-	}
-
-	.generate-all.active {
-		background: var(--primary-soft);
-		color: var(--primary);
-	}
-
-	.generate-all.ready:disabled {
-		background: color-mix(in srgb, var(--timeline-cached) 14%, transparent);
-		color: var(--timeline-cached);
-		cursor: default;
-		opacity: 1;
-	}
-
-	.generate-all.active::before {
-		position: absolute;
-		inset: 2px;
-		border-radius: 50%;
-		background: conic-gradient(var(--primary) var(--generation-progress, 0%), var(--line-strong) 0);
-		content: '';
-		-webkit-mask: radial-gradient(circle, transparent 67%, black 69%);
-		mask: radial-gradient(circle, transparent 67%, black 69%);
-		pointer-events: none;
-	}
-
-	.narration-chip {
-		display: inline-flex;
-		min-width: 0;
-		height: 28px;
-		align-items: center;
-		gap: 7px;
-		padding: 0 11px;
-		border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--primary-soft) 72%, transparent);
-		color: var(--primary);
-		font-size: 10px;
-		font-weight: 620;
-		letter-spacing: 0.01em;
-		line-height: 1;
-		text-decoration: none;
-		white-space: nowrap;
-	}
-
-	.narration-chip-copy {
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.narration-chip-count {
-		color: color-mix(in srgb, var(--primary) 72%, var(--muted));
-		font-variant-numeric: tabular-nums;
-	}
-
-	.narration-chip-track {
-		position: relative;
-		display: block;
-		overflow: hidden;
-		width: 34px;
-		height: 3px;
-		flex: none;
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--primary) 18%, transparent);
-	}
-
-	.narration-chip-track > i {
-		position: absolute;
-		top: 0;
-		bottom: 0;
-		left: 0;
-		border-radius: 999px;
-		background: var(--primary);
-		transition: width 300ms var(--ease);
-	}
-
-	.narration-chip:hover {
-		background: color-mix(in srgb, var(--primary-soft) 70%, var(--primary) 14%);
-	}
-
-	.narration-chip.paused {
-		border-color: var(--line-strong);
-		color: var(--muted);
-		background: var(--hover);
-	}
-
-	.narration-chip.paused .narration-chip-track > i {
-		background: var(--muted);
-	}
-
-	.narration-chip :global(svg) {
-		flex: none;
-		animation: narration-pending-pulse 2.2s ease-in-out infinite;
-	}
-
-	.narration-chip.paused :global(svg) {
-		animation: none;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.narration-chip :global(svg) {
-			animation: none;
-		}
 	}
 
 	.transport {
@@ -2581,18 +2446,7 @@
 		background: transparent;
 	}
 
-	.player-volume input::-webkit-slider-runnable-track {
-		height: 4px;
-		border-radius: 999px;
-		background: linear-gradient(
-			to right,
-			var(--primary) 0 var(--volume-progress, 0%),
-			var(--track) var(--volume-progress, 0%) 100%
-		);
-	}
-
-	.timeline input::-webkit-slider-thumb,
-	.player-volume input::-webkit-slider-thumb {
+	.timeline input::-webkit-slider-thumb {
 		appearance: none;
 		width: 12px;
 		height: 12px;
@@ -2610,26 +2464,12 @@
 		background: transparent;
 	}
 
-	.player-volume input::-moz-range-track {
-		height: 4px;
-		border: 0;
-		border-radius: 999px;
-		background: var(--track);
-	}
-
 	.timeline input::-moz-range-progress {
 		height: 6px;
 		background: transparent;
 	}
 
-	.player-volume input::-moz-range-progress {
-		height: 4px;
-		border-radius: 999px;
-		background: var(--primary);
-	}
-
-	.timeline input::-moz-range-thumb,
-	.player-volume input::-moz-range-thumb {
+	.timeline input::-moz-range-thumb {
 		width: 10px;
 		height: 10px;
 		border: 2px solid var(--surface);
@@ -2639,35 +2479,11 @@
 
 	.player-options {
 		display: flex;
-		width: 208px;
 		min-width: 0;
 		align-items: center;
 		justify-self: end;
 		justify-content: flex-end;
 		gap: 4px;
-	}
-
-	.player-volume {
-		display: flex;
-		min-width: 0;
-		width: 106px;
-		height: 40px;
-		align-items: center;
-		gap: 8px;
-		padding: 0 4px;
-		color: var(--muted);
-	}
-
-	.player-volume input {
-		appearance: none;
-		width: 100%;
-		height: 20px;
-		margin: 0;
-		background: transparent;
-	}
-
-	.player-volume input {
-		--timeline-progress: var(--volume-progress);
 	}
 
 	.player-error {
@@ -2718,7 +2534,7 @@
 		}
 
 		.player-bar {
-			grid-template-columns: 236px minmax(230px, 1fr) 208px;
+			grid-template-columns: 96px minmax(230px, 1fr) 132px;
 			gap: 8px;
 			padding-right: 20px;
 			padding-left: 20px;
@@ -2731,7 +2547,7 @@
 		}
 
 		.player-bar {
-			grid-template-columns: 236px minmax(0, 1fr);
+			grid-template-columns: 96px minmax(0, 1fr);
 		}
 	}
 
@@ -2797,10 +2613,6 @@
 			width: auto;
 			grid-area: options;
 			gap: 0;
-		}
-
-		.quality-control {
-			display: none;
 		}
 
 		.transport {

@@ -20,12 +20,27 @@
 		RefreshCw,
 		ShieldCheck,
 		BrainCircuit,
+		Cloud,
 		Square,
 		Trash2,
 		Wifi
 	} from '@lucide/svelte';
 	import { getModel } from '$lib/domain/model-catalog';
 	import { LLM_CATALOG, type LlmModelSpec } from '$lib/domain/llm-catalog';
+	import {
+		CLOUD_LLM_PROVIDERS,
+		ELEVENLABS_MODELS,
+		type ApiProvider,
+		type CloudLlmProvider,
+		type DescriptionEngine,
+		type ElevenLabsVoice,
+		type SpeechEngine
+	} from '$lib/domain/provider-catalog';
+	import ApiKeyField from '$lib/components/ApiKeyField.svelte';
+	import { verifyCloudLlmKey } from '$lib/services/cloud-llm';
+	import { elevenLabsUsage, type ElevenLabsUsage } from '$lib/services/elevenlabs';
+	import { player } from '$lib/state/player.svelte';
+	import { providersState } from '$lib/state/providers.svelte';
 	import {
 		DEFAULT_NARRATION_PROMPTS,
 		type NarrationPromptKey
@@ -283,7 +298,103 @@
 
 	onMount(() => {
 		void llmState.initialize();
+		void providersState.initialize().then(() => {
+			if (providersState.speechEngine === 'elevenlabs' && providersState.elevenLabsReady) {
+				void refreshElevenLabs();
+			}
+		});
 	});
+
+	/* ── ElevenLabs speech engine ────────────────────────────────────────── */
+
+	let elUsage = $state<ElevenLabsUsage | null>(null);
+	let elPreviewVoiceId = $state<string | undefined>();
+	let elPreviewAudio: HTMLAudioElement | undefined;
+
+	async function refreshElevenLabs(): Promise<void> {
+		void providersState.refreshElevenLabsVoices();
+		const key = providersState.keyFor('elevenlabs');
+		if (!key) return;
+		try {
+			elUsage = await elevenLabsUsage(key);
+		} catch {
+			elUsage = null;
+		}
+	}
+
+	async function chooseSpeechEngine(engine: SpeechEngine): Promise<void> {
+		await player.chooseSpeechEngine(engine);
+		if (engine === 'elevenlabs' && providersState.elevenLabsReady) void refreshElevenLabs();
+	}
+
+	async function saveElevenLabsKey(value: string): Promise<void> {
+		await providersState.setKey('elevenlabs', value);
+		if (value.trim()) await refreshElevenLabs();
+	}
+
+	async function testElevenLabsKey(): Promise<{ ok: boolean; message: string }> {
+		const key = providersState.keyFor('elevenlabs');
+		if (!key) return { ok: false, message: 'No key saved yet.' };
+		try {
+			const usage = await elevenLabsUsage(key);
+			elUsage = usage;
+			return {
+				ok: true,
+				message: `ElevenLabs accepted the key — ${usage.tier} plan, ${usage.used.toLocaleString()} of ${usage.limit.toLocaleString()} characters used.`
+			};
+		} catch (error) {
+			return {
+				ok: false,
+				message: error instanceof Error ? error.message : 'ElevenLabs rejected the key.'
+			};
+		}
+	}
+
+	function stopElevenLabsPreview(): void {
+		elPreviewAudio?.pause();
+		elPreviewAudio = undefined;
+		elPreviewVoiceId = undefined;
+	}
+
+	function previewElevenLabsVoice(voice: ElevenLabsVoice): void {
+		if (elPreviewVoiceId === voice.id) {
+			stopElevenLabsPreview();
+			return;
+		}
+		stopElevenLabsPreview();
+		if (!voice.previewUrl) return;
+		const audio = new Audio(voice.previewUrl);
+		elPreviewAudio = audio;
+		elPreviewVoiceId = voice.id;
+		audio.onended = () => {
+			if (elPreviewVoiceId === voice.id) stopElevenLabsPreview();
+		};
+		void audio.play().catch(() => stopElevenLabsPreview());
+	}
+
+	onDestroy(() => stopElevenLabsPreview());
+
+	/* ── Description engine (on-device or bring-your-own-key cloud) ──────── */
+
+	/** A changed engine or key affects the open document immediately. */
+	function reopenNarrations(): void {
+		if (player.book) void narrationState.open(player.book);
+	}
+
+	async function chooseDescriptionEngine(engine: DescriptionEngine): Promise<void> {
+		await providersState.setDescriptionEngine(engine);
+		reopenNarrations();
+	}
+
+	async function chooseCloudModel(provider: CloudLlmProvider, modelId: string): Promise<void> {
+		await providersState.setCloudLlmModel(provider, modelId);
+		reopenNarrations();
+	}
+
+	async function saveProviderKey(provider: ApiProvider, value: string): Promise<void> {
+		await providersState.setKey(provider, value);
+		reopenNarrations();
+	}
 
 	async function updateLlmLicense(spec: LlmModelSpec, event: Event): Promise<void> {
 		await llmState.setLicenseAcceptance(spec.id, (event.currentTarget as HTMLInputElement).checked);
@@ -427,9 +538,9 @@
 			</h1>
 			<p>
 				{activeSection === 'models'
-					? 'One fast, local speech engine. No model switching in the reader.'
+					? 'Pick who reads aloud — the free on-device engine, or premium voices with your own API key.'
 					: activeSection === 'llm'
-						? 'A language model, run privately on this device, rewrites equations, tables, and diagrams into words the reader voice can speak.'
+						? 'Rewrites equations, tables, and diagrams into speakable words — on-device for free, or with your own API key.'
 						: activeSection === 'storage'
 							? 'See and clean up the data Voicebook keeps on this device.'
 							: 'Browser capabilities, privacy, and reader shortcuts.'}
@@ -443,11 +554,119 @@
 	</header>
 
 	{#if activeSection === 'models'}
+		<section class="settings-section" aria-labelledby="speech-engine-choice-title">
+			<header class="section-title">
+				<div>
+					<h2 id="speech-engine-choice-title">Reading voice</h2>
+					<p>
+						Where speech is generated. ElevenLabs voices use your own API key, sent only to
+						ElevenLabs.
+					</p>
+				</div>
+				<span
+					class="runtime-state"
+					class:ready={providersState.speechEngine === 'elevenlabs'
+						? providersState.elevenLabsReady
+						: installed}
+				>
+					<span></span>
+					{providersState.speechEngine === 'elevenlabs'
+						? providersState.elevenLabsReady
+							? 'ElevenLabs active'
+							: 'Key required'
+						: installed
+							? 'On-device active'
+							: 'Not installed'}
+				</span>
+			</header>
+
+			<div class="engine-list" role="radiogroup" aria-label="Speech engine">
+				<div class="engine-option" class:selected={providersState.speechEngine === 'local'}>
+					<button
+						class="engine-row"
+						type="button"
+						role="radio"
+						aria-checked={providersState.speechEngine === 'local'}
+						onclick={() => void chooseSpeechEngine('local')}
+					>
+						<span class="engine-radio" aria-hidden="true"></span>
+						<span class="engine-icon"><Mic2 size={16} /></span>
+						<span class="engine-copy">
+							<strong>On-device <em>· Supertonic 3</em></strong>
+							<small>Private and free — ten studio voices, works offline</small>
+						</span>
+						<span class="engine-state" class:ok={installed}>
+							{installed ? 'Ready' : 'Not installed'}
+						</span>
+					</button>
+				</div>
+				<div class="engine-option" class:selected={providersState.speechEngine === 'elevenlabs'}>
+					<button
+						class="engine-row"
+						type="button"
+						role="radio"
+						aria-checked={providersState.speechEngine === 'elevenlabs'}
+						onclick={() => void chooseSpeechEngine('elevenlabs')}
+					>
+						<span class="engine-radio" aria-hidden="true"></span>
+						<span class="engine-icon cloud"><Cloud size={16} /></span>
+						<span class="engine-copy">
+							<strong>ElevenLabs <em>· premium cloud voices</em></strong>
+							<small>Lifelike narration with word timing — bring your own API key</small>
+						</span>
+						<span class="engine-state" class:ok={providersState.elevenLabsReady}>
+							{providersState.elevenLabsReady ? 'Key saved' : 'API key required'}
+						</span>
+					</button>
+					{#if providersState.speechEngine === 'elevenlabs'}
+						<div class="engine-config">
+							<div class="engine-models" role="group" aria-label="ElevenLabs model">
+								{#each ELEVENLABS_MODELS as model (model.id)}
+									<button
+										type="button"
+										class="engine-model"
+										class:selected={providersState.elevenLabsModelId === model.id}
+										aria-pressed={providersState.elevenLabsModelId === model.id}
+										onclick={() => void providersState.setElevenLabsModel(model.id)}
+									>
+										<strong>{model.label}</strong>
+										<small>{model.tagline}</small>
+									</button>
+								{/each}
+							</div>
+							<ApiKeyField
+								label="ElevenLabs API key"
+								placeholder="sk_…"
+								keyUrl="https://elevenlabs.io/app/settings/api-keys"
+								hasKey={providersState.elevenLabsReady}
+								isDevKey={providersState.isDevKey('elevenlabs')}
+								onSave={saveElevenLabsKey}
+								onClear={() => saveElevenLabsKey('')}
+								onTest={testElevenLabsKey}
+							/>
+							{#if elUsage && elUsage.limit > 0}
+								<div class="el-usage">
+									<div>
+										<strong>{elUsage.tier} plan</strong>
+										<span>
+											{elUsage.used.toLocaleString()} of {elUsage.limit.toLocaleString()} characters used
+											· resets {elUsage.resetsAt.toLocaleDateString()}
+										</span>
+									</div>
+									<progress max={elUsage.limit} value={elUsage.used}></progress>
+								</div>
+							{/if}
+						</div>
+					{/if}
+				</div>
+			</div>
+		</section>
+
 		<section class="settings-section" aria-labelledby="engine-title">
 			<header class="section-title">
 				<div>
-					<h2 id="engine-title">Speech engine</h2>
-					<p>Downloaded once from Hugging Face, then run entirely in this browser.</p>
+					<h2 id="engine-title">On-device engine</h2>
+					<p>Downloaded once, then everything runs in this browser — even offline.</p>
 				</div>
 				<span class="runtime-state" class:ready={installed}>
 					<span></span>{installed ? 'Installed' : 'Not installed'}
@@ -486,21 +705,6 @@
 				</label>
 			</div>
 
-			<div class="setting-row">
-				<div>
-					<strong>Execution</strong>
-					<p>
-						{appState.capabilities.webgpu
-							? 'WebGPU acceleration is available on this device.'
-							: 'WebGPU is unavailable. Voicebook will use the slower WASM fallback.'}
-					</p>
-				</div>
-				<span class="capability-label">
-					<Cpu size={15} />
-					{appState.capabilities.webgpu ? 'WebGPU' : 'WASM'}
-				</span>
-			</div>
-
 			{#if progress.status === 'loading'}
 				<div class="install-progress" aria-live="polite">
 					<div>
@@ -518,7 +722,7 @@
 			{/if}
 
 			<footer class="section-actions">
-				<p>Apache-2.0 application · OpenRAIL-M model · estimated word timing</p>
+				<p>{appState.capabilities.webgpu ? 'Runs on WebGPU' : 'Runs on the WASM fallback'}</p>
 				<div>
 					{#if busy}
 						<button class="button" type="button" onclick={cancelInstall}>
@@ -544,102 +748,256 @@
 			</footer>
 		</section>
 
-		<section class="settings-section voices-section" aria-labelledby="voices-title">
-			<header class="section-title">
-				<div>
-					<h2 id="voices-title">Built-in voices</h2>
-					<p>Listen here, then choose the voice you want to use in the reader.</p>
-				</div>
-				<span class="voice-status">
-					{#if previewState === 'loading' && previewVoiceId}
-						Preparing {model.voices.find((voice) => voice.id === previewVoiceId)?.name} · {Math.round(
-							previewProgress
-						)}%
-					{:else if previewState === 'playing' && previewVoiceId}
-						Playing {model.voices.find((voice) => voice.id === previewVoiceId)?.name}
-					{:else}
-						{model.voices.length} voices
-					{/if}
-				</span>
-			</header>
-			<p class="sr-only" aria-live="polite">{previewAnnouncement}</p>
-			<ul class="voice-list" aria-label="Available voices">
-				{#each model.voices as voice (voice.id)}
-					<li class="voice-row" class:selected={appState.selectedVoiceId === voice.id}>
-						<button
-							class="voice-choice"
-							type="button"
-							aria-label={`Use ${voice.name}`}
-							aria-pressed={appState.selectedVoiceId === voice.id}
-							onclick={() => void appState.selectVoice(voice.id)}
-						>
-							<span class="voice-initial">{voice.name.charAt(0)}</span>
-							<span class="voice-copy">
-								<strong>{voice.name}</strong>
-								<small>{voice.gender ?? 'Voice'} · multilingual</small>
-							</span>
-							<span class="voice-check" aria-hidden="true"><Check size={13} /></span>
-						</button>
-						<button
-							class="preview-button"
-							class:active={voice.id === previewVoiceId}
-							type="button"
-							disabled={!installed || busy}
-							aria-label={previewButtonLabel(voice)}
-							title={installed
-								? previewButtonLabel(voice)
-								: 'Install Supertonic 3 to preview voices'}
-							onclick={() => void previewVoice(voice)}
-						>
-							{#if voice.id === previewVoiceId && previewState === 'loading'}
-								<LoaderCircle class="spin" size={15} />
-							{:else if voice.id === previewVoiceId && previewState === 'playing'}
-								<Square size={12} fill="currentColor" />
-							{:else}
-								<Play size={15} fill="currentColor" />
-							{/if}
-						</button>
-					</li>
-				{/each}
-			</ul>
-			{#if previewError}
-				<div class="inline-error preview-error" role="alert">
-					<AlertTriangle size={15} />
-					<span>{previewError}</span>
-				</div>
-			{/if}
-		</section>
-	{:else if activeSection === 'llm'}
-		{#if !llmState.eligible}
-			<section class="settings-section" aria-labelledby="llm-gate-title">
+		{#if providersState.speechEngine === 'elevenlabs'}
+			<section class="settings-section voices-section" aria-labelledby="el-voices-title">
 				<header class="section-title">
 					<div>
-						<h2 id="llm-gate-title">Not available on this device</h2>
+						<h2 id="el-voices-title">ElevenLabs voices</h2>
+						<p>Preview each voice, then choose the one the reader uses.</p>
+					</div>
+					<button
+						class="button"
+						type="button"
+						disabled={!providersState.elevenLabsReady}
+						onclick={() => void refreshElevenLabs()}
+					>
+						<RefreshCw size={14} /> Refresh
+					</button>
+				</header>
+				{#if providersState.elevenLabsVoices.length}
+					<ul class="voice-list" aria-label="ElevenLabs voices">
+						{#each providersState.elevenLabsVoices as voice (voice.id)}
+							<li class="voice-row" class:selected={providersState.elevenLabsVoiceId === voice.id}>
+								<button
+									class="voice-choice"
+									type="button"
+									aria-label={`Use ${voice.name}`}
+									aria-pressed={providersState.elevenLabsVoiceId === voice.id}
+									onclick={() => void player.chooseVoice(voice.id)}
+								>
+									<span class="voice-initial">{voice.name.charAt(0)}</span>
+									<span class="voice-copy">
+										<strong>{voice.name}</strong>
+										<small>{voice.description || 'ElevenLabs voice'}</small>
+									</span>
+									<span class="voice-check" aria-hidden="true"><Check size={13} /></span>
+								</button>
+								<button
+									class="preview-button"
+									class:active={elPreviewVoiceId === voice.id}
+									type="button"
+									disabled={!voice.previewUrl}
+									aria-label={elPreviewVoiceId === voice.id
+										? `Stop ${voice.name} preview`
+										: `Preview ${voice.name}`}
+									onclick={() => previewElevenLabsVoice(voice)}
+								>
+									{#if elPreviewVoiceId === voice.id}
+										<Square size={12} fill="currentColor" />
+									{:else}
+										<Play size={15} fill="currentColor" />
+									{/if}
+								</button>
+							</li>
+						{/each}
+					</ul>
+				{:else}
+					<div class="setting-row">
+						<div>
+							<strong>No voices yet</strong>
+							<p>
+								{providersState.elevenLabsReady
+									? 'Refreshing the voice list from your ElevenLabs account…'
+									: 'Save your ElevenLabs API key above to load your voices.'}
+							</p>
+						</div>
+					</div>
+				{/if}
+			</section>
+		{:else}
+			<section class="settings-section voices-section" aria-labelledby="voices-title">
+				<header class="section-title">
+					<div>
+						<h2 id="voices-title">Built-in voices</h2>
+						<p>Listen here, then choose the voice you want to use in the reader.</p>
+					</div>
+					<span class="voice-status">
+						{#if previewState === 'loading' && previewVoiceId}
+							Preparing {model.voices.find((voice) => voice.id === previewVoiceId)?.name} · {Math.round(
+								previewProgress
+							)}%
+						{:else if previewState === 'playing' && previewVoiceId}
+							Playing {model.voices.find((voice) => voice.id === previewVoiceId)?.name}
+						{:else}
+							{model.voices.length} voices
+						{/if}
+					</span>
+				</header>
+				<p class="sr-only" aria-live="polite">{previewAnnouncement}</p>
+				<ul class="voice-list" aria-label="Available voices">
+					{#each model.voices as voice (voice.id)}
+						<li class="voice-row" class:selected={appState.selectedVoiceId === voice.id}>
+							<button
+								class="voice-choice"
+								type="button"
+								aria-label={`Use ${voice.name}`}
+								aria-pressed={appState.selectedVoiceId === voice.id}
+								onclick={() => void appState.selectVoice(voice.id)}
+							>
+								<span class="voice-initial">{voice.name.charAt(0)}</span>
+								<span class="voice-copy">
+									<strong>{voice.name}</strong>
+									<small>{voice.gender ?? 'Voice'} · multilingual</small>
+								</span>
+								<span class="voice-check" aria-hidden="true"><Check size={13} /></span>
+							</button>
+							<button
+								class="preview-button"
+								class:active={voice.id === previewVoiceId}
+								type="button"
+								disabled={!installed || busy}
+								aria-label={previewButtonLabel(voice)}
+								title={installed
+									? previewButtonLabel(voice)
+									: 'Install Supertonic 3 to preview voices'}
+								onclick={() => void previewVoice(voice)}
+							>
+								{#if voice.id === previewVoiceId && previewState === 'loading'}
+									<LoaderCircle class="spin" size={15} />
+								{:else if voice.id === previewVoiceId && previewState === 'playing'}
+									<Square size={12} fill="currentColor" />
+								{:else}
+									<Play size={15} fill="currentColor" />
+								{/if}
+							</button>
+						</li>
+					{/each}
+				</ul>
+				{#if previewError}
+					<div class="inline-error preview-error" role="alert">
+						<AlertTriangle size={15} />
+						<span>{previewError}</span>
+					</div>
+				{/if}
+			</section>
+		{/if}
+	{:else if activeSection === 'llm'}
+		<section class="settings-section" aria-labelledby="llm-engine-title">
+			<header class="section-title">
+				<div>
+					<h2 id="llm-engine-title">Descriptions engine</h2>
+					<p>On-device is free and private. Cloud engines use your own key, sent only there.</p>
+				</div>
+				<span class="runtime-state" class:ready={narrationState.engineAvailable}>
+					<span></span>{narrationState.engineAvailable ? 'Ready' : 'Not configured'}
+				</span>
+			</header>
+
+			<div class="engine-list" role="radiogroup" aria-label="Descriptions engine">
+				<div class="engine-option" class:selected={providersState.descriptionEngine === 'local'}>
+					<button
+						class="engine-row"
+						type="button"
+						role="radio"
+						aria-checked={providersState.descriptionEngine === 'local'}
+						onclick={() => void chooseDescriptionEngine('local')}
+					>
+						<span class="engine-radio" aria-hidden="true"></span>
+						<span class="engine-icon"><BrainCircuit size={16} /></span>
+						<span class="engine-copy">
+							<strong>On-device</strong>
+							<small>Private and free — runs on this computer’s GPU</small>
+						</span>
+						<span class="engine-state" class:ok={llmState.eligible && llmState.installed}>
+							{!llmState.eligible
+								? 'Unavailable on this device'
+								: llmState.installed
+									? 'Ready'
+									: 'Not installed'}
+						</span>
+					</button>
+				</div>
+				{#each CLOUD_LLM_PROVIDERS as spec (spec.id)}
+					{@const active = providersState.descriptionEngine === spec.id}
+					<div class="engine-option" class:selected={active}>
+						<button
+							class="engine-row"
+							type="button"
+							role="radio"
+							aria-checked={active}
+							onclick={() => void chooseDescriptionEngine(spec.id)}
+						>
+							<span class="engine-radio" aria-hidden="true"></span>
+							<span class="engine-icon cloud"><Cloud size={16} /></span>
+							<span class="engine-copy">
+								<strong>{spec.label} <em>· {spec.vendor}</em></strong>
+								<small>{spec.tagline}</small>
+							</span>
+							<span class="engine-state" class:ok={providersState.hasKey(spec.id)}>
+								{providersState.hasKey(spec.id) ? 'Key saved' : 'API key required'}
+							</span>
+						</button>
+						{#if active}
+							<div class="engine-config">
+								<div class="engine-models" role="group" aria-label={`${spec.label} model`}>
+									{#each spec.models as model (model.id)}
+										<button
+											type="button"
+											class="engine-model"
+											class:selected={providersState.cloudLlmModelFor(spec.id) === model.id}
+											aria-pressed={providersState.cloudLlmModelFor(spec.id) === model.id}
+											onclick={() => void chooseCloudModel(spec.id, model.id)}
+										>
+											<strong>{model.label}</strong>
+											<small>{model.tagline}</small>
+										</button>
+									{/each}
+								</div>
+								<ApiKeyField
+									label={`${spec.vendor} API key`}
+									placeholder={spec.keyPlaceholder}
+									keyUrl={spec.keyUrl}
+									hasKey={providersState.hasKey(spec.id)}
+									isDevKey={providersState.isDevKey(spec.id)}
+									onSave={(value) => saveProviderKey(spec.id, value)}
+									onClear={() => saveProviderKey(spec.id, '')}
+									onTest={() => verifyCloudLlmKey(spec.id, providersState.keyFor(spec.id) ?? '')}
+								/>
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		</section>
+
+		<section class="settings-section" aria-labelledby="llm-models-title">
+			<header class="section-title">
+				<div>
+					<h2 id="llm-models-title">On-device models</h2>
+					<p>Downloaded once, then everything runs in this browser.</p>
+				</div>
+				<span class="runtime-state" class:ready={llmState.installed}>
+					<span></span>
+					{llmState.phase === 'probing'
+						? 'Warming up…'
+						: llmState.installed
+							? 'Installed'
+							: 'Not installed'}
+				</span>
+			</header>
+
+			{#if !llmState.eligible}
+				<div class="setting-row">
+					<div>
+						<strong>Not available on this device</strong>
 						<p>
 							{llmState.policy.reason ?? 'The language model needs a desktop browser with WebGPU.'}
-							Equations and tables are read with built-in fallbacks instead.
+							A cloud engine above still works here.
 						</p>
 					</div>
 					<span class="capability-label"><Cpu size={15} /> WebGPU required</span>
-				</header>
-			</section>
-		{:else}
-			<section class="settings-section" aria-labelledby="llm-models-title">
-				<header class="section-title">
-					<div>
-						<h2 id="llm-models-title">Models</h2>
-						<p>Downloaded once from Hugging Face, then run entirely in this browser.</p>
-					</div>
-					<span class="runtime-state" class:ready={llmState.installed}>
-						<span></span>
-						{llmState.phase === 'probing'
-							? 'Warming up…'
-							: llmState.installed
-								? 'Installed'
-								: 'Not installed'}
-					</span>
-				</header>
-
+				</div>
+			{:else}
 				<div class="llm-grid">
 					{#each LLM_CATALOG as spec (spec.id)}
 						{@const specInstalled = llmState.installedModels.includes(spec.id)}
@@ -755,110 +1113,110 @@
 						<span>{llmError || llmState.error}</span>
 					</div>
 				{/if}
-			</section>
+			{/if}
+		</section>
 
-			<section class="settings-section" aria-labelledby="llm-behavior-title">
-				<header class="section-title">
-					<div>
-						<h2 id="llm-behavior-title">Behavior</h2>
-						<p>How Voicebook uses the language model while you read.</p>
-					</div>
-				</header>
-
-				<div class="setting-row">
-					<div>
-						<strong>Describe visuals automatically</strong>
-						<p>
-							When a document contains equations, tables, or diagrams, rewrite them in the
-							background as soon as it opens.
-						</p>
-					</div>
-					<label class="check-control">
-						<input
-							type="checkbox"
-							checked={llmState.narrationEnabled}
-							disabled={!llmState.installed}
-							onchange={toggleNarrationEnabled}
-						/>
-						<span>{llmState.narrationEnabled ? 'On' : 'Off'}</span>
-					</label>
+		<section class="settings-section" aria-labelledby="llm-behavior-title">
+			<header class="section-title">
+				<div>
+					<h2 id="llm-behavior-title">Behavior</h2>
+					<p>How Voicebook uses the language model while you read.</p>
 				</div>
+			</header>
 
-				{#if narrationState.error}
-					<div class="inline-error" role="alert">
-						<AlertTriangle size={15} />
-						<span>{narrationState.error}</span>
-					</div>
-				{/if}
+			<div class="setting-row">
+				<div>
+					<strong>Describe visuals automatically</strong>
+					<p>
+						When a document contains equations, tables, or diagrams, rewrite them in the background
+						as soon as it opens.
+					</p>
+				</div>
+				<label class="check-control">
+					<input
+						type="checkbox"
+						checked={llmState.narrationEnabled}
+						disabled={!narrationState.engineAvailable}
+						onchange={toggleNarrationEnabled}
+					/>
+					<span>{llmState.narrationEnabled ? 'On' : 'Off'}</span>
+				</label>
+			</div>
 
-				<footer class="section-actions">
-					<p>Descriptions are stored with each document and only change when the source changes.</p>
-					<div>
-						<button
-							class="button"
-							type="button"
-							disabled={regenerating || !llmState.installed}
-							onclick={regenerateNarrations}
-						>
-							{#if regenerating}<LoaderCircle class="spin" size={15} />{:else}<RefreshCw
-									size={15}
-								/>{/if}
-							Regenerate all descriptions
-						</button>
-					</div>
-				</footer>
-			</section>
+			{#if narrationState.error}
+				<div class="inline-error" role="alert">
+					<AlertTriangle size={15} />
+					<span>{narrationState.error}</span>
+				</div>
+			{/if}
 
-			<section class="settings-section" aria-labelledby="llm-prompts-title">
-				<header class="section-title">
-					<div>
-						<h2 id="llm-prompts-title">Prompts</h2>
-						<p>
-							Exactly what the model is asked, per element type. Edited prompts rewrite documents
-							the next time they open.
-						</p>
-					</div>
-				</header>
+			<footer class="section-actions">
+				<p>Descriptions are stored with each document and only change when the source changes.</p>
+				<div>
+					<button
+						class="button"
+						type="button"
+						disabled={regenerating || !narrationState.engineAvailable}
+						onclick={regenerateNarrations}
+					>
+						{#if regenerating}<LoaderCircle class="spin" size={15} />{:else}<RefreshCw
+								size={15}
+							/>{/if}
+						Regenerate all descriptions
+					</button>
+				</div>
+			</footer>
+		</section>
 
-				{#each PROMPT_FIELDS as field (field.key)}
-					<div class="prompt-editor">
-						<div class="prompt-editor-head">
-							<div>
-								<strong>{field.label}</strong>
-								{#if promptCustom(field.key)}<span class="prompt-custom-badge">Custom</span>{/if}
-								<p>{field.hint}</p>
-							</div>
-							<div class="prompt-editor-actions">
-								{#if promptSavedKey === field.key}
-									<span class="installed-mark"><Check size={13} /> Saved</span>
-								{/if}
-								<button
-									class="button"
-									type="button"
-									disabled={!promptCustom(field.key) && !promptDirty(field.key)}
-									onclick={() => resetPrompt(field.key)}
-								>
-									Reset
-								</button>
-								<button
-									class="button primary"
-									type="button"
-									disabled={!promptDirty(field.key)}
-									onclick={() => savePrompt(field.key)}
-								>
-									Save
-								</button>
-							</div>
+		<section class="settings-section" aria-labelledby="llm-prompts-title">
+			<header class="section-title">
+				<div>
+					<h2 id="llm-prompts-title">Prompts</h2>
+					<p>
+						Exactly what the model is asked, per element type. Edited prompts rewrite documents the
+						next time they open.
+					</p>
+				</div>
+			</header>
+
+			{#each PROMPT_FIELDS as field (field.key)}
+				<div class="prompt-editor">
+					<div class="prompt-editor-head">
+						<div>
+							<strong>{field.label}</strong>
+							{#if promptCustom(field.key)}<span class="prompt-custom-badge">Custom</span>{/if}
+							<p>{field.hint}</p>
 						</div>
-						<textarea
-							rows={field.key === 'system' ? 6 : 4}
-							spellcheck="false"
-							aria-label={`${field.label} prompt template`}
-							bind:value={promptDrafts[field.key]}></textarea>
+						<div class="prompt-editor-actions">
+							{#if promptSavedKey === field.key}
+								<span class="installed-mark"><Check size={13} /> Saved</span>
+							{/if}
+							<button
+								class="button"
+								type="button"
+								disabled={!promptCustom(field.key) && !promptDirty(field.key)}
+								onclick={() => resetPrompt(field.key)}
+							>
+								Reset
+							</button>
+							<button
+								class="button primary"
+								type="button"
+								disabled={!promptDirty(field.key)}
+								onclick={() => savePrompt(field.key)}
+							>
+								Save
+							</button>
+						</div>
 					</div>
-				{/each}
-			</section>
-		{/if}
+					<textarea
+						rows={field.key === 'system' ? 6 : 4}
+						spellcheck="false"
+						aria-label={`${field.label} prompt template`}
+						bind:value={promptDrafts[field.key]}></textarea>
+				</div>
+			{/each}
+		</section>
 	{:else if activeSection === 'storage'}
 		<section class="settings-section" aria-labelledby="storage-title">
 			<header class="section-title">
@@ -1271,6 +1629,199 @@
 		margin: 0 auto 0 0;
 		color: var(--faint);
 		font-size: 10px;
+	}
+
+	.engine-list {
+		display: grid;
+		gap: 10px;
+		margin-top: 16px;
+	}
+
+	.engine-option {
+		overflow: hidden;
+		border: 1px solid var(--line);
+		border-radius: 12px;
+		background: color-mix(in srgb, var(--surface, transparent) 60%, transparent);
+		transition:
+			border-color 150ms var(--ease),
+			box-shadow 150ms var(--ease);
+	}
+
+	.engine-option.selected {
+		border-color: color-mix(in srgb, var(--primary) 55%, var(--line));
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent);
+	}
+
+	.engine-row {
+		display: flex;
+		width: 100%;
+		min-height: 62px;
+		align-items: center;
+		gap: 13px;
+		padding: 10px 16px;
+		border: 0;
+		background: transparent;
+		color: var(--text);
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.engine-row:hover {
+		background: var(--hover);
+	}
+
+	.engine-radio {
+		display: grid;
+		width: 15px;
+		height: 15px;
+		flex: none;
+		place-items: center;
+		border: 1.5px solid var(--line-strong);
+		border-radius: 50%;
+	}
+
+	.engine-option.selected .engine-radio {
+		border-color: var(--primary);
+	}
+
+	.engine-option.selected .engine-radio::after {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: var(--primary);
+		content: '';
+	}
+
+	.engine-icon {
+		display: grid;
+		width: 32px;
+		height: 32px;
+		flex: none;
+		place-items: center;
+		border-radius: 8px;
+		background: var(--primary-soft);
+		color: var(--primary);
+	}
+
+	.engine-icon.cloud {
+		background: var(--hover-strong, var(--hover));
+		color: var(--muted);
+	}
+
+	.engine-copy {
+		min-width: 0;
+		flex: 1;
+	}
+
+	.engine-copy strong {
+		display: block;
+		font-size: 11.5px;
+		font-weight: 650;
+	}
+
+	.engine-copy strong em {
+		color: var(--faint);
+		font-size: 10px;
+		font-style: normal;
+		font-weight: 550;
+	}
+
+	.engine-copy small {
+		display: block;
+		margin-top: 2px;
+		color: var(--faint);
+		font-size: 9px;
+	}
+
+	.engine-state {
+		flex: none;
+		padding: 3px 9px;
+		border: 1px solid var(--line-strong);
+		border-radius: 999px;
+		color: var(--muted);
+		font-size: 9px;
+		font-weight: 650;
+	}
+
+	.engine-state.ok {
+		border-color: transparent;
+		background: color-mix(in srgb, var(--success) 14%, transparent);
+		color: var(--success);
+	}
+
+	.engine-config {
+		display: grid;
+		gap: 14px;
+		padding: 14px 16px 16px;
+		border-top: 1px solid var(--line);
+	}
+
+	.engine-models {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+		gap: 8px;
+	}
+
+	.engine-model {
+		padding: 10px 12px;
+		border: 1px solid var(--line-strong);
+		border-radius: 8px;
+		background: transparent;
+		color: var(--muted);
+		cursor: pointer;
+		text-align: left;
+		transition:
+			border-color 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.engine-model:hover {
+		color: var(--text);
+	}
+
+	.engine-model.selected {
+		border-color: color-mix(in srgb, var(--primary) 60%, var(--line-strong));
+		background: color-mix(in srgb, var(--primary) 7%, transparent);
+		color: var(--text);
+	}
+
+	.engine-model strong {
+		display: block;
+		font-size: 10.5px;
+		font-weight: 650;
+	}
+
+	.engine-model small {
+		display: block;
+		margin-top: 2px;
+		color: var(--faint);
+		font-size: 8.5px;
+	}
+
+	.el-usage {
+		display: grid;
+		gap: 7px;
+		padding: 11px 13px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+	}
+
+	.el-usage strong {
+		font-size: 10px;
+		font-weight: 650;
+		text-transform: capitalize;
+	}
+
+	.el-usage span {
+		display: block;
+		margin-top: 2px;
+		color: var(--faint);
+		font-size: 9px;
+	}
+
+	.el-usage progress {
+		width: 100%;
+		height: 5px;
 	}
 
 	.prompt-editor {

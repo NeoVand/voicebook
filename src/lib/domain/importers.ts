@@ -979,7 +979,69 @@ export function repeatedEdgeLines(pages: string[][]): Set<string> {
 	);
 }
 
+/** Join per-page LiteParse output into one markdown document, preferring the
+ * structured markdown and falling back to each page's plain text. */
+export function liteparsePageMarkdown(pages: Array<{ markdown?: string; text?: string }>): string {
+	return pages
+		.map((page) => page.markdown?.trim() || page.text?.trim() || '')
+		.filter(Boolean)
+		.join('\n\n');
+}
+
+/** A text layer this thin means the pages are scans, not embedded text. */
+export function pdfLooksScanned(markdown: string, pageCount: number): boolean {
+	const letters = markdown.replace(/[^\p{L}\p{N}]/gu, '').length;
+	return letters < Math.max(24, pageCount * 8);
+}
+
+/**
+ * Preferred PDF path: LiteParse (run-llama's wasm extractor) converts the
+ * whole document to markdown — headings, lists, and tables land in the same
+ * pipeline as native markdown files, so equations-in-text, tables, and
+ * structure all survive import. Returns null when the library cannot run
+ * here (old browser, test environment) so the legacy extractor takes over;
+ * a scanned-PDF verdict propagates as the user-facing ImportError.
+ */
+async function parsePdfWithLiteparse(file: File): Promise<ParsedSource | null> {
+	try {
+		const [glue, wasm] = await Promise.all([
+			import('@llamaindex/liteparse-wasm'),
+			import('@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm?url')
+		]);
+		await glue.default({ module_or_path: wasm.default });
+		const parser = new glue.LiteParse({
+			ocrEnabled: false,
+			outputFormat: 'markdown',
+			extractLinks: true,
+			imageMode: 'off',
+			quiet: true
+		});
+		let result: Awaited<ReturnType<typeof parser.parse>>;
+		try {
+			result = await parser.parse(new Uint8Array(await file.arrayBuffer()));
+		} finally {
+			parser.free();
+		}
+		const markdown = liteparsePageMarkdown(result.pages);
+		if (pdfLooksScanned(markdown, result.pages.length)) {
+			throw new ImportError(
+				'This PDF appears to be scanned. OCR support is planned, but is not part of this release.',
+				'scanned-pdf'
+			);
+		}
+		const parsed = parseMarkdown(markdown);
+		return parsed.blocks.length ? parsed : null;
+	} catch (error) {
+		if (error instanceof ImportError) throw error;
+		// Initialization or parse trouble: quietly fall back to the legacy
+		// pdf.js text extractor rather than failing the import outright.
+		return null;
+	}
+}
+
 async function parsePdf(file: File): Promise<ParsedSource> {
+	const structured = await parsePdfWithLiteparse(file);
+	if (structured) return structured;
 	try {
 		const pdfjs =
 			typeof window === 'undefined'

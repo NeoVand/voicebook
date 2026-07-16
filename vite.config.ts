@@ -9,8 +9,10 @@ const basePath = (process.env.BASE_PATH || '') as '' | `/${string}`;
 
 export default defineConfig({
 	// transformers.js loads its ONNX/WASM backends dynamically at runtime;
-	// pre-bundling breaks those dynamic imports inside the LLM worker.
-	optimizeDeps: { exclude: ['@huggingface/transformers'] },
+	// pre-bundling breaks those dynamic imports inside the LLM worker. The
+	// liteparse wasm-bindgen glue resolves its .wasm beside itself the same
+	// way.
+	optimizeDeps: { exclude: ['@huggingface/transformers', '@llamaindex/liteparse-wasm'] },
 	// Module workers (tts.worker.ts, llm/worker.ts) must be emitted as ES
 	// modules — the classic-worker default cannot use import statements.
 	worker: { format: 'es' },

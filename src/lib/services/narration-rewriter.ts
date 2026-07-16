@@ -1,8 +1,10 @@
 /**
- * Single-shot narration rewriting over the LLM worker: build the prompt for
+ * Single-shot narration rewriting over the description engine — the on-device
+ * LLM worker or a bring-your-own-key cloud provider: build the prompt for
  * one construct, generate, sanitize; retry once with a stricter prompt when
- * the output is unusable. Throws when no usable narration can be produced —
- * the scheduler decides retry/fail policy above this.
+ * the output is unusable. The same sanitizer and grounding guards apply to
+ * every engine. Throws when no usable narration can be produced — the
+ * scheduler decides retry/fail policy above this.
  */
 import { mathBlockReading, type NarrationConstruct } from '$lib/domain/narration';
 import {
@@ -11,7 +13,12 @@ import {
 	sanitizeNarration,
 	type NarrationPromptOverrides
 } from '$lib/domain/narration-prompts';
-import { activeLlmHost } from './llm/llm-client';
+import type { CloudLlmProvider } from '$lib/domain/provider-catalog';
+import { generateCloud } from './cloud-llm';
+import { activeLlmHost, type LlmChatMessage } from './llm/llm-client';
+
+export type NarrationEngine =
+	{ type: 'local' } | { type: 'cloud'; provider: CloudLlmProvider; model: string; apiKey: string };
 
 export class NarrationRewriteError extends Error {
 	constructor(
@@ -29,17 +36,32 @@ export interface NarrationRewriteRequest {
 	documentContext: string;
 	/** User-edited prompt templates from settings, if any. */
 	promptOverrides?: NarrationPromptOverrides;
+	/** Which engine generates; defaults to the on-device worker. */
+	engine?: NarrationEngine;
 }
 
 export async function rewriteConstruct(
 	request: NarrationRewriteRequest,
 	signal?: AbortSignal
 ): Promise<string> {
-	const host = activeLlmHost();
-	if (!host?.ready) {
+	const engine = request.engine ?? { type: 'local' as const };
+	const host = engine.type === 'local' ? activeLlmHost() : null;
+	if (engine.type === 'local' && !host?.ready) {
 		throw new NarrationRewriteError('The narration model is not loaded.', 'no-model');
 	}
 	const params = NARRATION_GENERATION_PARAMS[request.construct.kind];
+	const generate = (messages: LlmChatMessage[]): Promise<string> =>
+		engine.type === 'cloud'
+			? generateCloud(engine.provider, engine.model, engine.apiKey, messages, {
+					maxNewTokens: params.maxNewTokens,
+					temperature: params.temperature,
+					signal
+				})
+			: host!.generate(messages, {
+					maxNewTokens: params.maxNewTokens,
+					temperature: params.temperature,
+					signal
+				});
 	const reading =
 		request.construct.kind === 'math-block' ? mathBlockReading(request.construct.source) : null;
 
@@ -50,11 +72,7 @@ export async function rewriteConstruct(
 		});
 		let raw: string;
 		try {
-			raw = await host.generate(messages, {
-				maxNewTokens: params.maxNewTokens,
-				temperature: params.temperature,
-				signal
-			});
+			raw = await generate(messages);
 		} catch (error) {
 			throw new NarrationRewriteError(
 				error instanceof Error ? error.message : 'Narration generation failed.',

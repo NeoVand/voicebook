@@ -1,14 +1,18 @@
 <script lang="ts">
 	import { AlertTriangle, Maximize2, Minimize2, Workflow } from '@lucide/svelte';
 	import type { Attachment } from 'svelte/attachments';
+	import type { Snippet } from 'svelte';
 	import { renderMermaid } from '$lib/services/mermaid';
 
 	interface Props {
 		id: string;
 		source: string;
+		/** Replaces the built-in source expander (the reader passes its
+		 * construct panel with the spoken description and edit controls). */
+		panel?: Snippet;
 	}
 
-	let { id, source }: Props = $props();
+	let { id, source, panel }: Props = $props();
 	let fullSize = $state(false);
 	const componentId = $props.id();
 	const captionId = `${componentId}-caption`;
@@ -102,10 +106,14 @@
 		</div>
 	</div>
 
-	<details>
-		<summary>View diagram source</summary>
-		<pre><code>{source}</code></pre>
-	</details>
+	{#if panel}
+		{@render panel()}
+	{:else}
+		<details>
+			<summary>View diagram source</summary>
+			<pre><code>{source}</code></pre>
+		</details>
+	{/if}
 </figure>
 
 <style>

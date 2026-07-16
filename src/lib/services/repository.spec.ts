@@ -4,6 +4,7 @@ import { documentFromText } from '$lib/domain/importers';
 import type { AudioVariantMeta } from '$lib/domain/types';
 import {
 	clearGeneratedAudio,
+	deleteAudioForSegments,
 	deleteDocument,
 	getAudio,
 	getDocument,
@@ -169,6 +170,31 @@ describe('local repository', () => {
 
 		await clearGeneratedAudio();
 		expect(await getAudio(stored.key)).toBeNull();
+		await deleteDocument(document.id);
+	});
+
+	it('purges every variant of a rewritten segment and leaves the rest alone', async () => {
+		opfsEnabled = true;
+		const document = documentFromText('Rewrites', 'Swap my spoken text.');
+		await putDocument(document);
+		const rewritten = await putAudio(
+			{ ...audioMeta(document.id, 'stale-variant'), segmentId: 'b1:n0' },
+			new Blob(['old'], { type: 'audio/wav' })
+		);
+		const untouched = await putAudio(
+			{ ...audioMeta(document.id, 'fresh-variant'), segmentId: 'b2:s0' },
+			new Blob(['new'], { type: 'audio/wav' })
+		);
+
+		await deleteAudioForSegments(document.id, []);
+		expect(await getAudio(rewritten.key)).not.toBeNull();
+
+		await deleteAudioForSegments(document.id, ['b1:n0', 'b9:missing']);
+		expect(await getAudio(rewritten.key)).toBeNull();
+		expect(await getAudio(untouched.key)).not.toBeNull();
+
+		await deleteAudioForSegments(document.id, ['b9:missing']);
+		expect(await getAudio(untouched.key)).not.toBeNull();
 		await deleteDocument(document.id);
 	});
 

@@ -1,17 +1,23 @@
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { segmentBlocks, segmentsEqual } from '$lib/domain/segmenter';
 import {
 	NARRATION_PROMPT_VERSION,
+	narrationConstructs,
 	reconcileNarrations,
 	type NarrationConstruct
 } from '$lib/domain/narration';
 import { blockPositions, documentContextFor, prioritizeQueue } from '$lib/domain/narration-queue';
 import type { NarrationEntry, NormalizedDocument } from '$lib/domain/types';
-import { NarrationRewriteError, rewriteConstruct } from '$lib/services/narration-rewriter';
+import {
+	NarrationRewriteError,
+	rewriteConstruct,
+	type NarrationEngine
+} from '$lib/services/narration-rewriter';
 import { ttsClient } from '$lib/services/tts-client';
 import { appState } from './app-state.svelte';
 import { llmState } from './llm.svelte';
 import { player } from './player.svelte';
+import { providersState } from './providers.svelte';
 
 export type NarrationPhase = 'idle' | 'running' | 'paused-gpu' | 'error';
 
@@ -24,6 +30,15 @@ const OOM_PATTERN = /out of memory|memory|allocation|buffer|device.*lost|mapasyn
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Keep only the user's pinned edits when clearing narrations in bulk. */
+function manualOnly(narrations: Record<string, NarrationEntry>): Record<string, NarrationEntry> {
+	const kept: Record<string, NarrationEntry> = {};
+	for (const [id, entry] of Object.entries(narrations)) {
+		if (entry.origin === 'manual') kept[id] = entry;
+	}
+	return kept;
 }
 
 /**
@@ -40,6 +55,10 @@ export class NarrationState {
 	completed = $state(0);
 	failed = $state(0);
 	error = $state('');
+	/** Constructs being explicitly regenerated right now — their previous text
+	 * keeps playing until the replacement lands; the reader panel shows a
+	 * transient spinner from this set. */
+	regenerating = new SvelteSet<string>();
 
 	private runToken = 0;
 	private queue: NarrationConstruct[] = [];
@@ -64,6 +83,31 @@ export class NarrationState {
 	}
 
 	/**
+	 * The engine that would generate descriptions right now: the selected
+	 * cloud provider when it has a key, otherwise the on-device model when
+	 * this device can run it and it is installed. Null when neither can.
+	 */
+	get engine(): NarrationEngine | null {
+		const cloud = providersState.cloudDescriptionEngine;
+		if (cloud) return { type: 'cloud', ...cloud };
+		if (providersState.descriptionEngine !== 'local') return null;
+		return llmState.eligible && llmState.installed ? { type: 'local' } : null;
+	}
+
+	get engineAvailable(): boolean {
+		return this.engine !== null;
+	}
+
+	/** Warm the on-device model when it is the engine; cloud engines are
+	 * always "ready" (each call carries the key). */
+	private async ensureEngineReady(): Promise<boolean> {
+		const engine = this.engine;
+		if (!engine) return false;
+		if (engine.type === 'cloud') return true;
+		return llmState.ensureReadyForNarration();
+	}
+
+	/**
 	 * Reconcile a freshly opened document and start the background queue.
 	 * Call after player.setDocument(document) — results are applied through
 	 * player.book so the reader re-renders.
@@ -76,8 +120,8 @@ export class NarrationState {
 		this.error = '';
 		const token = ++this.runToken;
 
-		await llmState.initialize();
-		const active = llmState.eligible && llmState.narrationEnabled && llmState.installed;
+		await Promise.all([llmState.initialize(), providersState.initialize()]);
+		const active = llmState.narrationEnabled && this.engineAvailable;
 
 		const book = player.book;
 		if (!book || book.id !== document.id || token !== this.runToken) return;
@@ -122,7 +166,7 @@ export class NarrationState {
 		this.total = this.queue.length;
 		if (!this.queue.length) return;
 
-		const ready = await llmState.ensureReadyForNarration();
+		const ready = await this.ensureEngineReady();
 		if (token !== this.runToken) return;
 		if (!ready) {
 			this.queue = [];
@@ -137,6 +181,7 @@ export class NarrationState {
 	stop(): void {
 		this.runToken += 1;
 		this.queue = [];
+		this.regenerating.clear();
 		this.dirty = false;
 		if (this.rebindTimer) clearTimeout(this.rebindTimer);
 		this.rebindTimer = null;
@@ -168,9 +213,9 @@ export class NarrationState {
 			onProgress(this.done, this.total);
 		}
 		try {
-			// If the model cannot run, settle pending entries as failed so the
+			// If no engine can run, settle pending entries as failed so the
 			// audio pass and MP3 export proceed over final fallbacks.
-			const ready = await llmState.ensureReadyForNarration();
+			const ready = await this.ensureEngineReady();
 			if (!ready) {
 				const book = player.book;
 				if (book && book.id === this.documentId) {
@@ -201,20 +246,97 @@ export class NarrationState {
 		}
 	}
 
-	/** Drop every stored narration in the library and rewrite the open
-	 * document immediately; other documents regenerate on their next open. */
+	/** Drop every generated narration in the library (manual edits stay
+	 * pinned) and rewrite the open document immediately; other documents
+	 * regenerate on their next open. */
 	async regenerateAll(): Promise<void> {
 		for (const document of appState.documents) {
 			if (!document.narrations || !Object.keys(document.narrations).length) continue;
 			if (player.book?.id === document.id) continue;
-			await appState.saveDocument({ ...document, narrations: {} });
+			await appState.saveDocument({
+				...document,
+				narrations: manualOnly(document.narrations)
+			});
 		}
+		await this.regenerateDocument();
+	}
+
+	/** Drop the open document's generated narrations (manual edits stay) and
+	 * rewrite it now. */
+	async regenerateDocument(): Promise<void> {
 		const book = player.book;
-		if (book) {
-			book.narrations = {};
-			this.flushRebind();
-			await this.open(book);
+		if (!book) return;
+		book.narrations = manualOnly(book.narrations ?? {});
+		// open() reconciles — constructs re-queue and segments swap once.
+		await this.open(book);
+	}
+
+	/**
+	 * Pin a user-edited description for one construct. Applies (and
+	 * invalidates that construct's cached audio) immediately; survives prompt
+	 * edits and bulk regeneration until the construct's source changes.
+	 */
+	async setManualText(constructId: string, text: string): Promise<void> {
+		const book = player.book;
+		if (!book || book.id !== this.documentId) return;
+		const construct = this.constructById(constructId);
+		const trimmed = text.replace(/\s+/g, ' ').trim();
+		if (!construct || !trimmed) return;
+		// An in-flight or queued LLM rewrite must not overwrite the edit.
+		this.queue = this.queue.filter((candidate) => candidate.id !== constructId);
+		this.regenerating.delete(constructId);
+		book.narrations = {
+			...(book.narrations ?? {}),
+			[constructId]: {
+				constructId,
+				kind: construct.kind,
+				status: 'ready',
+				text: trimmed,
+				sourceHash: construct.sourceHash,
+				promptVersion: NARRATION_PROMPT_VERSION,
+				origin: 'manual',
+				updatedAt: Date.now()
+			}
+		};
+		this.flushRebind();
+		this.schedulePersist();
+	}
+
+	/**
+	 * Rewrite one construct with the current engine, replacing whatever text
+	 * it has (including a manual edit — the button is the explicit consent).
+	 * The previous text keeps playing until the replacement lands.
+	 */
+	async regenerateConstruct(constructId: string): Promise<void> {
+		const book = player.book;
+		if (!book || book.id !== this.documentId || this.regenerating.has(constructId)) return;
+		const construct = this.constructById(constructId);
+		if (!construct) return;
+		this.regenerating.add(constructId);
+		this.queue = [construct, ...this.queue.filter((candidate) => candidate.id !== constructId)];
+		if (this.working) {
+			this.total += 1;
+			return;
 		}
+		const token = ++this.runToken;
+		this.total = this.queue.length;
+		this.completed = 0;
+		this.failed = 0;
+		const ready = await this.ensureEngineReady();
+		if (token !== this.runToken) return;
+		if (!ready) {
+			this.queue = [];
+			this.regenerating.delete(constructId);
+			this.error = 'No description engine is available right now.';
+			return;
+		}
+		void this.run(token);
+	}
+
+	private constructById(id: string): NarrationConstruct | undefined {
+		const book = player.book;
+		if (!book) return undefined;
+		return narrationConstructs(book.blocks).find((candidate) => candidate.id === id);
 	}
 
 	/* ── Internals ─────────────────────────────────────────────────────── */
@@ -232,7 +354,8 @@ export class NarrationState {
 	private async run(token: number): Promise<void> {
 		this.phase = 'running';
 		while (token === this.runToken && this.queue.length) {
-			await this.gpuQuiet(token);
+			// Cloud engines never contend with the speech engine for the GPU.
+			if (this.engine?.type === 'local') await this.gpuQuiet(token);
 			if (token !== this.runToken) return;
 			const construct = this.queue.shift()!;
 			try {
@@ -242,7 +365,7 @@ export class NarrationState {
 				this.completed += 1;
 			} catch (error) {
 				if (token !== this.runToken) return;
-				if (this.isOom(error)) {
+				if (this.isOom(error) && this.engine?.type === 'local') {
 					const stopped = await this.handleOom(construct, token);
 					if (stopped || token !== this.runToken) return;
 					continue;
@@ -287,10 +410,12 @@ export class NarrationState {
 
 	private async rewrite(construct: NarrationConstruct, token: number): Promise<string> {
 		const book = player.book;
+		const engine = this.engine ?? undefined;
 		const request = {
 			construct,
 			documentContext: documentContextFor(book?.blocks ?? [], construct),
-			promptOverrides: llmState.promptOverrides
+			promptOverrides: llmState.promptOverrides,
+			engine
 		};
 		try {
 			return await rewriteConstruct(request);
@@ -301,8 +426,10 @@ export class NarrationState {
 				error.reason === 'generation-failed' &&
 				!this.isOom(error)
 			) {
-				// One transient-error retry after the GPU quiets down.
-				await this.gpuQuiet(token);
+				// One transient-error retry: local waits for the GPU to quiet
+				// down, cloud just backs off briefly.
+				if (engine?.type === 'cloud') await delay(1_500);
+				else await this.gpuQuiet(token);
 				if (token !== this.runToken) throw error;
 				return await rewriteConstruct(request);
 			}
@@ -344,13 +471,17 @@ export class NarrationState {
 	}
 
 	private entryFor(construct: NarrationConstruct, text?: string): NarrationEntry {
+		const engine = this.engine;
 		return {
 			constructId: construct.id,
 			kind: construct.kind,
 			status: text ? 'ready' : 'failed',
 			...(text ? { text } : {}),
 			sourceHash: construct.sourceHash,
-			modelId: llmState.activeModelId ?? undefined,
+			modelId:
+				engine?.type === 'cloud'
+					? `${engine.provider}:${engine.model}`
+					: (llmState.activeModelId ?? undefined),
 			promptVersion: NARRATION_PROMPT_VERSION,
 			promptHash: llmState.promptHashes[construct.kind],
 			updatedAt: Date.now()
@@ -360,6 +491,17 @@ export class NarrationState {
 	private applyResult(construct: NarrationConstruct, text: string): void {
 		const book = player.book;
 		if (!book || book.id !== this.documentId) return;
+		const existing = book.narrations?.[construct.id];
+		const explicit = this.regenerating.delete(construct.id);
+		// A manual edit that landed while this rewrite was in flight wins —
+		// unless the user explicitly asked for this regeneration.
+		if (
+			existing?.origin === 'manual' &&
+			existing.sourceHash === construct.sourceHash &&
+			!explicit
+		) {
+			return;
+		}
 		book.narrations = {
 			...(book.narrations ?? {}),
 			[construct.id]: this.entryFor(construct, text)
@@ -371,6 +513,11 @@ export class NarrationState {
 	private applyFailure(construct: NarrationConstruct): void {
 		const book = player.book;
 		if (!book || book.id !== this.documentId) return;
+		const existing = book.narrations?.[construct.id];
+		this.regenerating.delete(construct.id);
+		// An explicit regenerate that fails keeps the previous good text
+		// instead of downgrading a ready construct to its fallback.
+		if (existing?.status === 'ready' && existing.text) return;
 		book.narrations = { ...(book.narrations ?? {}), [construct.id]: this.entryFor(construct) };
 		this.scheduleRebind();
 		this.schedulePersist();

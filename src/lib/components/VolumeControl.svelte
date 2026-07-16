@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Volume1, Volume2, VolumeX } from '@lucide/svelte';
 	import type { Attachment } from 'svelte/attachments';
+	import { fly } from 'svelte/transition';
 
 	interface Props {
 		volume: number;
@@ -30,173 +31,146 @@
 
 <div class="volume-control" {@attach trackRoot}>
 	<button
-		class="mobile-volume-trigger"
+		class="volume-trigger"
 		class:open
 		type="button"
 		aria-label={`Volume ${Math.round(volume * 100)} percent`}
 		aria-expanded={open}
-		aria-controls="mobile-volume-popover"
+		aria-controls="volume-popover"
 		title="Volume"
 		onclick={() => (open = !open)}
 	>
 		{#if volume === 0}
-			<VolumeX size={16} aria-hidden="true" />
+			<VolumeX size={17} aria-hidden="true" />
 		{:else if volume < 0.55}
-			<Volume1 size={16} aria-hidden="true" />
+			<Volume1 size={17} aria-hidden="true" />
 		{:else}
-			<Volume2 size={16} aria-hidden="true" />
+			<Volume2 size={17} aria-hidden="true" />
 		{/if}
 	</button>
 
-	<label id="mobile-volume-popover" class="player-volume" class:open>
-		<span class="sr-only">Volume</span>
-		<Volume2 size={16} aria-hidden="true" />
-		<input
-			aria-label="Volume"
-			type="range"
-			min="0"
-			max="1"
-			step="0.05"
-			value={volume}
-			style:--volume-progress={`${Math.round(volume * 100)}%`}
-			oninput={(event) => onChange(Number((event.currentTarget as HTMLInputElement).value))}
-		/>
-	</label>
+	{#if open}
+		<label id="volume-popover" class="volume-popover" transition:fly={{ y: 5, duration: 120 }}>
+			<span class="volume-readout" aria-hidden="true">{Math.round(volume * 100)}</span>
+			<input
+				aria-label="Volume"
+				type="range"
+				min="0"
+				max="1"
+				step="0.05"
+				value={volume}
+				style:--volume-progress={`${Math.round(volume * 100)}%`}
+				oninput={(event) => onChange(Number((event.currentTarget as HTMLInputElement).value))}
+			/>
+		</label>
+	{/if}
 </div>
 
 <style>
 	.volume-control {
 		position: relative;
-		min-width: 0;
+		width: 36px;
+		flex: 0 0 36px;
 	}
 
-	.mobile-volume-trigger {
-		display: none;
-	}
-
-	.player-volume {
-		display: flex;
-		width: 106px;
-		height: 40px;
-		align-items: center;
-		gap: 8px;
-		padding: 0 4px;
+	.volume-trigger {
+		display: grid;
+		width: 36px;
+		height: 36px;
+		place-items: center;
+		padding: 0;
+		border: 0;
+		border-radius: 50%;
+		background: transparent;
 		color: var(--muted);
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease);
 	}
 
-	.player-volume input {
+	.volume-trigger:hover,
+	.volume-trigger.open {
+		background: var(--control-hover);
+		color: var(--text);
+	}
+
+	.volume-popover {
+		position: absolute;
+		bottom: calc(100% + 8px);
+		left: 50%;
+		z-index: 70;
+		display: flex;
+		width: 44px;
+		height: 154px;
+		align-items: center;
+		flex-direction: column;
+		gap: 6px;
+		padding: 9px 0 10px;
+		border: 1px solid var(--line-strong);
+		border-radius: 999px;
+		background: var(--surface-overlay);
+		box-shadow: 0 14px 42px rgba(0, 0, 0, 0.42);
+		transform: translateX(-50%);
+	}
+
+	.volume-readout {
+		color: var(--faint);
+		font-size: 8px;
+		font-variant-numeric: tabular-nums;
+		font-weight: 650;
+	}
+
+	.volume-popover input {
 		appearance: none;
-		width: 100%;
-		height: 20px;
+		width: 22px;
+		height: 112px;
 		margin: 0;
 		background: transparent;
+		direction: rtl;
+		writing-mode: vertical-lr;
 	}
 
-	.player-volume input::-webkit-slider-runnable-track {
-		height: 4px;
+	.volume-popover input::-webkit-slider-runnable-track {
+		width: 4px;
+		height: 100%;
 		border-radius: 999px;
 		background: linear-gradient(
-			to right,
+			to top,
 			var(--primary) 0 var(--volume-progress, 0%),
 			var(--track) var(--volume-progress, 0%) 100%
 		);
 	}
 
-	.player-volume input::-webkit-slider-thumb {
+	.volume-popover input::-webkit-slider-thumb {
 		appearance: none;
 		width: 12px;
 		height: 12px;
-		margin-top: -4px;
+		margin-left: -4px;
 		border: 2px solid var(--surface);
 		border-radius: 50%;
 		background: var(--text);
 		box-shadow: 0 0 0 1px var(--control-border);
 	}
 
-	.player-volume input::-moz-range-track {
-		height: 4px;
+	.volume-popover input::-moz-range-track {
+		width: 4px;
+		height: 100%;
 		border: 0;
 		border-radius: 999px;
 		background: var(--track);
 	}
 
-	.player-volume input::-moz-range-progress {
-		height: 4px;
+	.volume-popover input::-moz-range-progress {
+		width: 4px;
 		border-radius: 999px;
 		background: var(--primary);
 	}
 
-	.player-volume input::-moz-range-thumb {
+	.volume-popover input::-moz-range-thumb {
 		width: 10px;
 		height: 10px;
 		border: 2px solid var(--surface);
 		border-radius: 50%;
 		background: var(--text);
-	}
-
-	@media (max-width: 560px) {
-		.mobile-volume-trigger {
-			display: grid;
-			width: 40px;
-			height: 40px;
-			place-items: center;
-			padding: 0;
-			border: 0;
-			border-radius: 5px;
-			background: transparent;
-			color: var(--muted);
-		}
-
-		.mobile-volume-trigger:hover,
-		.mobile-volume-trigger.open {
-			background: var(--hover);
-			color: var(--text);
-		}
-
-		.player-volume {
-			position: absolute;
-			right: -2px;
-			bottom: calc(100% + 8px);
-			z-index: 70;
-			display: none;
-			width: 44px;
-			height: 138px;
-			justify-content: center;
-			padding: 10px 0;
-			border: 1px solid var(--line-strong);
-			border-radius: 8px;
-			background: var(--surface-overlay);
-			box-shadow: 0 14px 42px rgba(0, 0, 0, 0.34);
-		}
-
-		.player-volume.open {
-			display: flex;
-		}
-
-		.player-volume > :global(svg) {
-			display: none;
-		}
-
-		.player-volume input {
-			width: 22px;
-			height: 116px;
-			writing-mode: vertical-lr;
-			direction: rtl;
-		}
-
-		.player-volume input::-webkit-slider-runnable-track {
-			width: 4px;
-			height: 100%;
-			background: linear-gradient(
-				to top,
-				var(--primary) 0 var(--volume-progress, 0%),
-				var(--track) var(--volume-progress, 0%) 100%
-			);
-		}
-
-		.player-volume input::-webkit-slider-thumb {
-			margin-top: 0;
-			margin-left: -4px;
-		}
 	}
 </style>

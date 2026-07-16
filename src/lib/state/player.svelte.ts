@@ -18,7 +18,9 @@ import {
 	putAudio
 } from '$lib/services/repository';
 import { encodeDocumentMp3, mp3Filename } from '$lib/services/mp3-export';
-import { ttsClient } from '$lib/services/tts-client';
+import { ttsClient, type SynthesisResult } from '$lib/services/tts-client';
+import { synthesizeElevenLabs } from '$lib/services/elevenlabs';
+import { ELEVENLABS_MODELS } from '$lib/domain/provider-catalog';
 import { generationPlan } from '$lib/services/generation-plan';
 import {
 	absoluteTimelinePosition,
@@ -29,6 +31,18 @@ import {
 	timelineProgress
 } from '$lib/services/timeline';
 import { appState } from './app-state.svelte';
+import { providersState } from './providers.svelte';
+
+/** The parameters that identify one speech engine configuration — used for
+ * cache keys, variant matching, and stored-audio metadata. */
+interface SpeechVariant {
+	modelId: string;
+	repository: string;
+	revision: string;
+	voiceId: string;
+	backend: 'webgpu' | 'wasm' | 'cloud';
+	dtype: string;
+}
 
 interface PreparedAudio {
 	key: string;
@@ -77,7 +91,7 @@ export class VoicebookPlayer {
 	volume = $state(0.9);
 	autoFollow = $state(true);
 	errorMessage = $state('');
-	engineBackend = $state<'webgpu' | 'wasm' | undefined>();
+	engineBackend = $state<'webgpu' | 'wasm' | 'cloud' | undefined>();
 	engineDtype = $state('');
 	lastSynthesisMs = $state<number | undefined>();
 	lastRealtimeFactor = $state<number | undefined>();
@@ -213,7 +227,41 @@ export class VoicebookPlayer {
 		);
 	}
 
+	/** True when ElevenLabs is the active speech engine. */
+	private get usesElevenLabs(): boolean {
+		return providersState.speechEngine === 'elevenlabs';
+	}
+
+	/** The active engine configuration for cache keys and variant matching. */
+	private speechVariant(): SpeechVariant {
+		if (this.usesElevenLabs) {
+			return {
+				modelId: 'elevenlabs',
+				repository: 'elevenlabs',
+				revision: providersState.elevenLabsModelId,
+				voiceId: providersState.elevenLabsVoiceId,
+				backend: 'cloud',
+				dtype: 'pcm24'
+			};
+		}
+		const model = appState.selectedModel;
+		return {
+			modelId: model.id,
+			repository: model.repository,
+			revision: model.revision,
+			voiceId: appState.selectedVoiceId,
+			backend: this.engineBackend ?? ttsClient.backend,
+			dtype: this.engineDtype || ttsClient.dtype
+		};
+	}
+
 	get runtimeLabel(): string {
+		if (this.usesElevenLabs) {
+			const model = ELEVENLABS_MODELS.find(
+				(candidate) => candidate.id === providersState.elevenLabsModelId
+			);
+			return `ElevenLabs · ${model?.label ?? providersState.elevenLabsModelId}`;
+		}
 		if (!this.engineBackend) return 'Engine warming';
 		return `${this.engineBackend === 'webgpu' ? 'WebGPU' : 'WASM'} · ${this.engineDtype}`;
 	}
@@ -349,27 +397,28 @@ export class VoicebookPlayer {
 	}
 
 	private variantSignature(): string {
-		const model = appState.selectedModel;
+		const variant = this.speechVariant();
 		return [
 			this.book?.id ?? '',
-			model.id,
-			model.revision,
-			appState.selectedVoiceId,
-			appState.generationSteps,
-			this.engineBackend ?? '',
-			this.engineDtype
+			variant.modelId,
+			variant.revision,
+			variant.voiceId,
+			// Generation steps only shape the on-device engine's output.
+			this.usesElevenLabs ? '' : appState.generationSteps,
+			variant.backend,
+			variant.dtype
 		].join('\u001f');
 	}
 
 	private matchesCurrentVariant(meta: AudioVariantMeta): boolean {
-		const model = appState.selectedModel;
+		const variant = this.speechVariant();
 		return (
-			meta.modelId === model.id &&
-			meta.modelRevision === model.revision &&
-			meta.voiceId === appState.selectedVoiceId &&
-			meta.generationSteps === appState.generationSteps &&
-			meta.backend === this.engineBackend &&
-			meta.dtype === this.engineDtype
+			meta.modelId === variant.modelId &&
+			meta.modelRevision === variant.revision &&
+			meta.voiceId === variant.voiceId &&
+			(this.usesElevenLabs || meta.generationSteps === appState.generationSteps) &&
+			meta.backend === (this.usesElevenLabs ? 'cloud' : this.engineBackend) &&
+			meta.dtype === variant.dtype
 		);
 	}
 
@@ -456,6 +505,18 @@ export class VoicebookPlayer {
 	}
 
 	private async ensureEngine(): Promise<void> {
+		if (this.usesElevenLabs) {
+			await providersState.initialize();
+			if (!providersState.elevenLabsReady) {
+				throw new Error(
+					'Add your ElevenLabs API key under Settings → Voice, or switch back to the on-device voice.'
+				);
+			}
+			this.engineBackend = 'cloud';
+			this.engineDtype = 'pcm24';
+			await this.refreshCacheCoverage();
+			return;
+		}
 		const modelId = appState.selectedModelId;
 		if (!appState.installedModels.includes(modelId))
 			throw new Error(`Install ${getModel(modelId).name} before playing.`);
@@ -487,7 +548,9 @@ export class VoicebookPlayer {
 	}
 
 	async warmEngine(): Promise<void> {
-		if (!this.book || !appState.installedModels.includes(appState.selectedModelId)) return;
+		if (!this.book) return;
+		if (!this.usesElevenLabs && !appState.installedModels.includes(appState.selectedModelId))
+			return;
 		try {
 			await this.ensureEngine();
 		} catch {
@@ -496,17 +559,17 @@ export class VoicebookPlayer {
 	}
 
 	private async cacheKey(segment: SpeechSegment): Promise<string> {
-		const model = appState.selectedModel;
+		const variant = this.speechVariant();
 		return audioVariantKey([
 			this.book?.fingerprint ?? '',
 			segment.id,
 			segment.normalizedText,
-			model.repository,
-			model.revision,
-			appState.selectedVoiceId,
-			ttsClient.backend,
-			ttsClient.dtype,
-			`generation-steps:${appState.generationSteps}`,
+			variant.repository,
+			variant.revision,
+			variant.voiceId,
+			variant.backend,
+			variant.dtype,
+			`generation-steps:${this.usesElevenLabs ? 0 : appState.generationSteps}`,
 			'generate-speed:1'
 		]);
 	}
@@ -563,24 +626,38 @@ export class VoicebookPlayer {
 		const segment = this.book.segments[index];
 		if (!segment) throw new Error('This reading position no longer exists.');
 		const documentId = this.book.id;
-		const model = appState.selectedModel;
+		const variant = this.speechVariant();
 		const controller = new AbortController();
 		const version = this.cancellationVersion;
 		let completed = false;
 		this.abortControllers.set(index, { controller, purpose });
 		this.generationBySegment.set(index, 0.02);
 		try {
-			this.bufferingStage = `Generating “${segment.normalizedText.slice(0, 48)}${segment.normalizedText.length > 48 ? '…' : ''}”`;
-			const generated = await ttsClient.synthesize(
-				segment.normalizedText,
-				appState.selectedVoiceId,
-				controller.signal,
-				(update) => {
-					this.bufferingStage = update.status;
-					this.generationBySegment.set(index, Math.max(0.02, update.progress / 100));
-				},
-				appState.generationSteps
-			);
+			this.bufferingStage = this.usesElevenLabs
+				? 'Requesting audio from ElevenLabs…'
+				: `Generating “${segment.normalizedText.slice(0, 48)}${segment.normalizedText.length > 48 ? '…' : ''}”`;
+			let generated: SynthesisResult;
+			if (this.usesElevenLabs) {
+				this.generationBySegment.set(index, 0.25);
+				generated = await synthesizeElevenLabs({
+					apiKey: providersState.keyFor('elevenlabs') ?? '',
+					voiceId: variant.voiceId,
+					modelId: variant.revision,
+					text: segment.normalizedText,
+					signal: controller.signal
+				});
+			} else {
+				generated = await ttsClient.synthesize(
+					segment.normalizedText,
+					variant.voiceId,
+					controller.signal,
+					(update) => {
+						this.bufferingStage = update.status;
+						this.generationBySegment.set(index, Math.max(0.02, update.progress / 100));
+					},
+					appState.generationSteps
+				);
+			}
 			if (controller.signal.aborted)
 				throw new DOMException('Speech generation was canceled.', 'AbortError');
 			this.lastSynthesisMs = generated.metrics.elapsedMs;
@@ -596,12 +673,12 @@ export class VoicebookPlayer {
 					key,
 					documentId,
 					segmentId: segment.id,
-					modelId: model.id,
-					modelRevision: model.revision,
-					voiceId: appState.selectedVoiceId,
-					generationSteps: appState.generationSteps,
-					backend: ttsClient.backend,
-					dtype: ttsClient.dtype,
+					modelId: variant.modelId,
+					modelRevision: variant.revision,
+					voiceId: variant.voiceId,
+					generationSteps: this.usesElevenLabs ? 0 : appState.generationSteps,
+					backend: variant.backend,
+					dtype: variant.dtype,
 					duration: generated.audio.length / generated.sampleRate,
 					timing: generated.timing,
 					createdAt: Date.now()
@@ -1040,10 +1117,38 @@ export class VoicebookPlayer {
 		this.generationProgress = 0;
 		this.bufferingStage = 'Preparing this passage…';
 		this.errorMessage = '';
-		await appState.selectVoice(id);
+		if (this.usesElevenLabs) await providersState.setElevenLabsVoice(id);
+		else await appState.selectVoice(id);
 		this.cacheCoverageSignature = '';
 		this.cachedSegments.clear();
 		await this.refreshCacheCoverage(true);
+	}
+
+	/** Switch between the on-device voice engine and ElevenLabs. Cached audio
+	 * for either engine stays on disk — coverage simply re-resolves against
+	 * the new variant. */
+	async chooseSpeechEngine(engine: 'local' | 'elevenlabs'): Promise<void> {
+		if (engine === providersState.speechEngine) return;
+		this.stopPlayback(false);
+		const hadPendingSynthesis = this.isBuffering || this.isGeneratingAll || this.queue.size > 0;
+		this.cancellationVersion += 1;
+		this.reprioritize();
+		if (hadPendingSynthesis) ttsClient.cancelAll();
+		this.audioCache.clear();
+		this.preparedBySegment.clear();
+		this.cacheQueue.clear();
+		this.generationBySegment.clear();
+		this.isBuffering = false;
+		this.isGeneratingAll = false;
+		this.generationProgress = 0;
+		this.bufferingStage = 'Preparing this passage…';
+		this.errorMessage = '';
+		await providersState.setSpeechEngine(engine);
+		this.engineBackend = undefined;
+		this.engineDtype = '';
+		this.cacheCoverageSignature = '';
+		this.cachedSegments.clear();
+		await this.warmEngine();
 	}
 
 	async chooseGenerationSteps(value: number): Promise<void> {

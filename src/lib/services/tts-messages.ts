@@ -5,7 +5,7 @@ export type BackendPreference = 'auto' | 'webgpu' | 'wasm';
 export interface SynthesisMetrics {
 	elapsedMs: number;
 	audioDuration: number;
-	backend: 'webgpu' | 'wasm';
+	backend: 'webgpu' | 'wasm' | 'cloud';
 }
 
 export type TtsWorkerRequest =

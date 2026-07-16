@@ -217,12 +217,15 @@ export function segmentBlocks(
 		if (block.kind === 'table' && block.table) {
 			const ranges = tableRowRanges(block.text, block.table);
 			const header = block.table.header.map((cell) => cell.text);
+			// The header announcement is deterministic (never sent to the LLM),
+			// but a manually edited description still overrides it.
+			const headerSpoken = spokenFor(narrations[`${block.id}:rh`], tableHeaderFallback(header));
 			pushConstructSegments(
 				segments,
 				block,
 				`${block.id}:rh`,
 				'table-header',
-				tableHeaderFallback(header),
+				headerSpoken.text,
 				false,
 				ranges.header ?? { start: 0, end: 0 }
 			);
