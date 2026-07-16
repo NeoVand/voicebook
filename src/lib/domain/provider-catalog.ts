@@ -99,12 +99,16 @@ export interface ElevenLabsModelSpec {
  * is the default. */
 export const ELEVENLABS_MODELS: ElevenLabsModelSpec[] = [
 	{
-		id: 'eleven_multilingual_v2',
-		label: 'Multilingual v2',
-		tagline: 'highest quality · recommended'
+		id: 'eleven_flash_v2_5',
+		label: 'Flash v2.5',
+		tagline: 'half the credits · recommended'
 	},
 	{ id: 'eleven_turbo_v2_5', label: 'Turbo v2.5', tagline: 'fast · half the credits' },
-	{ id: 'eleven_flash_v2_5', label: 'Flash v2.5', tagline: 'fastest · half the credits' }
+	{
+		id: 'eleven_multilingual_v2',
+		label: 'Multilingual v2',
+		tagline: 'highest quality · double credits'
+	}
 ];
 
 /** George — a warm narrator that suits long-form reading. */

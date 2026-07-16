@@ -39,6 +39,7 @@
 		TableCell
 	} from '$lib/domain/types';
 	import { tableMarkdown } from '$lib/domain/narration';
+	import { readerTourSeen, startTour } from '$lib/services/tours';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { llmState } from '$lib/state/llm.svelte';
 	import { narrationState } from '$lib/state/narrations.svelte';
@@ -66,6 +67,7 @@
 	let narrationStartAction = $state<NarrationStartAction>();
 	let narrationAnnouncement = $state('');
 	let appReady = $state(false);
+	let openingTitle = $state<string>();
 	let openDocumentId: string | null = null;
 	const playbackSpeedOptions = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map((speed) => ({
 		value: String(speed),
@@ -157,29 +159,50 @@
 		const id = page.url.searchParams.get('document');
 		if (!appReady || id === openDocumentId) return;
 		openDocumentId = id;
-		openBook(appState.documents.find((document) => document.id === id) ?? null);
+		void openBook(appState.documents.find((document) => document.id === id) ?? null);
 	});
 
-	function openBook(next: NormalizedDocument | null): void {
+	/** Two frames so the loading view actually reaches the screen before the
+	 * document render blocks the main thread. */
+	function nextPaint(): Promise<void> {
+		return new Promise((resolve) =>
+			requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+		);
+	}
+
+	async function openBook(next: NormalizedDocument | null): Promise<void> {
 		narrationState.stop();
 		narrationStartAction = undefined;
 		outlineNavigationBlockId = undefined;
 		activeOutlineBlockId = undefined;
-		book = next;
-		if (!next) return;
+		if (!next) {
+			openingTitle = undefined;
+			book = null;
+			return;
+		}
+		// Rendering a large book can freeze the page for seconds; paint the
+		// loading state first so the switch never looks dead.
+		openingTitle = next.title;
+		book = null;
+		await nextPaint();
+		if (openDocumentId !== next.id) return;
 		player.setDocument(next);
+		book = next;
 		activeOutlineBlockId =
 			next.outline.find((item) => item.blockId === player.currentSegment?.blockId)?.blockId ??
 			next.outline[0]?.blockId;
 		void player.warmEngine();
 		void narrationState.open(next);
 		requestAnimationFrame(() => {
+			openingTitle = undefined;
 			const element = player.currentSegment
 				? segmentElements.get(player.currentSegment.id)
 				: undefined;
 			if (element) scrollNarrationIntoView(element, false);
 			else readingCanvas?.scrollTo({ top: 0 });
 			scheduleVisibleSectionUpdate();
+			// First document ever opened on this device: show the reader around.
+			if (!readerTourSeen()) setTimeout(() => startTour('reader'), 700);
 		});
 	}
 
@@ -898,6 +921,11 @@
 		<LoaderCircle class="spin" size={24} />
 		<p>Opening your local library…</p>
 	</div>
+{:else if openingTitle && !book}
+	<div class="reader-loading">
+		<LoaderCircle class="spin" size={24} />
+		<p>Opening “{openingTitle}”…</p>
+	</div>
 {:else if !book}
 	<section class="missing-book">
 		<BookOpenText size={30} />
@@ -1087,6 +1115,7 @@
 						class="play-button"
 						class:loading={player.isBuffering}
 						type="button"
+						data-tour="play"
 						aria-busy={player.isBuffering}
 						aria-label={player.isBuffering
 							? 'Stop preparing speech'
@@ -1125,7 +1154,7 @@
 					</button>
 				</div>
 
-				<div class="timeline">
+				<div class="timeline" data-tour="timeline">
 					<span class="timeline-time">{formatTime(player.progress * player.totalDuration)}</span>
 					<div class="timeline-scrubber">
 						<div class="timeline-key" aria-hidden="true">
@@ -1197,7 +1226,7 @@
 			</div>
 
 			<div class="player-options" role="group" aria-label="Playback settings">
-				<div class="speed-control">
+				<div class="speed-control" data-tour="speed">
 					<CompactSelect
 						label="Playback speed"
 						value={String(player.rate)}

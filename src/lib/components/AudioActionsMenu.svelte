@@ -214,6 +214,7 @@
 		class:ready={player.isDocumentPrepared}
 		class:open
 		type="button"
+		data-tour="audio-menu"
 		aria-label="Document audio options"
 		aria-controls={`${uid}-menu`}
 		aria-expanded={open}

@@ -1817,3 +1817,85 @@ textarea {
 		transition-duration: 0.001ms !important;
 	}
 }
+
+/* Guided tours — driver.js popovers wear the active theme. */
+.driver-popover.driver-popover {
+	max-width: 280px;
+	padding: 14px 15px;
+	border: 1px solid var(--line-strong);
+	border-radius: 11px;
+	background: var(--surface-overlay);
+	box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+	color: var(--text);
+	font-family: var(--font-ui);
+}
+
+.driver-popover.driver-popover .driver-popover-title {
+	font: inherit;
+	font-size: 12.5px;
+	font-weight: 680;
+	letter-spacing: -0.01em;
+}
+
+.driver-popover.driver-popover .driver-popover-description {
+	margin-top: 4px;
+	color: var(--muted);
+	font-size: 10.5px;
+	line-height: 1.6;
+}
+
+.driver-popover.driver-popover .driver-popover-progress-text {
+	color: var(--faint);
+	font-size: 9px;
+}
+
+.driver-popover.driver-popover .driver-popover-navigation-btns button {
+	padding: 6px 12px;
+	border: 1px solid var(--control-border);
+	border-radius: 7px;
+	background: var(--control);
+	color: var(--text);
+	font-family: var(--font-ui);
+	font-size: 10px;
+	font-weight: 640;
+	text-shadow: none;
+}
+
+.driver-popover.driver-popover .driver-popover-navigation-btns button:hover {
+	background: var(--control-hover);
+}
+
+.driver-popover.driver-popover .driver-popover-next-btn {
+	border-color: var(--primary);
+	background: var(--primary);
+	color: var(--primary-ink);
+}
+
+.driver-popover.driver-popover .driver-popover-next-btn:hover {
+	background: var(--primary-hover);
+	color: var(--primary-ink);
+}
+
+.driver-popover.driver-popover .driver-popover-close-btn {
+	color: var(--faint);
+}
+
+.driver-popover.driver-popover .driver-popover-close-btn:hover {
+	color: var(--text);
+}
+
+.driver-popover-arrow-side-top.driver-popover-arrow {
+	border-top-color: var(--surface-overlay);
+}
+
+.driver-popover-arrow-side-bottom.driver-popover-arrow {
+	border-bottom-color: var(--surface-overlay);
+}
+
+.driver-popover-arrow-side-left.driver-popover-arrow {
+	border-left-color: var(--surface-overlay);
+}
+
+.driver-popover-arrow-side-right.driver-popover-arrow {
+	border-right-color: var(--surface-overlay);
+}
