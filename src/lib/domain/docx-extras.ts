@@ -9,6 +9,8 @@
  * uses to splice it into mammoth's block order.
  */
 
+import { diagramSvg } from './docx-diagram';
+
 export interface DocxMathExtra {
 	type: 'math';
 	latex: string;
@@ -20,6 +22,8 @@ export interface DocxDrawingExtra {
 	type: 'drawing';
 	labels: string[];
 	anchorText: string;
+	/** Faithful SVG rendering, present when the shape geometry is understood. */
+	svg?: string;
 }
 
 export type DocxExtra = DocxMathExtra | DocxDrawingExtra;
@@ -251,7 +255,7 @@ export function ommlToLatex(math: Element): string {
 
 /* ── Document walk ──────────────────────────────────────────────────────── */
 
-function descendants(element: Element, tagName: string): Element[] {
+export function descendants(element: Element, tagName: string): Element[] {
 	const found: Element[] = [];
 	const visit = (node: Element) => {
 		if (node.tagName === tagName) found.push(node);
@@ -341,7 +345,15 @@ export function docxExtrasFromXml(documentXml: string): DocxExtra[] {
 			if (latex) extras.push({ type: 'math', latex, anchorText: text || anchorText });
 		}
 		const labels = diagramLabels(paragraph);
-		if (labels.length) extras.push({ type: 'drawing', labels, anchorText: text || anchorText });
+		if (labels.length) {
+			const svg = diagramSvg(paragraph);
+			extras.push({
+				type: 'drawing',
+				labels,
+				anchorText: text || anchorText,
+				...(svg ? { svg } : {})
+			});
+		}
 		if (text) anchorText = text;
 	}
 	return extras;
