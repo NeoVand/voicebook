@@ -24,7 +24,7 @@ import type {
 	TableCell
 } from './types';
 
-export const DOCUMENT_NORMALIZATION_VERSION = 9;
+export const DOCUMENT_NORMALIZATION_VERSION = 11;
 
 interface AstNode {
 	type: string;
@@ -948,15 +948,38 @@ function spliceDocxExtras(blocks: DocumentBlock[], extras: DocxExtra[]): void {
 			blocks.splice(position, 0, block('math', extra.latex, blocks.length));
 			continue;
 		}
+		// mammoth extracts legacy VML text boxes as disjoint paragraphs right
+		// after the anchor; fold those into the one coherent diagram block.
+		const labelTexts = new Set(extra.labels.map(normalize));
+		while (
+			position < blocks.length &&
+			blocks[position].kind === 'paragraph' &&
+			!blocks[position].children?.length &&
+			labelTexts.has(normalize(blocks[position].text))
+		) {
+			blocks.splice(position, 1);
+		}
 		const summary = extra.labels.join('; ');
 		const text = `Diagram: ${summary}`;
 		blocks.splice(
 			position,
 			0,
 			block('paragraph', text, blocks.length, {
-				// One captioned image run with no pixels: the narration engine
-				// describes the diagram from its extracted labels.
-				inlines: [{ text, image: { src: undefined, alt: `A diagram with parts: ${summary}` } }]
+				// A captioned image run. When the shape geometry was understood it
+				// carries a rendered SVG — utf8-encoded (not base64) on purpose, so
+				// cloud vision skips the attachment and narration stays on the
+				// caption. Without geometry the caption alone stands in.
+				inlines: [
+					{
+						text,
+						image: {
+							src: extra.svg
+								? `data:image/svg+xml;utf8,${encodeURIComponent(extra.svg)}`
+								: undefined,
+							alt: `A diagram with parts: ${summary}`
+						}
+					}
+				]
 			})
 		);
 	}
@@ -1087,7 +1110,15 @@ async function parseDocx(file: File): Promise<ParsedSource> {
 			blocks,
 			title: blocks.find((candidate) => candidate.kind === 'heading' && candidate.level === 1)
 				?.text,
-			warnings: result.messages.map((message) => message.message).slice(0, 8)
+			warnings: result.messages
+				.map((message) => message.message)
+				// Equations and diagram shapes are recovered from document.xml,
+				// so mammoth's ignored-element notes about them would only
+				// alarm people needlessly.
+				.filter(
+					(message) => !/oMath|\bv:(?:line|rect|roundrect|shape|shapetype|oval|group)/.test(message)
+				)
+				.slice(0, 8)
 		};
 	} catch (error) {
 		throw new ImportError(
@@ -1350,7 +1381,7 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 		throw new ImportError('No readable text was found in this file.', 'malformed');
 	const now = Date.now();
 	const id = crypto.randomUUID();
-	const blocks = parsed.blocks.map((candidate, index) => ({ ...candidate, id: `b${index}` }));
+	const blocks = renumberBlocks(parsed.blocks);
 	return {
 		normalizationVersion: DOCUMENT_NORMALIZATION_VERSION,
 		id,
@@ -1370,11 +1401,29 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 	};
 }
 
+/** Ids are positional (`b${index}`), so renumbering after parsers splice
+ * blocks mid-array MUST rewrite parent/children references too — a stale id
+ * can otherwise point a list at itself and send the reader's recursive block
+ * renderer into an infinite loop. */
+export function renumberBlocks(source: DocumentBlock[]): DocumentBlock[] {
+	const rename = new Map(source.map((candidate, index) => [candidate.id, `b${index}`]));
+	return source.map((candidate, index) => ({
+		...candidate,
+		id: `b${index}`,
+		...(candidate.parentId
+			? { parentId: rename.get(candidate.parentId) ?? candidate.parentId }
+			: {}),
+		...(candidate.children
+			? { children: candidate.children.map((child) => rename.get(child) ?? child) }
+			: {})
+	}));
+}
+
 export function documentFromText(title: string, text: string): NormalizedDocument {
 	const now = Date.now();
 	const markdown = looksLikeMarkdown(text);
 	const parsed = markdown ? parseMarkdown(text) : { blocks: textBlocks(text) };
-	const blocks = parsed.blocks.map((candidate, index) => ({ ...candidate, id: `b${index}` }));
+	const blocks = renumberBlocks(parsed.blocks);
 	const id = crypto.randomUUID();
 	const resolvedTitle = title.trim() || parsed.title || 'Pasted text';
 	return {

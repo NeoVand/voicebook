@@ -25,6 +25,7 @@ import {
 	importFile,
 	kindForFile,
 	pageLines,
+	renumberBlocks,
 	repeatedEdgeLines
 } from './importers';
 
@@ -529,6 +530,20 @@ describe('document importers', () => {
 		});
 	});
 
+	it('renumbers spliced blocks while rewriting parent and child references', () => {
+		const blocks = renumberBlocks([
+			{ id: 'b5', kind: 'math', text: 'x', speak: false, anchor: {} },
+			{ id: 'b0', kind: 'list', text: '', speak: false, anchor: {}, children: ['b1', 'ghost'] },
+			{ id: 'b1', kind: 'list-item', text: 'entry', speak: true, anchor: {}, parentId: 'b0' },
+			{ id: 'b2', kind: 'paragraph', text: 'plain', speak: true, anchor: {}, parentId: 'gone' }
+		]);
+		expect(blocks.map((item) => item.id)).toEqual(['b0', 'b1', 'b2', 'b3']);
+		expect(blocks[1].children).toEqual(['b2', 'ghost']);
+		expect(blocks[2].parentId).toBe('b1');
+		// Unknown references stay as-is instead of being invented or dropped.
+		expect(blocks[3].parentId).toBe('gone');
+	});
+
 	it('imports a semantic DOCX fixture with tables and equations', async () => {
 		const cell = (text: string) => new TableCell({ children: [new Paragraph(text)] });
 		const bytes = await Packer.toBuffer(
@@ -631,6 +646,22 @@ describe('document importers', () => {
 			text: 'E=mc^{2}',
 			speak: false
 		});
+		// Splicing equations mid-array shifts positional ids; every parent and
+		// child reference must survive the renumbering. A stale id here once
+		// pointed a list at itself and hung the reader in infinite recursion.
+		const ids = new Set(document.blocks.map((item) => item.id));
+		for (const item of document.blocks) {
+			if (item.parentId) expect(ids.has(item.parentId)).toBe(true);
+			for (const child of item.children ?? []) {
+				expect(child).not.toBe(item.id);
+				expect(ids.has(child)).toBe(true);
+			}
+		}
+		const list = document.blocks.find((item) => item.kind === 'list');
+		expect(list?.children?.length).toBeGreaterThan(0);
+		for (const child of list?.children ?? []) {
+			expect(document.blocks.find((item) => item.id === child)?.parentId).toBe(list?.id);
+		}
 	});
 
 	it('repairs PDF row and two-column reading order', () => {
