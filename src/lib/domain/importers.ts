@@ -1350,7 +1350,7 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 		throw new ImportError('No readable text was found in this file.', 'malformed');
 	const now = Date.now();
 	const id = crypto.randomUUID();
-	const blocks = parsed.blocks.map((candidate, index) => ({ ...candidate, id: `b${index}` }));
+	const blocks = renumberBlocks(parsed.blocks);
 	return {
 		normalizationVersion: DOCUMENT_NORMALIZATION_VERSION,
 		id,
@@ -1370,11 +1370,29 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 	};
 }
 
+/** Ids are positional (`b${index}`), so renumbering after parsers splice
+ * blocks mid-array MUST rewrite parent/children references too — a stale id
+ * can otherwise point a list at itself and send the reader's recursive block
+ * renderer into an infinite loop. */
+export function renumberBlocks(source: DocumentBlock[]): DocumentBlock[] {
+	const rename = new Map(source.map((candidate, index) => [candidate.id, `b${index}`]));
+	return source.map((candidate, index) => ({
+		...candidate,
+		id: `b${index}`,
+		...(candidate.parentId
+			? { parentId: rename.get(candidate.parentId) ?? candidate.parentId }
+			: {}),
+		...(candidate.children
+			? { children: candidate.children.map((child) => rename.get(child) ?? child) }
+			: {})
+	}));
+}
+
 export function documentFromText(title: string, text: string): NormalizedDocument {
 	const now = Date.now();
 	const markdown = looksLikeMarkdown(text);
 	const parsed = markdown ? parseMarkdown(text) : { blocks: textBlocks(text) };
-	const blocks = parsed.blocks.map((candidate, index) => ({ ...candidate, id: `b${index}` }));
+	const blocks = renumberBlocks(parsed.blocks);
 	const id = crypto.randomUUID();
 	const resolvedTitle = title.trim() || parsed.title || 'Pasted text';
 	return {
