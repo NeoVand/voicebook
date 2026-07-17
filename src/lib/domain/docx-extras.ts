@@ -102,10 +102,41 @@ function convertAll(element: Element): string {
 	return Array.from(element.children).map(convertOmmlNode).join('');
 }
 
+/** Unicode operators Word writes literally, mapped to LaTeX commands KaTeX
+ * and the deterministic speech converter both understand. Trailing spaces
+ * keep adjacent letters out of the command name (`a\in A`). */
+const MATH_SYMBOLS: Record<string, string> = {
+	'∈': '\\in ',
+	'∉': '\\notin ',
+	'∣': '\\mid ',
+	'∞': '\\infty ',
+	'×': '\\times ',
+	'⋅': '\\cdot ',
+	'≤': '\\le ',
+	'≥': '\\ge ',
+	'≠': '\\ne ',
+	'≈': '\\approx ',
+	'→': '\\to ',
+	'−': '-',
+	'′': "'",
+	'⊂': '\\subset ',
+	'⊆': '\\subseteq ',
+	'∪': '\\cup ',
+	'∩': '\\cap ',
+	'±': '\\pm ',
+	'∀': '\\forall ',
+	'∃': '\\exists '
+};
+
 /** Word writes math letters as Mathematical Alphanumeric Symbols (𝐸, 𝑚);
- * NFKC folds them back to plain ASCII for LaTeX and speech. */
+ * NFKC folds them back to plain ASCII for LaTeX and speech. Invisible
+ * placeholders (zero-width space in hidden sub/sup slots, invisible times)
+ * are dropped so they cannot produce empty-looking scripts. */
 function mathText(element: Element): string {
-	return (element.textContent ?? '').normalize('NFKC');
+	return (element.textContent ?? '')
+		.normalize('NFKC')
+		.replace(/[​-‍﻿⁡-⁤]/g, '')
+		.replace(/[∈∉∣∞×⋅≤≥≠≈→−′⊂⊆∪∩±∀∃]/g, (symbol) => MATH_SYMBOLS[symbol] ?? symbol);
 }
 
 function convertOmmlNode(element: Element): string {
@@ -157,11 +188,13 @@ function convertOmmlNode(element: Element): string {
 			const chr = properties ? child(properties, 'm:chr')?.getAttribute('m:val') : undefined;
 			// OMML's default n-ary operator is the integral.
 			const operator = NARY_OPERATORS[chr ?? '∫'] ?? chr ?? '\\int';
+			const hidden = (flag: string) =>
+				properties ? child(properties, flag)?.getAttribute('m:val') === 'on' : false;
 			const sub = child(element, 'm:sub');
 			const sup = child(element, 'm:sup');
 			const body = child(element, 'm:e');
-			const subLatex = sub ? convertAll(sub) : '';
-			const supLatex = sup ? convertAll(sup) : '';
+			const subLatex = hidden('m:subHide') ? '' : sub ? convertAll(sub).trim() : '';
+			const supLatex = hidden('m:supHide') ? '' : sup ? convertAll(sup).trim() : '';
 			return (
 				operator +
 				(subLatex ? `_{${subLatex}}` : '') +
@@ -177,6 +210,21 @@ function convertOmmlNode(element: Element): string {
 		case 'm:bar': {
 			const body = child(element, 'm:e');
 			return `\\bar{${body ? convertAll(body) : ''}}`;
+		}
+		case 'm:limLow': {
+			const base = child(element, 'm:e');
+			const limit = child(element, 'm:lim');
+			const baseLatex = (base ? convertAll(base) : '').trim();
+			const limitLatex = limit ? convertAll(limit) : '';
+			// Word writes big operators (max, min, lim…) as plain limLow bases;
+			// \operatorname* keeps the limit underneath in display math.
+			if (/^[a-z]{2,9}$/i.test(baseLatex)) return `\\operatorname*{${baseLatex}}_{${limitLatex}}`;
+			return `\\underset{${limitLatex}}{${baseLatex}}`;
+		}
+		case 'm:limUpp': {
+			const base = child(element, 'm:e');
+			const limit = child(element, 'm:lim');
+			return `\\overset{${limit ? convertAll(limit) : ''}}{${(base ? convertAll(base) : '').trim()}}`;
 		}
 		// Property containers carry no spoken content.
 		case 'm:rPr':
@@ -213,12 +261,18 @@ function descendants(element: Element, tagName: string): Element[] {
 	return found;
 }
 
-/** The paragraph's plain text with math and drawing content excluded, for
- * anchoring extras against mammoth-derived blocks. */
+/** The paragraph's plain text with math, drawing, and text-box content
+ * excluded, for anchoring extras against mammoth-derived blocks. */
 function paragraphPlainText(paragraph: Element): string {
 	let text = '';
 	const visit = (node: Element) => {
-		if (node.tagName.startsWith('m:') || node.tagName === 'w:drawing') return;
+		if (
+			node.tagName.startsWith('m:') ||
+			node.tagName === 'w:drawing' ||
+			node.tagName === 'w:pict' ||
+			node.tagName === 'w:txbxContent'
+		)
+			return;
 		if (node.tagName === 'w:t') text += node.textContent ?? '';
 		for (const next of Array.from(node.children)) visit(next);
 	};
@@ -226,16 +280,28 @@ function paragraphPlainText(paragraph: Element): string {
 	return text.replace(/\s+/g, ' ').trim();
 }
 
-function drawingLabels(drawing: Element): string[] {
+/** Text-box labels anywhere in the paragraph — DrawingML shape groups
+ * (wps:txbx inside w:drawing) and legacy VML (v:textbox inside w:pict) both
+ * store their text in w:txbxContent. Duplicates are collapsed because
+ * mc:AlternateContent carries the same shapes twice (Choice + Fallback). */
+function diagramLabels(paragraph: Element): string[] {
 	const labels: string[] = [];
-	for (const textBox of descendants(drawing, 'w:txbxContent')) {
-		for (const paragraph of descendants(textBox, 'w:p')) {
-			const label = descendants(paragraph, 'w:t')
-				.map((node) => node.textContent ?? '')
-				.join('')
-				.replace(/\s+/g, ' ')
-				.trim();
-			if (label) labels.push(label);
+	const seen = new Set<string>();
+	for (const textBox of descendants(paragraph, 'w:txbxContent')) {
+		for (const boxParagraph of descendants(textBox, 'w:p')) {
+			let label = '';
+			const visit = (node: Element) => {
+				if (node.tagName === 'w:t') label += node.textContent ?? '';
+				// Manual line breaks inside a shape separate words.
+				else if (node.tagName === 'w:br' || node.tagName === 'w:cr') label += ' ';
+				for (const next of Array.from(node.children)) visit(next);
+			};
+			visit(boxParagraph);
+			label = label.replace(/\s+/g, ' ').trim();
+			if (label && !seen.has(label)) {
+				seen.add(label);
+				labels.push(label);
+			}
 		}
 	}
 	return labels;
@@ -274,10 +340,8 @@ export function docxExtrasFromXml(documentXml: string): DocxExtra[] {
 			const latex = ommlToLatex(math);
 			if (latex) extras.push({ type: 'math', latex, anchorText: text || anchorText });
 		}
-		for (const drawing of descendants(paragraph, 'w:drawing')) {
-			const labels = drawingLabels(drawing);
-			if (labels.length) extras.push({ type: 'drawing', labels, anchorText: text || anchorText });
-		}
+		const labels = diagramLabels(paragraph);
+		if (labels.length) extras.push({ type: 'drawing', labels, anchorText: text || anchorText });
 		if (text) anchorText = text;
 	}
 	return extras;

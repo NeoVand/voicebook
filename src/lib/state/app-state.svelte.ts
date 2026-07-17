@@ -100,6 +100,9 @@ async function migrateDocumentNormalization(
 			new File([source], document.sourceName, { type: document.mimeType })
 		);
 		reparsed.includeCode = document.includeCode;
+		// The stored title is user-visible identity (duplicates get "— Copy",
+		// future renames too) — re-parsing must not reset it.
+		reparsed.title = document.title;
 		// Narrations survive re-parsing; block-id shifts are healed by the
 		// content-hash rescue in reconcileNarrations on the next document open.
 		reparsed.narrations = document.narrations;

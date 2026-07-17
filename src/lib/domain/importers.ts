@@ -24,7 +24,7 @@ import type {
 	TableCell
 } from './types';
 
-export const DOCUMENT_NORMALIZATION_VERSION = 9;
+export const DOCUMENT_NORMALIZATION_VERSION = 10;
 
 interface AstNode {
 	type: string;
@@ -948,6 +948,17 @@ function spliceDocxExtras(blocks: DocumentBlock[], extras: DocxExtra[]): void {
 			blocks.splice(position, 0, block('math', extra.latex, blocks.length));
 			continue;
 		}
+		// mammoth extracts legacy VML text boxes as disjoint paragraphs right
+		// after the anchor; fold those into the one coherent diagram block.
+		const labelTexts = new Set(extra.labels.map(normalize));
+		while (
+			position < blocks.length &&
+			blocks[position].kind === 'paragraph' &&
+			!blocks[position].children?.length &&
+			labelTexts.has(normalize(blocks[position].text))
+		) {
+			blocks.splice(position, 1);
+		}
 		const summary = extra.labels.join('; ');
 		const text = `Diagram: ${summary}`;
 		blocks.splice(
@@ -1087,7 +1098,15 @@ async function parseDocx(file: File): Promise<ParsedSource> {
 			blocks,
 			title: blocks.find((candidate) => candidate.kind === 'heading' && candidate.level === 1)
 				?.text,
-			warnings: result.messages.map((message) => message.message).slice(0, 8)
+			warnings: result.messages
+				.map((message) => message.message)
+				// Equations and diagram shapes are recovered from document.xml,
+				// so mammoth's ignored-element notes about them would only
+				// alarm people needlessly.
+				.filter(
+					(message) => !/oMath|\bv:(?:line|rect|roundrect|shape|shapetype|oval|group)/.test(message)
+				)
+				.slice(0, 8)
 		};
 	} catch (error) {
 		throw new ImportError(

@@ -92,6 +92,16 @@ describe('OMML to LaTeX', () => {
 	});
 
 	it('degrades gracefully when structures are missing their children', () => {
+		expect(ommlToLatex(omml('<m:limLow/>'))).toBe('\\underset{}{}');
+		expect(ommlToLatex(omml('<m:limUpp/>'))).toBe('\\overset{}{}');
+		expect(
+			ommlToLatex(
+				omml(
+					'<m:nary><m:naryPr><m:chr m:val="∑"/><m:subHide m:val="on"/></m:naryPr>' +
+						'<m:sub><m:r><m:t>x</m:t></m:r></m:sub><m:e><m:r><m:t>y</m:t></m:r></m:e></m:nary>'
+				)
+			)
+		).toBe('\\sum y');
 		expect(ommlToLatex(omml('<m:f/>'))).toBe('\\frac{}{}');
 		expect(ommlToLatex(omml('<m:sSup/>'))).toBe('^{}');
 		expect(ommlToLatex(omml('<m:sSub/>'))).toBe('_{}');
@@ -102,6 +112,49 @@ describe('OMML to LaTeX', () => {
 		expect(ommlToLatex(omml('<m:func/>'))).toBe('');
 		expect(ommlToLatex(omml('<m:bar/>'))).toBe('\\bar{}');
 		expect(ommlToLatex(omml('<m:r/>'))).toBe('');
+	});
+
+	it('converts under/over limits and maps unicode operators to LaTeX', () => {
+		expect(
+			ommlToLatex(
+				omml(
+					'<m:limLow><m:e><m:r><m:t>max</m:t></m:r></m:e>' +
+						'<m:lim><m:r><m:t>a∈A</m:t></m:r></m:lim></m:limLow>'
+				)
+			)
+		).toBe('\\operatorname*{max}_{a\\in A}');
+		expect(
+			ommlToLatex(
+				omml(
+					'<m:limLow><m:e><m:r><m:t>x+y</m:t></m:r></m:e>' +
+						'<m:lim><m:r><m:t>n</m:t></m:r></m:lim></m:limLow>'
+				)
+			)
+		).toBe('\\underset{n}{x+y}');
+		expect(
+			ommlToLatex(
+				omml(
+					'<m:limUpp><m:e><m:r><m:t>AB</m:t></m:r></m:e>' +
+						'<m:lim><m:r><m:t>⌢</m:t></m:r></m:lim></m:limUpp>'
+				)
+			)
+		).toBe('\\overset{⌢}{AB}');
+		expect(ommlToLatex(omml('<m:r><m:t>P(s′∣s,a)</m:t></m:r>'))).toBe("P(s'\\mid s,a)");
+	});
+
+	it('drops invisible placeholders and honors hidden n-ary scripts', () => {
+		// Word fills a hidden sup slot with a zero-width space; neither may
+		// produce an empty superscript in the output.
+		expect(
+			ommlToLatex(
+				omml(
+					'<m:nary><m:naryPr><m:chr m:val="∑"/><m:supHide m:val="on"/></m:naryPr>' +
+						'<m:sub><m:r><m:t>a∈A</m:t></m:r></m:sub>' +
+						'<m:sup><m:r><m:t>​</m:t></m:r></m:sup>' +
+						'<m:e><m:r><m:t>π</m:t></m:r></m:e></m:nary>'
+				)
+			)
+		).toBe('\\sum_{a\\in A} π');
 	});
 
 	it('maps n-ary operators with bounds', () => {
@@ -144,6 +197,40 @@ describe('document.xml extras', () => {
 	it('does not treat drawing text-box paragraphs as flow anchors', () => {
 		const extras = docxExtrasFromXml(DOCUMENT_XML);
 		expect(extras.every((extra) => !extra.anchorText.includes('box'))).toBe(true);
+	});
+
+	it('extracts legacy VML text boxes and deduplicates AlternateContent pairs', () => {
+		const xml = `<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:v="urn:schemas-microsoft-com:vml"
+  xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+  <w:body>
+    <w:p><w:r><w:t>The flow diagram.</w:t></w:r></w:p>
+    <w:p><w:r>
+      <w:drawing><wps:txbx><w:txbxContent><w:p><w:r><w:t>state</w:t></w:r></w:p></w:txbxContent></wps:txbx></w:drawing>
+      <w:pict><v:textbox><w:txbxContent><w:p><w:r><w:t>state</w:t></w:r></w:p></w:txbxContent></v:textbox>
+        <v:textbox><w:txbxContent><w:p><w:r><w:t>action</w:t></w:r></w:p></w:txbxContent></v:textbox></w:pict>
+    </w:r></w:p>
+  </w:body>
+</w:document>`;
+		expect(docxExtrasFromXml(xml)).toEqual([
+			{ type: 'drawing', labels: ['state', 'action'], anchorText: 'The flow diagram.' }
+		]);
+	});
+
+	it('treats manual line breaks inside shape text as word separators', () => {
+		const xml = `<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:v="urn:schemas-microsoft-com:vml">
+  <w:body>
+    <w:p><w:r><w:pict><v:textbox><w:txbxContent>
+      <w:p><w:r><w:t>updated</w:t><w:br/><w:t>estimate</w:t></w:r></w:p>
+    </w:txbxContent></v:textbox></w:pict></w:r></w:p>
+  </w:body>
+</w:document>`;
+		expect(docxExtrasFromXml(xml)).toEqual([
+			{ type: 'drawing', labels: ['updated estimate'], anchorText: '' }
+		]);
 	});
 
 	it('anchors document-leading math to the start and ignores empty drawings', () => {
