@@ -139,7 +139,7 @@ const MATH_SYMBOLS: Record<string, string> = {
 function mathText(element: Element): string {
 	return (element.textContent ?? '')
 		.normalize('NFKC')
-		.replace(/[​-‍﻿⁡-⁤]/g, '')
+		.replace(/[\u200B-\u200D\uFEFF\u2061-\u2064]/g, '')
 		.replace(/[∈∉∣∞×⋅≤≥≠≈→−′⊂⊆∪∩±∀∃]/g, (symbol) => MATH_SYMBOLS[symbol] ?? symbol);
 }
 
