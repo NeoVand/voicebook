@@ -1,6 +1,6 @@
 import { DOMParser } from 'linkedom';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { diagramSvg } from './docx-diagram';
+import { diagramModel } from './docx-diagram';
 
 beforeAll(() => {
 	Object.defineProperty(globalThis, 'DOMParser', { value: DOMParser, configurable: true });
@@ -17,7 +17,7 @@ function paragraph(inner: string): Element {
 
 const VML_GROUP = `<w:pict><v:group style="width:200pt;height:100pt" coordorigin="0,0" coordsize="400,200">
 	<v:roundrect style="position:absolute;left:10;top:20;width:120;height:60" arcsize="18%" fillcolor="#E8F1FB" strokecolor="#2F5597" strokeweight="1.25pt">
-		<v:textbox><w:txbxContent><w:p><w:r><w:rPr><w:b/><w:sz w:val="18"/></w:rPr><w:t>alpha</w:t><w:br/><w:t>&amp;beta</w:t></w:r></w:p></w:txbxContent></v:textbox>
+		<v:textbox><w:txbxContent><w:p><w:r><w:rPr><w:b/><w:sz w:val="18"/></w:rPr><w:t>alpha</w:t><w:br/><w:t>beta</w:t></w:r></w:p></w:txbxContent></v:textbox>
 	</v:roundrect>
 	<v:line from="130,50" to="220,50" strokecolor="#5B6573" strokeweight="1.5pt"><v:stroke endarrow="block"/></v:line>
 	<v:rect style="position:absolute;left:240;top:20;width:100;height:60" filled="f" stroked="f">
@@ -26,37 +26,50 @@ const VML_GROUP = `<w:pict><v:group style="width:200pt;height:100pt" coordorigin
 </v:group></w:pict>`;
 
 describe('VML diagrams', () => {
-	it('renders rounded boxes, arrowed connectors, and multi-line labels', () => {
-		const svg = diagramSvg(paragraph(VML_GROUP))!;
-		expect(svg).toContain('viewBox=');
-		// Rounded rect with a corner radius from arcsize 18% of the short side.
-		expect(svg).toContain('rx="10.8"');
-		expect(svg).toContain('fill="#E8F1FB"');
-		expect(svg).toContain('stroke="#2F5597"');
-		// The connector carries an arrowhead marker of its own color.
-		expect(svg).toContain('marker-end="url(#arrow0)"');
-		expect(svg).toContain('fill="#5B6573"');
-		// Manual break produces two centered tspans; XML entities are escaped.
-		expect(svg).toContain('>alpha</tspan>');
-		expect(svg).toContain('>&amp;beta</tspan>');
-		expect(svg).toContain('>gamma</tspan>');
-		expect(svg).toContain('font-weight="600"');
-		// White canvas backing keeps authored colors readable on dark themes.
-		expect(svg).toContain('fill="#FFFFFF"');
+	it('models rounded boxes, arrowed connectors, and multi-line labels', () => {
+		const diagram = diagramModel(paragraph(VML_GROUP))!;
+		expect(diagram.viewBox).toEqual({ x: 0, y: 0, width: 400, height: 200 });
+		// 200pt × 100pt at 96dpi.
+		expect(diagram.pixelWidth).toBe(267);
+		expect(diagram.pixelHeight).toBe(133);
+		expect(diagram.boxes[0]).toMatchObject({
+			shape: 'round',
+			x: 10,
+			y: 20,
+			width: 120,
+			height: 60,
+			fill: '#E8F1FB',
+			stroke: '#2F5597',
+			// arcsize 18% of the short side.
+			cornerRadius: expect.closeTo(10.8, 5),
+			lines: ['alpha', 'beta'],
+			bold: true,
+			// sz 18 half-points = 9pt, at 2 units per pt.
+			fontSize: 18
+		});
+		// The invisible label container keeps its text but draws no shape.
+		expect(diagram.boxes[1]).toMatchObject({ fill: 'none', stroke: 'none', lines: ['gamma'] });
+		expect(diagram.connectors[0]).toMatchObject({
+			x1: 130,
+			y1: 50,
+			x2: 220,
+			y2: 50,
+			arrow: true
+		});
 	});
 
 	it('returns null when no shape carries a label', () => {
-		const svg = diagramSvg(
+		const diagram = diagramModel(
 			paragraph(
 				'<w:pict><v:group style="width:100pt;height:50pt" coordsize="200,100">' +
 					'<v:rect style="left:0;top:0;width:50;height:20"/></v:group></w:pict>'
 			)
 		);
-		expect(svg).toBeNull();
+		expect(diagram).toBeNull();
 	});
 
 	it('returns null without a recognizable container', () => {
-		expect(diagramSvg(paragraph('<w:r><w:t>plain text</w:t></w:r>'))).toBeNull();
+		expect(diagramModel(paragraph('<w:r><w:t>plain text</w:t></w:r>'))).toBeNull();
 	});
 });
 
@@ -87,15 +100,23 @@ const DRAWING_GROUP = `<w:drawing><wpg:wgp>
 </wpg:wgp></w:drawing>`;
 
 describe('DrawingML diagrams', () => {
-	it('renders theme-colored shapes and flipped connectors from EMU geometry', () => {
-		const svg = diagramSvg(paragraph(DRAWING_GROUP))!;
-		// Office default accent1 fill with light (white) label text.
-		expect(svg).toContain('fill="#4472C4"');
-		expect(svg).toContain('fill="#FFFFFF"');
-		expect(svg).toContain('>node</tspan>');
-		// flipV connector runs bottom-left to top-right in red.
-		expect(svg).toContain('stroke="#FF0000"');
-		expect(svg).toContain('y1="381000"');
-		expect(svg).toContain('y2="190500"');
+	it('models theme-colored shapes and flipped connectors from EMU geometry', () => {
+		const diagram = diagramModel(paragraph(DRAWING_GROUP))!;
+		expect(diagram.viewBox).toEqual({ x: 0, y: 0, width: 1905000, height: 952500 });
+		expect(diagram.boxes[0]).toMatchObject({
+			shape: 'round',
+			// Office default accent1 fill with light (white) label text.
+			fill: '#4472C4',
+			fontColor: '#FFFFFF',
+			lines: ['node']
+		});
+		// flipV connector runs bottom-left to top-right.
+		expect(diagram.connectors[0]).toMatchObject({
+			x1: 762000,
+			y1: 381000,
+			x2: 1143000,
+			y2: 190500,
+			arrow: true
+		});
 	});
 });

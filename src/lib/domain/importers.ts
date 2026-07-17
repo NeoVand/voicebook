@@ -24,7 +24,7 @@ import type {
 	TableCell
 } from './types';
 
-export const DOCUMENT_NORMALIZATION_VERSION = 11;
+export const DOCUMENT_NORMALIZATION_VERSION = 12;
 
 interface AstNode {
 	type: string;
@@ -965,18 +965,15 @@ function spliceDocxExtras(blocks: DocumentBlock[], extras: DocxExtra[]): void {
 			position,
 			0,
 			block('paragraph', text, blocks.length, {
-				// A captioned image run. When the shape geometry was understood it
-				// carries a rendered SVG — utf8-encoded (not base64) on purpose, so
-				// cloud vision skips the attachment and narration stays on the
-				// caption. Without geometry the caption alone stands in.
+				// A captioned image run without pixels: narration describes the
+				// caption labels, and when the shape geometry was understood the
+				// reader draws it as theme-aware inline SVG.
 				inlines: [
 					{
 						text,
 						image: {
-							src: extra.svg
-								? `data:image/svg+xml;utf8,${encodeURIComponent(extra.svg)}`
-								: undefined,
-							alt: `A diagram with parts: ${summary}`
+							alt: `A diagram with parts: ${summary}`,
+							...(extra.diagram ? { diagram: extra.diagram } : {})
 						}
 					}
 				]
