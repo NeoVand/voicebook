@@ -1,9 +1,24 @@
-import { Document, HeadingLevel, Packer, Paragraph } from 'docx';
+import {
+	Document,
+	ExternalHyperlink,
+	HeadingLevel,
+	ImageRun,
+	Math,
+	MathRun,
+	MathSuperScript,
+	Packer,
+	Paragraph,
+	Table,
+	TableCell,
+	TableRow,
+	TextRun
+} from 'docx';
 import { DOMParser } from 'linkedom';
 import { DOMMatrix, ImageData, Path2D } from '@napi-rs/canvas';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
+	DOCUMENT_NORMALIZATION_VERSION,
 	ImportError,
 	documentFromText,
 	fingerprint,
@@ -83,7 +98,7 @@ describe('document importers', () => {
 		].join('\n');
 		const document = await importFile(new File([markdown], 'guide.md', { type: 'text/markdown' }));
 		expect(document.title).toBe('Listening well');
-		expect(document.normalizationVersion).toBe(8);
+		expect(document.normalizationVersion).toBe(DOCUMENT_NORMALIZATION_VERSION);
 		expect(document.outline[0]).toMatchObject({ title: 'Listening well', level: 1 });
 		expect(document.blocks.map((item) => item.kind)).toEqual([
 			'heading',
@@ -514,7 +529,8 @@ describe('document importers', () => {
 		});
 	});
 
-	it('imports a semantic DOCX fixture', async () => {
+	it('imports a semantic DOCX fixture with tables and equations', async () => {
+		const cell = (text: string) => new TableCell({ children: [new Paragraph(text)] });
 		const bytes = await Packer.toBuffer(
 			new Document({
 				sections: [
@@ -522,7 +538,61 @@ describe('document importers', () => {
 						children: [
 							new Paragraph({ text: 'A local book', heading: HeadingLevel.HEADING_1 }),
 							new Paragraph('The document stays inside this browser.'),
-							new Paragraph({ text: 'A list entry', bullet: { level: 0 } })
+							new Paragraph({ text: 'A list entry', bullet: { level: 0 } }),
+							new Paragraph({ text: 'A nested entry', bullet: { level: 1 } }),
+							new Paragraph({
+								children: [
+									new ImageRun({
+										type: 'png',
+										data: Uint8Array.from(
+											atob(
+												'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+											),
+											(c) => c.charCodeAt(0)
+										),
+										transformation: { width: 8, height: 8 },
+										altText: {
+											title: 'A tiny square',
+											description: 'A tiny square',
+											name: 'square'
+										}
+									})
+								]
+							}),
+							new Table({
+								rows: [
+									new TableRow({ children: [cell('City'), cell('Country')] }),
+									new TableRow({ children: [cell('Zurich'), cell('Switzerland')] })
+								]
+							}),
+							new Paragraph({
+								children: [
+									new TextRun({ text: 'Bold', bold: true }),
+									new TextRun({ text: ' and ' }),
+									new TextRun({ text: 'italic', italics: true }),
+									new TextRun({ text: ' and ' }),
+									new TextRun({ text: 'struck', strike: true }),
+									new TextRun({ text: ' beside ' }),
+									new ExternalHyperlink({
+										children: [new TextRun('a link')],
+										link: 'https://example.com/doc'
+									})
+								]
+							}),
+							new Paragraph('The energy relation follows.'),
+							new Paragraph({
+								children: [
+									new Math({
+										children: [
+											new MathRun('E=m'),
+											new MathSuperScript({
+												children: [new MathRun('c')],
+												superScript: [new MathRun('2')]
+											})
+										]
+									})
+								]
+							})
 						]
 					}
 				]
@@ -534,7 +604,33 @@ describe('document importers', () => {
 			})
 		);
 		expect(document.blocks[0]).toMatchObject({ kind: 'heading', text: 'A local book', level: 1 });
-		expect(document.blocks.some((item) => item.kind === 'list-item')).toBe(true);
+		const items = document.blocks.filter((item) => item.kind === 'list-item');
+		expect(items.map((item) => item.text)).toEqual(['A list entry', 'A nested entry']);
+		expect(items[1].list?.depth).toBe(1);
+		const withImage = document.blocks.find((item) =>
+			item.inlines?.some((entry) => entry.image?.src?.startsWith('data:image/'))
+		);
+		expect(withImage).toBeDefined();
+		const styled = document.blocks.find((item) => item.text.startsWith('Bold and italic'));
+		expect(styled?.inlines).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ text: 'Bold', marks: ['strong'] }),
+				expect.objectContaining({ text: 'italic', marks: ['emphasis'] }),
+				expect.objectContaining({ text: 'struck', marks: ['delete'] }),
+				expect.objectContaining({ text: 'a link', href: 'https://example.com/doc' })
+			])
+		);
+		const table = document.blocks.find((item) => item.kind === 'table');
+		expect(table?.table?.header.map((entry) => entry.text)).toEqual(['City', 'Country']);
+		expect(table?.table?.rows).toHaveLength(1);
+		const anchorIndex = document.blocks.findIndex(
+			(item) => item.text === 'The energy relation follows.'
+		);
+		expect(document.blocks[anchorIndex + 1]).toMatchObject({
+			kind: 'math',
+			text: 'E=mc^{2}',
+			speak: false
+		});
 	});
 
 	it('repairs PDF row and two-column reading order', () => {

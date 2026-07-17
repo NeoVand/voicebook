@@ -37,6 +37,7 @@ export default defineConfig({
 			provider: 'v8',
 			reporter: ['text', 'json', 'json-summary', 'html'],
 			include: [
+				'src/lib/domain/docx-extras.ts',
 				'src/lib/domain/importers.ts',
 				'src/lib/domain/model-catalog.ts',
 				'src/lib/domain/segmenter.ts',

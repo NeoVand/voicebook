@@ -87,7 +87,10 @@ async function migrateDocumentNormalization(
 	document: NormalizedDocument
 ): Promise<NormalizedDocument> {
 	if (document.normalizationVersion === DOCUMENT_NORMALIZATION_VERSION) return document;
-	if (document.sourceKind !== 'markdown') {
+	// Markdown and DOCX re-parse from the stored original so normalization
+	// improvements (v9: Word tables, equations, diagrams) reach existing
+	// documents; other kinds only re-stamp.
+	if (document.sourceKind !== 'markdown' && document.sourceKind !== 'docx') {
 		return { ...document, normalizationVersion: DOCUMENT_NORMALIZATION_VERSION };
 	}
 	const source = await getSource(document);
