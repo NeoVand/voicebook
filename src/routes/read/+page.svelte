@@ -29,6 +29,7 @@
 	import InlineText from '$lib/components/InlineText.svelte';
 	import LlmChip from '$lib/components/LlmChip.svelte';
 	import MathFormula from '$lib/components/MathFormula.svelte';
+	import MediaFigure from '$lib/components/MediaFigure.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
 	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
 	import SafeHtml from '$lib/components/SafeHtml.svelte';
@@ -282,6 +283,14 @@
 				panelItem(block.id, `${block.id}:r${index}`, rowLabel(row, index))
 			)
 		];
+	}
+
+	/** A paragraph that is exactly one image or diagram run renders as a
+	 * captioned figure with the description panel, like other constructs. */
+	function standaloneMedia(block: DocumentBlock): InlineRun | undefined {
+		if (block.kind !== 'paragraph') return undefined;
+		const runs = block.inlines ?? [];
+		return runs.length === 1 && runs[0].image ? runs[0] : undefined;
 	}
 
 	function editConstruct(constructId: string, text: string): void {
@@ -956,6 +965,42 @@
 		<hr id={block.id} />
 	{:else if block.kind === 'html'}
 		<div class="html-fragment" id={block.id}><SafeHtml nodes={block.html ?? []} /></div>
+	{:else if block.kind === 'paragraph' && standaloneMedia(block)}
+		{@const run = standaloneMedia(block)!}
+		{@const imageId = `${block.id}:img0`}
+		{@const segs = segmentsByBlock.get(block.id) ?? []}
+		{@const noun = run.image?.diagram ? 'Diagram' : 'Image'}
+		{@const describable = Boolean(
+			run.image?.alt?.trim() || run.image?.title?.trim() || run.image?.src
+		)}
+		<div
+			class="construct-segment media-construct"
+			id={block.id}
+			class:active={activeConstructIds.includes(imageId)}
+			class:narration-pending={segs[0]?.narration?.pending}
+			role="button"
+			tabindex="0"
+			aria-label={segs.map((segment) => segment.text).join(' ') || run.image?.alt || noun}
+			title="Play from here"
+			data-segment-id={segs[0]?.id}
+			{@attach trackConstruct(segs.map((segment) => segment.id))}
+		>
+			<MediaFigure kind={run.image?.diagram ? 'diagram' : 'image'}>
+				{#snippet media()}
+					<InlineText {run} />
+				{/snippet}
+				{#snippet panel()}
+					{#if describable}
+						<ConstructPanel
+							{noun}
+							items={[panelItem(block.id, imageId)]}
+							onEdit={editConstruct}
+							onRegenerate={regenerateConstruct}
+						/>
+					{/if}
+				{/snippet}
+			</MediaFigure>
+		</div>
 	{:else}
 		<p id={block.id}>{@render renderBlockContent(block)}</p>
 	{/if}

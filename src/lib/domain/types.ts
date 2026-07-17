@@ -23,10 +23,52 @@ export type BlockKind =
 export type InlineMark =
 	'strong' | 'emphasis' | 'delete' | 'code' | 'sub' | 'sup' | 'mark' | 'kbd' | 'abbr';
 
+/** A shape box in a document diagram (Word drawing), in viewBox units. */
+export interface DiagramBox {
+	shape: 'rect' | 'round' | 'ellipse';
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	/** Authored fill, or 'none' for invisible label containers. */
+	fill: string;
+	stroke: string;
+	strokeWidth: number;
+	cornerRadius: number;
+	lines: string[];
+	fontSize: number;
+	/** Authored label color — honored only inside filled boxes; floating
+	 * labels take the reader theme's ink instead. */
+	fontColor: string;
+	bold: boolean;
+}
+
+export interface DiagramConnector {
+	x1: number;
+	y1: number;
+	x2: number;
+	y2: number;
+	strokeWidth: number;
+	arrow: boolean;
+}
+
+/** Structured geometry for a Word shape diagram, rendered as theme-aware
+ * inline SVG by the reader. */
+export interface DocumentDiagram {
+	viewBox: { x: number; y: number; width: number; height: number };
+	pixelWidth: number;
+	pixelHeight: number;
+	boxes: DiagramBox[];
+	connectors: DiagramConnector[];
+}
+
 export interface InlineImage {
 	src?: string;
 	alt: string;
 	title?: string;
+	/** Present for Word shape diagrams: the reader renders this instead of a
+	 * bitmap, with theme-aware ink. */
+	diagram?: DocumentDiagram;
 }
 
 export interface InlineProgress {

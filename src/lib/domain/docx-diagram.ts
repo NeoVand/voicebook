@@ -1,45 +1,15 @@
 /**
- * Faithful SVG rendering for the diagrams Word documents draw with shapes.
- * Both dialects carry real geometry — legacy VML (v:group/v:roundrect/v:line)
- * and DrawingML wordprocessingGroup (wps:wsp with EMU transforms) — so the
- * reader can show the actual boxes, arrows, and labels instead of a caption.
- * Anything unrecognized degrades to null and the caption-only path stands in.
+ * Structured geometry for the diagrams Word documents draw with shapes.
+ * Both dialects carry real coordinates — legacy VML (v:group/v:roundrect/
+ * v:line) and DrawingML wordprocessingGroup (wps:wsp with EMU transforms) —
+ * so the reader can draw the actual boxes, arrows, and labels as theme-aware
+ * inline SVG instead of showing a caption. Box fills and strokes keep their
+ * authored colors; connectors and floating labels take the reader theme's
+ * ink at render time. Anything unrecognized degrades to null and the
+ * caption-only path stands in.
  */
 import { descendants } from './docx-extras';
-
-interface DiagramBox {
-	shape: 'rect' | 'round' | 'ellipse';
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-	fill: string;
-	stroke: string;
-	strokeWidth: number;
-	cornerRadius: number;
-	lines: string[];
-	fontSize: number;
-	fontColor: string;
-	bold: boolean;
-}
-
-interface DiagramLine {
-	x1: number;
-	y1: number;
-	x2: number;
-	y2: number;
-	stroke: string;
-	strokeWidth: number;
-	arrow: boolean;
-}
-
-interface Diagram {
-	viewBox: { x: number; y: number; width: number; height: number };
-	pixelWidth: number;
-	pixelHeight: number;
-	boxes: DiagramBox[];
-	lines: DiagramLine[];
-}
+import type { DiagramBox, DiagramConnector, DocumentDiagram } from './types';
 
 const PX_PER_PT = 96 / 72;
 const EMU_PER_PX = 9525;
@@ -58,19 +28,6 @@ const SCHEME_COLORS: Record<string, string> = {
 	dk1: '#000000',
 	dk2: '#44546A'
 };
-
-/** Compact numeric output for the generated markup. */
-function fmt(value: number): string {
-	return String(Math.round(value * 100) / 100);
-}
-
-function escapeXml(value: string): string {
-	return value
-		.replaceAll('&', '&amp;')
-		.replaceAll('<', '&lt;')
-		.replaceAll('>', '&gt;')
-		.replaceAll('"', '&quot;');
-}
 
 /** Text lines inside a shape's text box, with manual breaks preserved. */
 function textBoxLines(shape: Element): { lines: string[]; bold: boolean; sizePt: number } {
@@ -126,7 +83,7 @@ function arcFraction(value: string | null): number {
 	return number > 1 ? number / 100 : number;
 }
 
-function vmlDiagram(container: Element): Diagram | null {
+function vmlDiagram(container: Element): DocumentDiagram | null {
 	const group = descendants(container, 'v:group')[0];
 	if (!group) return null;
 	const style = vmlStyle(group);
@@ -142,7 +99,7 @@ function vmlDiagram(container: Element): Diagram | null {
 	const unitsPerPt = sizeWidth / widthPt;
 
 	const boxes: DiagramBox[] = [];
-	const lines: DiagramLine[] = [];
+	const connectors: DiagramConnector[] = [];
 	const walk = (element: Element) => {
 		for (const shape of Array.from(element.children)) {
 			const tag = shape.tagName;
@@ -173,12 +130,11 @@ function vmlDiagram(container: Element): Diagram | null {
 			} else if (tag === 'v:line') {
 				const [x1, y1] = (shape.getAttribute('from') ?? '0,0').split(',').map(Number);
 				const [x2, y2] = (shape.getAttribute('to') ?? '0,0').split(',').map(Number);
-				lines.push({
+				connectors.push({
 					x1,
 					y1,
 					x2,
 					y2,
-					stroke: shape.getAttribute('strokecolor') ?? '#000000',
 					strokeWidth: (points(shape.getAttribute('strokeweight')) || 1) * unitsPerPt,
 					arrow: descendants(shape, 'v:stroke').some((stroke) => stroke.getAttribute('endarrow'))
 				});
@@ -188,13 +144,13 @@ function vmlDiagram(container: Element): Diagram | null {
 		}
 	};
 	walk(group);
-	if (!boxes.length && !lines.length) return null;
+	if (!boxes.length && !connectors.length) return null;
 	return {
 		viewBox: { x: originX, y: originY, width: sizeWidth, height: sizeHeight },
 		pixelWidth: Math.round(widthPt * PX_PER_PT),
 		pixelHeight: Math.round(heightPt * PX_PER_PT),
 		boxes,
-		lines
+		connectors
 	};
 }
 
@@ -223,7 +179,7 @@ function xfrmRect(scope: Element): { x: number; y: number; w: number; h: number 
 	};
 }
 
-function drawingDiagram(container: Element): Diagram | null {
+function drawingDiagram(container: Element): DocumentDiagram | null {
 	const shapes = descendants(container, 'wps:wsp');
 	if (!shapes.length) return null;
 	// The group's child extent defines the coordinate space; without a group,
@@ -245,7 +201,7 @@ function drawingDiagram(container: Element): Diagram | null {
 	}
 
 	const boxes: DiagramBox[] = [];
-	const lines: DiagramLine[] = [];
+	const connectors: DiagramConnector[] = [];
 	for (const shape of shapes) {
 		const properties = descendants(shape, 'wps:spPr')[0];
 		if (!properties) continue;
@@ -257,16 +213,11 @@ function drawingDiagram(container: Element): Diagram | null {
 			const xfrm = descendants(properties, 'a:xfrm')[0];
 			const flipH = xfrm?.getAttribute('flipH') === '1';
 			const flipV = xfrm?.getAttribute('flipV') === '1';
-			lines.push({
+			connectors.push({
 				x1: flipH ? rect.x + rect.w : rect.x,
 				y1: flipV ? rect.y + rect.h : rect.y,
 				x2: flipH ? rect.x : rect.x + rect.w,
 				y2: flipV ? rect.y : rect.y + rect.h,
-				stroke: drawingColor(
-					descendants(properties, 'a:ln')[0] ??
-						(styleRef ? descendants(styleRef, 'a:lnRef')[0] : undefined),
-					'#5B6573'
-				),
 				strokeWidth: 1.5 * EMU_PER_PX,
 				arrow: true
 			});
@@ -296,12 +247,12 @@ function drawingDiagram(container: Element): Diagram | null {
 			bold: text.bold
 		});
 	}
-	if (!boxes.length && !lines.length) return null;
+	if (!boxes.length && !connectors.length) return null;
 	if (!viewBox.width || !viewBox.height) {
-		const xs = [...boxes, ...lines].flatMap((entry) =>
+		const xs = [...boxes, ...connectors].flatMap((entry) =>
 			'width' in entry ? [entry.x, entry.x + entry.width] : [entry.x1, entry.x2]
 		);
-		const ys = [...boxes, ...lines].flatMap((entry) =>
+		const ys = [...boxes, ...connectors].flatMap((entry) =>
 			'height' in entry ? [entry.y, entry.y + entry.height] : [entry.y1, entry.y2]
 		);
 		viewBox = {
@@ -317,79 +268,17 @@ function drawingDiagram(container: Element): Diagram | null {
 		pixelWidth: Math.round(viewBox.width / EMU_PER_PX),
 		pixelHeight: Math.round(viewBox.height / EMU_PER_PX),
 		boxes,
-		lines
+		connectors
 	};
 }
 
-/* ── SVG assembly ───────────────────────────────────────────────────────── */
-
-function renderSvg(diagram: Diagram): string {
-	const { viewBox } = diagram;
-	const padding = viewBox.width * 0.02;
-	const parts: string[] = [];
-	parts.push(
-		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox.x - padding} ${viewBox.y - padding} ${viewBox.width + padding * 2} ${viewBox.height + padding * 2}" width="${diagram.pixelWidth}" height="${diagram.pixelHeight}" role="img">`
-	);
-	// Word draws on a white canvas; keeping it makes every authored color
-	// readable in both reader themes.
-	parts.push(
-		`<rect x="${viewBox.x - padding}" y="${viewBox.y - padding}" width="${viewBox.width + padding * 2}" height="${viewBox.height + padding * 2}" fill="#FFFFFF"/>`
-	);
-	const arrowColors = [...new Set(diagram.lines.filter((line) => line.arrow).map((l) => l.stroke))];
-	if (arrowColors.length) {
-		parts.push('<defs>');
-		arrowColors.forEach((color, index) => {
-			parts.push(
-				`<marker id="arrow${index}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="${escapeXml(color)}"/></marker>`
-			);
-		});
-		parts.push('</defs>');
-	}
-	for (const box of diagram.boxes) {
-		if (box.fill !== 'none' || box.stroke !== 'none') {
-			if (box.shape === 'ellipse') {
-				parts.push(
-					`<ellipse cx="${fmt(box.x + box.width / 2)}" cy="${fmt(box.y + box.height / 2)}" rx="${fmt(box.width / 2)}" ry="${fmt(box.height / 2)}" fill="${escapeXml(box.fill)}" stroke="${escapeXml(box.stroke)}" stroke-width="${fmt(box.strokeWidth)}"/>`
-				);
-			} else {
-				parts.push(
-					`<rect x="${fmt(box.x)}" y="${fmt(box.y)}" width="${fmt(box.width)}" height="${fmt(box.height)}" rx="${fmt(box.cornerRadius)}" fill="${escapeXml(box.fill)}" stroke="${escapeXml(box.stroke)}" stroke-width="${fmt(box.strokeWidth)}"/>`
-				);
-			}
-		}
-		if (box.lines.length) {
-			const centerX = box.x + box.width / 2;
-			const centerY = box.y + box.height / 2;
-			const lineHeight = box.fontSize * 1.25;
-			const firstY = centerY - ((box.lines.length - 1) * lineHeight) / 2;
-			const spans = box.lines
-				.map(
-					(line, index) =>
-						`<tspan x="${fmt(centerX)}" y="${fmt(firstY + index * lineHeight)}">${escapeXml(line)}</tspan>`
-				)
-				.join('');
-			parts.push(
-				`<text text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="${fmt(box.fontSize)}"${box.bold ? ' font-weight="600"' : ''} fill="${escapeXml(box.fontColor)}">${spans}</text>`
-			);
-		}
-	}
-	for (const line of diagram.lines) {
-		const marker = line.arrow ? ` marker-end="url(#arrow${arrowColors.indexOf(line.stroke)})"` : '';
-		parts.push(
-			`<line x1="${fmt(line.x1)}" y1="${fmt(line.y1)}" x2="${fmt(line.x2)}" y2="${fmt(line.y2)}" stroke="${escapeXml(line.stroke)}" stroke-width="${fmt(line.strokeWidth)}"${marker}/>`
-		);
-	}
-	parts.push('</svg>');
-	return parts.join('');
-}
-
-/** A faithful SVG for the paragraph's shape diagram, or null when its
- * geometry is not something this renderer understands. */
-export function diagramSvg(paragraph: Element): string | null {
+/** The paragraph's shape diagram as structured geometry, or null when it is
+ * not something this parser understands. */
+export function diagramModel(paragraph: Element): DocumentDiagram | null {
 	const diagram = vmlDiagram(paragraph) ?? drawingDiagram(paragraph);
 	if (!diagram) return null;
 	// Boxes without any label anywhere usually mean decorative artwork
 	// (pictures already flow through mammoth); only render labeled diagrams.
 	if (!diagram.boxes.some((box) => box.lines.length)) return null;
-	return renderSvg(diagram);
+	return diagram;
 }

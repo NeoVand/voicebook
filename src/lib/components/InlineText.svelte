@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { InlineMark, InlineRun } from '$lib/domain/types';
+	import DocxDiagram from './DocxDiagram.svelte';
 	import MathFormula from './MathFormula.svelte';
 
 	interface Props {
@@ -63,7 +64,9 @@
 {/snippet}
 
 {#if run.image}
-	{#if run.image.src}
+	{#if run.image.diagram}
+		<DocxDiagram diagram={run.image.diagram} alt={run.image.alt} />
+	{:else if run.image.src}
 		{#if run.href}
 			<svelte:element
 				this={"a"}
