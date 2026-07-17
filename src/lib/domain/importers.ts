@@ -1,4 +1,5 @@
 import mammoth from 'mammoth';
+import { extractDocxExtras, type DocxExtra } from './docx-extras';
 import remarkDefinitionList from 'remark-definition-list';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -23,7 +24,7 @@ import type {
 	TableCell
 } from './types';
 
-export const DOCUMENT_NORMALIZATION_VERSION = 8;
+export const DOCUMENT_NORMALIZATION_VERSION = 9;
 
 interface AstNode {
 	type: string;
@@ -877,28 +878,215 @@ function looksLikeMarkdown(text: string): boolean {
 	].some((pattern) => pattern.test(source));
 }
 
+/** Inline runs from mammoth's HTML: text with strong/em/del/code marks,
+ * links, and embedded images (mammoth inlines pictures as data: URIs). */
+function docxInlineRuns(
+	node: Node,
+	marks: InlineMark[] = [],
+	link?: Pick<InlineRun, 'href' | 'title'>
+): InlineRun[] {
+	if (node.nodeType === 3) {
+		const text = node.textContent ?? '';
+		return text ? [run(text, marks, link)] : [];
+	}
+	if (node.nodeType !== 1) return [];
+	const element = node as Element;
+	const tag = element.tagName.toLowerCase();
+	if (tag === 'img') {
+		const alt = element.getAttribute('alt')?.trim() ?? '';
+		const image: InlineImage = {
+			src: safeImageSrc(element.getAttribute('src') ?? undefined),
+			alt,
+			title: element.getAttribute('title')?.trim() || undefined
+		};
+		return [run(alt || 'Image', marks, link, { image })];
+	}
+	if (tag === 'br') return [run(' ', marks, link)];
+	// Structural children (nested lists, tables) are handled by the block walk.
+	if (tag === 'ul' || tag === 'ol' || tag === 'table') return [];
+	let nextMarks = marks;
+	if (tag === 'strong' || tag === 'b') nextMarks = [...marks, 'strong'];
+	else if (tag === 'em' || tag === 'i') nextMarks = [...marks, 'emphasis'];
+	else if (tag === 'del' || tag === 's' || tag === 'strike') nextMarks = [...marks, 'delete'];
+	else if (tag === 'code') nextMarks = [...marks, 'code'];
+	const nextLink =
+		tag === 'a'
+			? {
+					href: safeHref(element.getAttribute('href') ?? undefined),
+					title: element.getAttribute('title')?.trim() || undefined
+				}
+			: link;
+	const runs: InlineRun[] = [];
+	for (const child of Array.from(element.childNodes))
+		runs.push(...docxInlineRuns(child, nextMarks, nextLink));
+	return runs;
+}
+
+function docxTableCell(cell: Element): TableCell {
+	const inlines = normalizeRuns(docxInlineRuns(cell));
+	return { text: (cell.textContent ?? '').replace(/\s+/g, ' ').trim(), inlines };
+}
+
+/** Splice equations and diagrams (which mammoth drops) into mammoth's block
+ * order, each after the text paragraph it followed in document.xml. */
+function spliceDocxExtras(blocks: DocumentBlock[], extras: DocxExtra[]): void {
+	const normalize = (text: string) => text.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+	const usedAnchors = new Set<string>();
+	for (const extra of extras) {
+		const anchor = normalize(extra.anchorText);
+		let position = anchor ? blocks.length : 0;
+		if (anchor) {
+			const index = blocks.findIndex(
+				(candidate) => !usedAnchors.has(candidate.id) && normalize(candidate.text) === anchor
+			);
+			if (index >= 0) {
+				usedAnchors.add(blocks[index].id);
+				position = index + 1;
+			}
+		}
+		if (extra.type === 'math') {
+			blocks.splice(position, 0, block('math', extra.latex, blocks.length));
+			continue;
+		}
+		const summary = extra.labels.join('; ');
+		const text = `Diagram: ${summary}`;
+		blocks.splice(
+			position,
+			0,
+			block('paragraph', text, blocks.length, {
+				// One captioned image run with no pixels: the narration engine
+				// describes the diagram from its extracted labels.
+				inlines: [{ text, image: { src: undefined, alt: `A diagram with parts: ${summary}` } }]
+			})
+		);
+	}
+}
+
 async function parseDocx(file: File): Promise<ParsedSource> {
 	try {
 		const arrayBuffer = await file.arrayBuffer();
 		const source =
 			typeof Buffer === 'function' ? { buffer: Buffer.from(arrayBuffer) } : { arrayBuffer };
-		const result = await mammoth.convertToHtml(source);
-		const document = new DOMParser().parseFromString(result.value, 'text/html');
+		const result = await mammoth.convertToHtml(source, {
+			// Word's Title/Subtitle styles otherwise arrive as plain paragraphs,
+			// losing the document title and outline root.
+			styleMap: ["p[style-name='Title'] => h1:fresh", "p[style-name='Subtitle'] => h2:fresh"]
+		});
+		// The explicit wrapper matters: linkedom (unit tests) leaves fragment
+		// children outside `body` without it, while browsers auto-wrap.
+		const dom = new DOMParser().parseFromString(
+			`<html><body>${result.value}</body></html>`,
+			'text/html'
+		);
 		const blocks: DocumentBlock[] = [];
-		for (const element of document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,pre')) {
-			if (element.closest('li') && element.tagName !== 'LI') continue;
-			const text = element.textContent?.trim() ?? '';
-			if (!text) continue;
-			const tag = element.tagName.toLowerCase();
-			if (tag.startsWith('h'))
-				blocks.push(block('heading', text, blocks.length, { level: Number(tag[1]) }));
-			else if (tag === 'li') blocks.push(block('list-item', text, blocks.length));
-			else if (tag === 'blockquote') blocks.push(block('quote', text, blocks.length));
-			else if (tag === 'pre') blocks.push(block('code', text, blocks.length));
-			else blocks.push(block('paragraph', text, blocks.length));
+		const add = (kind: BlockKind, text: string, extras: Partial<DocumentBlock> = {}) => {
+			const created = block(kind, text, blocks.length, extras);
+			blocks.push(created);
+			if (created.parentId) {
+				const parent = blocks.find((candidate) => candidate.id === created.parentId);
+				parent?.children?.push(created.id);
+			}
+			return created;
+		};
+
+		const addTable = (element: Element, parentId?: string) => {
+			const domRows = Array.from(element.querySelectorAll('tr'));
+			if (!domRows.length) return;
+			const [headerRow, ...bodyRows] = domRows.map((row) =>
+				Array.from(row.querySelectorAll('th,td')).map(docxTableCell)
+			);
+			// Word tables carry no alignment; the first row is the header by
+			// convention (mammoth emits <th> only for style-mapped documents).
+			const table: DocumentTable = {
+				align: (headerRow ?? []).map(() => null),
+				header: headerRow ?? [],
+				rows: bodyRows
+			};
+			const text = [table.header, ...table.rows]
+				.map((row) =>
+					row
+						.map((cell) => cell.text)
+						.filter(Boolean)
+						.join(', ')
+				)
+				.filter(Boolean)
+				.join('. ');
+			add('table', text, { table, parentId });
+		};
+
+		const addList = (element: Element, depth: number, parentId?: string) => {
+			const ordered = element.tagName.toLowerCase() === 'ol';
+			const list = add('list', '', {
+				parentId,
+				children: [],
+				list: { ordered, depth, index: 0, start: ordered ? 1 : undefined },
+				speak: false
+			});
+			let index = 0;
+			for (const item of Array.from(element.children)) {
+				if (item.tagName.toLowerCase() !== 'li') continue;
+				const nested: Element[] = [];
+				const itemRuns: InlineRun[] = [];
+				for (const child of Array.from(item.childNodes)) {
+					const childTag = child.nodeType === 1 ? (child as Element).tagName.toLowerCase() : '';
+					if (childTag === 'ul' || childTag === 'ol' || childTag === 'table')
+						nested.push(child as Element);
+					else itemRuns.push(...docxInlineRuns(child));
+				}
+				const inlines = normalizeRuns(itemRuns);
+				const text = inlines.map((entry) => entry.text).join('');
+				const itemBlock = add('list-item', text, {
+					parentId: list.id,
+					children: [],
+					inlines,
+					list: { ordered, depth, index }
+				});
+				index += 1;
+				for (const branch of nested) {
+					if (branch.tagName.toLowerCase() === 'table') addTable(branch, itemBlock.id);
+					else addList(branch, depth + 1, itemBlock.id);
+				}
+			}
+		};
+
+		const walk = (element: Element, parentId?: string) => {
+			for (const child of Array.from(element.children)) {
+				const tag = child.tagName.toLowerCase();
+				if (/^h[1-6]$/.test(tag)) {
+					const text = child.textContent?.trim() ?? '';
+					if (text) add('heading', text, { level: Number(tag[1]), parentId });
+				} else if (tag === 'p') {
+					const inlines = normalizeRuns(docxInlineRuns(child));
+					// block.text must be the exact concatenation of run texts —
+					// inlineConstructSpans falls back to plain segmentation otherwise.
+					const text = inlines.map((entry) => entry.text).join('');
+					if (text) add('paragraph', text, { inlines, parentId });
+				} else if (tag === 'ul' || tag === 'ol') {
+					addList(child, 0, parentId);
+				} else if (tag === 'table') {
+					addTable(child, parentId);
+				} else if (tag === 'blockquote') {
+					const quote = add('quote', '', { parentId, children: [], speak: false });
+					walk(child, quote.id);
+				} else if (tag === 'pre') {
+					const text = child.textContent ?? '';
+					if (text.trim()) add('code', text, { parentId });
+				} else {
+					walk(child, parentId);
+				}
+			}
+		};
+		walk(dom.body);
+		try {
+			spliceDocxExtras(blocks, await extractDocxExtras(new Uint8Array(arrayBuffer)));
+		} catch {
+			// Equations and diagrams are additive — a surprising zip or XML
+			// layout must never fail the whole import.
 		}
 		return {
 			blocks,
+			title: blocks.find((candidate) => candidate.kind === 'heading' && candidate.level === 1)
+				?.text,
 			warnings: result.messages.map((message) => message.message).slice(0, 8)
 		};
 	} catch (error) {

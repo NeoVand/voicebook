@@ -40,3 +40,6 @@ skills-lock.json
 # Local agent tooling
 .claude/
 .playwright-mcp/
+
+# Local test fixtures (user-provided, not committed)
+test_documents/
