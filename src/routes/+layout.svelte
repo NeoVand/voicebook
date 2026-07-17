@@ -235,7 +235,7 @@
 
 			<div class="reader-commandbar-actions">
 				<button
-					class="icon-button mobile-reader-hidden"
+					class="icon-button"
 					class:active={readerChrome.outlineOpen}
 					type="button"
 					data-tour="outline"
@@ -300,17 +300,17 @@
 					>
 						{#if isFullscreen}<Shrink size={16} />{:else}<Fullscreen size={16} />{/if}
 					</button>
-					<button
-						class="icon-button"
-						type="button"
-						data-tour="help"
-						aria-label="Show me around"
-						title="Show me around"
-						onclick={() => startTour(tourContext)}
-					>
-						<CircleHelp size={16} />
-					</button>
 				</div>
+				<button
+					class="icon-button"
+					type="button"
+					data-tour="help"
+					aria-label="Show me around"
+					title="Show me around"
+					onclick={() => startTour(tourContext)}
+				>
+					<CircleHelp size={16} />
+				</button>
 				<button
 					class="icon-button"
 					type="button"

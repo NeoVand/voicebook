@@ -8,12 +8,14 @@
 		ChevronLeft,
 		ChevronRight,
 		LocateFixed,
+		MoonStar,
 		Pause,
 		Play,
 		RotateCcw,
 		RotateCw,
 		Square,
-		Volume2
+		Volume2,
+		X
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
@@ -1274,11 +1276,41 @@
 						align="end"
 					/>
 				</div>
+				<button
+					class="sleep-timer"
+					class:armed={player.sleepTimerMinutes !== null}
+					type="button"
+					aria-label={player.sleepTimerMinutes === null
+						? 'Sleep timer off. Set 15 minutes'
+						: `Sleep timer ${player.sleepTimerMinutes} minutes. Change`}
+					title={player.sleepTimerMinutes === null
+						? 'Sleep timer'
+						: `Pauses in ${Math.max(1, Math.ceil((player.sleepTimerRemainingMs ?? 0) / 60_000))} min`}
+					onclick={() => player.cycleSleepTimer()}
+				>
+					<MoonStar size={17} aria-hidden="true" />
+					{#if player.sleepTimerMinutes !== null}
+						<span class="sleep-timer-badge">{player.sleepTimerMinutes}</span>
+					{/if}
+				</button>
 				<VolumeControl volume={player.volume} onChange={(volume) => player.setVolume(volume)} />
 			</div>
 
 			{#if player.errorMessage}
 				<div class="player-error" role="alert">{player.errorMessage}</div>
+			{/if}
+
+			{#if player.storageWarning}
+				<div class="player-storage-warning" role="status">
+					<span>{player.storageWarning}</span>
+					<button
+						type="button"
+						aria-label="Dismiss storage warning"
+						onclick={() => player.dismissStorageWarning()}
+					>
+						<X size={13} />
+					</button>
+				</div>
 			{/if}
 		</footer>
 	</div>
@@ -2493,6 +2525,45 @@
 		gap: 4px;
 	}
 
+	.sleep-timer {
+		position: relative;
+		display: grid;
+		width: 36px;
+		height: 36px;
+		place-items: center;
+		padding: 0;
+		border: 0;
+		border-radius: 50%;
+		background: transparent;
+		color: var(--muted);
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.sleep-timer:hover {
+		background: var(--control-hover);
+		color: var(--text);
+	}
+
+	.sleep-timer.armed {
+		color: var(--primary);
+	}
+
+	.sleep-timer-badge {
+		position: absolute;
+		right: 2px;
+		bottom: 3px;
+		padding: 0 3px;
+		border-radius: 999px;
+		background: var(--primary);
+		color: var(--primary-ink);
+		font-size: 7px;
+		font-variant-numeric: tabular-nums;
+		font-weight: 700;
+		line-height: 11px;
+	}
+
 	.player-error {
 		position: absolute;
 		right: 16px;
@@ -2504,6 +2575,40 @@
 		background: var(--danger-surface);
 		color: var(--danger-text);
 		font-size: 9px;
+	}
+
+	.player-storage-warning {
+		position: absolute;
+		display: flex;
+		right: 16px;
+		bottom: calc(100% + 8px);
+		max-width: 420px;
+		align-items: flex-start;
+		gap: 8px;
+		padding: 10px 12px;
+		border-left: 2px solid var(--bookmark, var(--primary));
+		border-radius: 5px;
+		background: var(--surface-overlay);
+		color: var(--text);
+		font-size: 9px;
+	}
+
+	.player-storage-warning button {
+		display: grid;
+		flex: none;
+		width: 20px;
+		height: 20px;
+		place-items: center;
+		padding: 0;
+		border: 0;
+		border-radius: 50%;
+		background: transparent;
+		color: var(--muted);
+	}
+
+	.player-storage-warning button:hover {
+		background: var(--control-hover);
+		color: var(--text);
 	}
 
 	@media (prefers-reduced-motion: reduce) {
@@ -2580,8 +2685,11 @@
 			--player-height: calc(126px + env(safe-area-inset-bottom));
 		}
 
+		/* The outline keeps the ≤820px overlay-drawer treatment, sized for
+		 * phones. Hiding it entirely would leave no table of contents at all. */
 		.outline-panel {
-			display: none;
+			width: min(280px, 84vw);
+			padding-bottom: env(safe-area-inset-bottom);
 		}
 
 		.player-bar {

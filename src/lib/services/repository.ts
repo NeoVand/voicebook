@@ -1,7 +1,9 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb';
 import type {
 	AudioVariantMeta,
+	ListenedRange,
 	NormalizedDocument,
+	PlaybackPosition,
 	StorageSnapshot,
 	StoredAudio
 } from '$lib/domain/types';
@@ -9,6 +11,17 @@ import type {
 interface SettingRecord {
 	key: string;
 	value: unknown;
+}
+
+/** The playback pointer and listened ranges change every second or two while
+ * listening; documents can be megabytes. Persisting position through this
+ * small record keeps the hot path off full-document writes. Full document
+ * writes mirror into it so the two never diverge backwards. */
+export interface PlaybackRecord {
+	documentId: string;
+	playback?: PlaybackPosition;
+	listened?: Record<string, ListenedRange[]>;
+	updatedAt: number;
 }
 
 interface VoicebookDb extends DBSchema {
@@ -26,25 +39,48 @@ interface VoicebookDb extends DBSchema {
 		key: string;
 		value: SettingRecord;
 	};
+	playback: {
+		key: string;
+		value: PlaybackRecord;
+	};
 }
 
 let databasePromise: Promise<IDBPDatabase<VoicebookDb>> | undefined;
 
 function database(): Promise<IDBPDatabase<VoicebookDb>> {
 	if (!databasePromise) {
-		databasePromise = openDB<VoicebookDb>('voicebook-v1', 1, {
-			upgrade(db) {
-				const documents = db.createObjectStore('documents', { keyPath: 'id' });
-				documents.createIndex('fingerprint', 'fingerprint');
-				documents.createIndex('updatedAt', 'updatedAt');
-				const audio = db.createObjectStore('audio', { keyPath: 'key' });
-				audio.createIndex('documentId', 'documentId');
-				audio.createIndex('segmentId', 'segmentId');
-				db.createObjectStore('settings', { keyPath: 'key' });
+		databasePromise = openDB<VoicebookDb>('voicebook-v1', 2, {
+			upgrade(db, oldVersion) {
+				if (oldVersion < 1) {
+					const documents = db.createObjectStore('documents', { keyPath: 'id' });
+					documents.createIndex('fingerprint', 'fingerprint');
+					documents.createIndex('updatedAt', 'updatedAt');
+					const audio = db.createObjectStore('audio', { keyPath: 'key' });
+					audio.createIndex('documentId', 'documentId');
+					audio.createIndex('segmentId', 'segmentId');
+					db.createObjectStore('settings', { keyPath: 'key' });
+				}
+				if (oldVersion < 2) {
+					db.createObjectStore('playback', { keyPath: 'documentId' });
+				}
 			}
 		});
 	}
 	return databasePromise;
+}
+
+/** Overlay the hot-path playback record when it is at least as fresh as the
+ * stored document (equal timestamps come from the mirror write). */
+function withPlayback(
+	document: NormalizedDocument,
+	record: PlaybackRecord | undefined
+): NormalizedDocument {
+	if (!record || record.updatedAt < document.updatedAt) return document;
+	return {
+		...document,
+		...(record.playback ? { playback: record.playback } : {}),
+		...(record.listened ? { listened: record.listened } : {})
+	};
 }
 
 function safePart(value: string): string {
@@ -109,12 +145,21 @@ async function removeOpfs(path: string): Promise<void> {
 }
 
 export async function listDocuments(): Promise<NormalizedDocument[]> {
-	const records = await (await database()).getAllFromIndex('documents', 'updatedAt');
-	return records.sort((a, b) => b.updatedAt - a.updatedAt);
+	const db = await database();
+	const [records, playback] = await Promise.all([
+		db.getAllFromIndex('documents', 'updatedAt'),
+		db.getAll('playback')
+	]);
+	const playbackById = new Map(playback.map((record) => [record.documentId, record]));
+	return records
+		.map((record) => withPlayback(record, playbackById.get(record.id)))
+		.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export async function getDocument(id: string): Promise<NormalizedDocument | undefined> {
-	return (await database()).get('documents', id);
+	const db = await database();
+	const [document, playback] = await Promise.all([db.get('documents', id), db.get('playback', id)]);
+	return document && withPlayback(document, playback);
 }
 
 export async function getDocumentByFingerprint(
@@ -139,13 +184,38 @@ export async function putDocument(
 		}
 	}
 	record.updatedAt = Date.now();
-	await (await database()).put('documents', record);
+	const db = await database();
+	await db.put('documents', record);
+	// Mirror so the hot-path record can never be older than the document —
+	// a full save (which may clear listened ranges) always wins over a
+	// position write from an earlier session.
+	await db.put('playback', {
+		documentId: record.id,
+		playback: record.playback,
+		listened: record.listened,
+		updatedAt: record.updatedAt
+	});
 	return record;
+}
+
+export async function putPlayback(
+	documentId: string,
+	playback: PlaybackPosition | undefined,
+	listened: Record<string, ListenedRange[]> | undefined
+): Promise<void> {
+	await (
+		await database()
+	).put('playback', {
+		documentId,
+		playback,
+		listened,
+		updatedAt: Date.now()
+	});
 }
 
 export async function deleteDocument(id: string): Promise<void> {
 	const db = await database();
-	const transaction = db.transaction(['documents', 'audio'], 'readwrite');
+	const transaction = db.transaction(['documents', 'audio', 'playback'], 'readwrite');
 	const audioIndex = transaction.objectStore('audio').index('documentId');
 	let cursor = await audioIndex.openCursor(id);
 	const paths: string[] = [];
@@ -155,6 +225,7 @@ export async function deleteDocument(id: string): Promise<void> {
 		cursor = await cursor.continue();
 	}
 	await transaction.objectStore('documents').delete(id);
+	await transaction.objectStore('playback').delete(id);
 	await transaction.done;
 	await Promise.all(paths.map(removeOpfs));
 	try {

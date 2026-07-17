@@ -41,6 +41,7 @@ export interface SynthesisResult {
 export class TtsClient {
 	private worker?: Worker;
 	private pending = new Map<string, PendingRequest>();
+	private timeoutsSinceLastResult = 0;
 	modelId?: ModelDescriptor['id'];
 	backend: 'webgpu' | 'wasm' = 'wasm';
 	dtype = 'q8';
@@ -153,7 +154,6 @@ export class TtsClient {
 			steps: normalizeGenerationSteps(totalSteps),
 			backend: this.backend
 		});
-		let timedOut = false;
 		const abort = () => {
 			this.ensureWorker().postMessage({ type: 'cancel', requestId } satisfies TtsWorkerRequest);
 			const pending = this.pending.get(requestId);
@@ -162,9 +162,28 @@ export class TtsClient {
 		};
 		signal?.addEventListener('abort', abort, { once: true });
 		const timeout = globalThis.setTimeout(() => {
-			if (!this.pending.has(requestId)) return;
-			timedOut = true;
-			this.cancelAll();
+			const pending = this.pending.get(requestId);
+			if (!pending) return;
+			this.timeoutsSinceLastResult += 1;
+			if (this.timeoutsSinceLastResult > 1) {
+				// Two timeouts in a row means the worker is likely wedged, not just
+				// slow — only then is a full engine reset worth the model reload.
+				this.pending.delete(requestId);
+				pending.reject(
+					new Error('Speech generation stalled twice in a row, so the voice engine was restarted.')
+				);
+				this.cancelAll();
+				return;
+			}
+			// One slow passage cancels just that request; the worker aborts at the
+			// next denoise step and the loaded model stays warm.
+			this.worker?.postMessage({ type: 'cancel', requestId } satisfies TtsWorkerRequest);
+			this.pending.delete(requestId);
+			pending.reject(
+				new Error(
+					'Speech generation did not finish within 90 seconds, so the request was canceled.'
+				)
+			);
 		}, 90_000);
 		try {
 			const response = await this.request(
@@ -176,13 +195,7 @@ export class TtsClient {
 					totalSteps: normalizeGenerationSteps(totalSteps)
 				},
 				(update) => progress?.({ status: update.status, progress: update.progress })
-			).catch((error) => {
-				if (timedOut)
-					throw new Error(
-						'Speech generation did not finish within 90 seconds. The voice engine was stopped so it cannot keep slowing down this device.'
-					);
-				throw error;
-			});
+			);
 			if (response.type !== 'result')
 				throw new Error('The speech worker returned an invalid audio result.');
 			const result = {
@@ -191,6 +204,7 @@ export class TtsClient {
 				timing: response.timing,
 				metrics: response.metrics
 			};
+			this.timeoutsSinceLastResult = 0;
 			finishRuntimeOperation(operationId, 'completed');
 			return result;
 		} catch (error) {
@@ -207,6 +221,7 @@ export class TtsClient {
 	}
 
 	cancelAll(): void {
+		this.timeoutsSinceLastResult = 0;
 		const error = new DOMException('Speech generation was canceled.', 'AbortError');
 		for (const request of this.pending.values()) request.reject(error);
 		this.pending.clear();

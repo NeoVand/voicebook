@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import { getModel } from '$lib/domain/model-catalog';
+import { wordsFor } from '$lib/domain/speech-words';
 import type { DeviceCapabilities, TimingMap } from '$lib/domain/types';
 import { createHuggingFaceFetch } from './huggingface-fetch';
 import { currentSpeechRuntimePolicy } from './runtime-policy';
@@ -58,12 +59,13 @@ async function disposeCurrent(): Promise<void> {
 }
 
 function estimatedTiming(text: string, duration: number): TimingMap {
-	const matches = Array.from(text.matchAll(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu));
-	const units = matches.map((match, index) => {
-		const word = match[0];
-		const end = (match.index ?? 0) + word.length;
-		const nextStart = matches[index + 1]?.index ?? text.length;
-		const gap = text.slice(end, nextStart);
+	// Tokenized with the shared wordsFor so each timing entry lines up
+	// index-for-index with the segment's display word spans.
+	const spans = wordsFor(text);
+	const units = spans.map((span, index) => {
+		const word = span.text;
+		const nextStart = spans[index + 1]?.start ?? text.length;
+		const gap = text.slice(span.end, nextStart);
 		const pause = /[.!?…]/u.test(gap)
 			? 4
 			: /[;:]/u.test(gap)
@@ -145,19 +147,32 @@ async function synthesize(
 		status: 'Preparing text…',
 		progress: 5
 	});
-	const result = await supertonic!.synthesize(
-		message.text,
-		message.voiceId,
-		'en',
-		(step, total) =>
-			send({
-				type: 'progress',
-				requestId: message.requestId,
-				status: `Generating speech · ${step} of ${total}`,
-				progress: (step / total) * 100
-			}),
-		message.totalSteps
-	);
+	let result: Awaited<ReturnType<SupertonicAdapter['synthesize']>>;
+	try {
+		result = await supertonic!.synthesize(
+			message.text,
+			message.voiceId,
+			'en',
+			(step, total) =>
+				send({
+					type: 'progress',
+					requestId: message.requestId,
+					status: `Generating speech · ${step} of ${total}`,
+					progress: (step / total) * 100
+				}),
+			message.totalSteps,
+			() => canceled.has(message.requestId)
+		);
+	} catch (error) {
+		// A mid-flight cancellation is a normal outcome, not an engine error:
+		// the client has already dropped this request, so reply with silence
+		// and keep the loaded model warm for the next one.
+		if (error instanceof DOMException && error.name === 'AbortError') {
+			canceled.delete(message.requestId);
+			return;
+		}
+		throw error;
+	}
 	const audio = result.audio;
 	const sampleRate = result.sampleRate;
 	const timing: TimingMap = estimatedTiming(message.text, audio.length / sampleRate);

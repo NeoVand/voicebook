@@ -28,7 +28,9 @@ export interface CloudGenerateOptions {
 export class CloudLlmError extends Error {
 	constructor(
 		message: string,
-		public readonly status?: number
+		public readonly status?: number,
+		/** Server-requested backoff (Retry-After) for 429/503 responses. */
+		public readonly retryAfterMs?: number
 	) {
 		super(message);
 		this.name = 'CloudLlmError';
@@ -148,6 +150,16 @@ interface ProviderResponse {
 	ok: boolean;
 	status: number;
 	data: unknown;
+	retryAfterMs?: number;
+}
+
+/** Retry-After arrives as delta-seconds or an HTTP date. */
+function parseRetryAfter(value: string | null): number | undefined {
+	if (!value) return undefined;
+	const seconds = Number(value);
+	if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+	const date = Date.parse(value);
+	return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
 }
 
 async function post(
@@ -174,7 +186,12 @@ async function post(
 		);
 	}
 	const data = await response.json().catch(() => ({}));
-	return { ok: response.ok, status: response.status, data };
+	return {
+		ok: response.ok,
+		status: response.status,
+		data,
+		retryAfterMs: parseRetryAfter(response.headers.get('retry-after'))
+	};
 }
 
 function errorMessage(provider: CloudLlmProvider, status: number, data: unknown): string {
@@ -215,6 +232,11 @@ function geminiText(data: unknown): string {
 		.trim();
 }
 
+const EFFORT_VARIANTS = ['none', 'minimal', null] as const;
+/** Per-model reasoning-effort the API accepted, so the 400-probe cascade runs
+ * once per session instead of on every construct. */
+const acceptedEffort = new Map<string, (typeof EFFORT_VARIANTS)[number]>();
+
 /**
  * One single-shot completion against the chosen provider. Throws
  * CloudLlmError with a user-presentable message on any failure.
@@ -245,7 +267,8 @@ export async function generateCloud(
 		if (!response.ok) {
 			throw new CloudLlmError(
 				errorMessage(provider, response.status, response.data),
-				response.status
+				response.status,
+				response.retryAfterMs
 			);
 		}
 		return anthropicText(response.data);
@@ -253,15 +276,24 @@ export async function generateCloud(
 
 	if (provider === 'openai') {
 		// Newer GPT models take reasoning_effort 'none'; some earlier minis only
-		// accept 'minimal'. Fall through the variants before giving up.
-		for (const effort of ['none', 'minimal', null] as const) {
+		// accept 'minimal'. Fall through the variants before giving up, and
+		// remember what the model accepted so later calls need one request.
+		const remembered = acceptedEffort.get(model);
+		const variants =
+			remembered === undefined
+				? EFFORT_VARIANTS
+				: [remembered, ...EFFORT_VARIANTS.filter((effort) => effort !== remembered)];
+		for (const effort of variants) {
 			const response = await post(
 				'https://api.openai.com/v1/chat/completions',
 				{ authorization: `Bearer ${apiKey}` },
 				openaiRequestBody(model, messages, options, effort),
 				options
 			);
-			if (response.ok) return openaiText(response.data);
+			if (response.ok) {
+				acceptedEffort.set(model, effort);
+				return openaiText(response.data);
+			}
 			const detail =
 				(response.data as { error?: { param?: string; message?: string } })?.error ?? {};
 			const effortRejected =
@@ -270,9 +302,11 @@ export async function generateCloud(
 			if (!effortRejected) {
 				throw new CloudLlmError(
 					errorMessage(provider, response.status, response.data),
-					response.status
+					response.status,
+					response.retryAfterMs
 				);
 			}
+			acceptedEffort.delete(model);
 		}
 		throw new CloudLlmError('OpenAI rejected every reasoning-effort variant for this model.');
 	}
@@ -286,7 +320,8 @@ export async function generateCloud(
 	if (!response.ok) {
 		throw new CloudLlmError(
 			errorMessage(provider, response.status, response.data),
-			response.status
+			response.status,
+			response.retryAfterMs
 		);
 	}
 	return geminiText(response.data);

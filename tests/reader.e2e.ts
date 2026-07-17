@@ -155,6 +155,35 @@ test('keeps the unified welcome flow stable on a phone viewport', async ({ page 
 	).toBe(true);
 });
 
+test('keeps the outline and help reachable in the phone reader', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByLabel('Title').fill('Pocket outline');
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill('# First heading\n\nA sentence to read aloud.\n\n## Second heading\n\nMore to hear.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+
+	// The table of contents and the tour must stay reachable on phones; only
+	// zoom and fullscreen give way to the narrow command bar.
+	const outlineToggle = page.getByRole('button', { name: 'Open document outline' });
+	await expect(outlineToggle).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Show me around' })).toBeVisible();
+	await expect(page.getByRole('button', { name: /Document zoom/ })).toBeHidden();
+
+	await outlineToggle.click();
+	const outline = page.locator('#document-outline');
+	await expect(outline).toBeVisible();
+	await expect(outline.getByRole('button', { name: /Second heading/ })).toBeVisible();
+	// The overlay drawer must not widen the page.
+	expect(
+		await page.evaluate(
+			() => document.documentElement.scrollWidth <= document.documentElement.clientWidth
+		)
+	).toBe(true);
+});
+
 test('highlights only the document currently open in the reader', async ({ page }) => {
 	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text', exact: true }).click();

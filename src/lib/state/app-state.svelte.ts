@@ -9,8 +9,10 @@ import { refreshDocumentSegments, segmentBlocks } from '$lib/domain/segmenter';
 import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
 import type {
 	DeviceCapabilities,
+	ListenedRange,
 	ModelDescriptor,
 	NormalizedDocument,
+	PlaybackPosition,
 	StorageSnapshot
 } from '$lib/domain/types';
 import {
@@ -21,6 +23,7 @@ import {
 	getSetting,
 	listDocuments,
 	putDocument,
+	putPlayback,
 	reconcileStorage,
 	requestPersistentStorage,
 	setSetting,
@@ -306,6 +309,21 @@ export class VoicebookState {
 		this.documents = this.documents.map((candidate) =>
 			candidate.id === saved.id ? saved : candidate
 		);
+	}
+
+	/** Persist only the playback pointer and listened ranges. This runs every
+	 * second or two during playback, so it must never serialize the whole
+	 * document the way saveDocument does. */
+	async savePlayback(document: NormalizedDocument): Promise<void> {
+		const playback = $state.snapshot(document.playback) as PlaybackPosition | undefined;
+		const listened = $state.snapshot(document.listened) as
+			Record<string, ListenedRange[]> | undefined;
+		await putPlayback(document.id, playback, listened);
+		const entry = this.documents.find((candidate) => candidate.id === document.id);
+		if (entry && entry !== document) {
+			entry.playback = playback;
+			entry.listened = listened;
+		}
 	}
 
 	async deleteDocument(id: string): Promise<void> {

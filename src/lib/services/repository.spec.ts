@@ -15,6 +15,7 @@ import {
 	listDocuments,
 	putAudio,
 	putDocument,
+	putPlayback,
 	reconcileStorage,
 	requestPersistentStorage,
 	setSetting,
@@ -141,6 +142,39 @@ describe('local repository', () => {
 		await clearGeneratedAudio(document.id);
 		expect(await getAudio(stored.key)).toBeNull();
 		await deleteDocument(document.id);
+	});
+
+	it('persists playback position without rewriting the document', async () => {
+		const document = documentFromText('Position', 'One sentence. Another sentence.');
+		const saved = await putDocument(document);
+		const segmentId = saved.segments[0].id;
+
+		// A hot-path position write is visible on read without a document write.
+		await putPlayback(
+			saved.id,
+			{ segmentId, wordIndex: 1, offset: 0.4, updatedAt: Date.now() },
+			{
+				[segmentId]: [{ start: 0, end: 0.4 }]
+			}
+		);
+		const reloaded = await getDocument(saved.id);
+		expect(reloaded?.playback).toMatchObject({ segmentId, wordIndex: 1 });
+		expect(reloaded?.listened?.[segmentId]).toEqual([{ start: 0, end: 0.4 }]);
+		expect((await listDocuments()).find((item) => item.id === saved.id)?.playback).toMatchObject({
+			segmentId,
+			wordIndex: 1
+		});
+
+		// A later full save wins over the older position record (e.g. clearing
+		// listened ranges must not be resurrected by the overlay).
+		await new Promise((resolve) => setTimeout(resolve, 2));
+		const cleared = await putDocument({ ...reloaded!, playback: undefined, listened: {} });
+		const afterClear = await getDocument(cleared.id);
+		expect(afterClear?.playback).toBeUndefined();
+		expect(afterClear?.listened).toEqual({});
+
+		await deleteDocument(saved.id);
+		expect(await getDocument(saved.id)).toBeUndefined();
 	});
 
 	it('persists settings and reports browser quota state', async () => {

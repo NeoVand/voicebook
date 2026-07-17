@@ -40,6 +40,7 @@ export default defineConfig({
 				'src/lib/domain/importers.ts',
 				'src/lib/domain/model-catalog.ts',
 				'src/lib/domain/segmenter.ts',
+				'src/lib/domain/speech-words.ts',
 				'src/lib/services/generation-plan.ts',
 				'src/lib/services/repository.ts',
 				'src/lib/services/timeline.ts',

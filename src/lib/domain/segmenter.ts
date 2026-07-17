@@ -19,24 +19,11 @@ import {
 	type TextRange
 } from './narration';
 
+import { normalizeForSpeech, spokenWordSpans, wordsFor } from './speech-words';
+
+export { normalizeForSpeech, wordsFor } from './speech-words';
+
 export const MAX_SEGMENT_CHARS = 280;
-
-/** Absolute URLs, www-prefixed ones, and bare domains with a path are all
- * letter soup when spoken — point the listener at the document instead.
- * Bare domains without a path stay ("Node.js", "vite.config.ts" and short
- * mentions like "example.com" are readable and must not be swallowed). */
-const LINK_PATTERN =
-	/(?:https?:\/\/|www\.)[^\s<>()]+|\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+\/[^\s<>()]*/gi;
-
-export function normalizeForSpeech(text: string): string {
-	return text
-		.replace(LINK_PATTERN, (url) => {
-			const trailer = /[.,;:!?'"\]]+$/.exec(url)?.[0] ?? '';
-			return `a link in the document${trailer}`;
-		})
-		.replace(/\s+/g, ' ')
-		.trim();
-}
 
 function sentenceParts(text: string): Array<{ text: string; index: number }> {
 	if (typeof Intl.Segmenter === 'function') {
@@ -78,26 +65,8 @@ function splitLongSentence(
 	return output;
 }
 
-export function wordsFor(text: string): WordSpan[] {
-	if (typeof Intl.Segmenter === 'function') {
-		const segmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
-		return Array.from(segmenter.segment(text))
-			.filter((part) => part.isWordLike)
-			.map((part) => ({
-				text: part.segment,
-				start: part.index,
-				end: part.index + part.segment.length
-			}));
-	}
-	return Array.from(text.matchAll(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu), (match) => ({
-		text: match[0],
-		start: match.index ?? 0,
-		end: (match.index ?? 0) + match[0].length
-	}));
-}
-
 export function estimateDuration(text: string): number {
-	const wordCount = Math.max(wordsFor(text).length, 1);
+	const wordCount = Math.max(wordsFor(normalizeForSpeech(text)).length, 1);
 	const punctuationPause =
 		(text.match(/[,;:]/g)?.length ?? 0) * 0.12 + (text.match(/[.!?]/g)?.length ?? 0) * 0.24;
 	return Math.max(0.7, wordCount / 2.65 + punctuationPause);
@@ -166,7 +135,7 @@ function pushConstructSegments(
 			normalizedText: normalizeForSpeech(chunk),
 			start,
 			end,
-			words: wordsFor(chunk),
+			words: spokenWordSpans(chunk),
 			estimatedDuration: estimateDuration(chunk),
 			anchor: {
 				...block.anchor,
@@ -302,7 +271,7 @@ export function segmentBlocks(
 					let rendered = '';
 					let cursor = start;
 					const pushPlainWords = (chunk: string, displayOffset: number) => {
-						for (const word of wordsFor(chunk)) {
+						for (const word of spokenWordSpans(chunk)) {
 							speechWords.push({
 								text: word.text,
 								start: displayOffset + word.start,
@@ -317,7 +286,7 @@ export function segmentBlocks(
 						rendered += block.text.slice(cursor, from);
 						if (span.start >= start) {
 							const replacement = inlineReplacement(span, narrations);
-							for (const word of wordsFor(replacement.text)) {
+							for (const word of wordsFor(normalizeForSpeech(replacement.text))) {
 								speechWords.push({ text: word.text, start: from - start, end: to - start });
 							}
 							rendered += replacement.text;
@@ -345,7 +314,7 @@ export function segmentBlocks(
 					normalizedText: normalizeForSpeech(speech),
 					start,
 					end,
-					words: substituted ? speechWords : wordsFor(text),
+					words: substituted ? speechWords : spokenWordSpans(text),
 					estimatedDuration: estimateDuration(speech),
 					anchor: {
 						...block.anchor,
