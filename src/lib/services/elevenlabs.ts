@@ -4,6 +4,7 @@
  * subscription usage for the settings surface. Calls go directly from this
  * browser to api.elevenlabs.io with the user's own key.
  */
+import { wordsFor } from '$lib/domain/speech-words';
 import type { TimingMap, WordTiming } from '$lib/domain/types';
 import type { SynthesisResult } from './tts-client';
 import type { ElevenLabsVoice } from '$lib/domain/provider-catalog';
@@ -66,29 +67,32 @@ export interface CharacterAlignment {
 }
 
 /**
- * Group the character-level alignment into per-word timings matching the
- * whitespace words of the input text — the same tokenization the reader's
- * word highlighter walks. Pure and unit-tested.
+ * Group the character-level alignment into per-word timings using the shared
+ * `wordsFor` tokenizer — the exact tokenization behind the segmenter's word
+ * spans, so timing entries line up index-for-index with the reader's word
+ * highlighter. Pure and unit-tested.
  */
 export function wordTimingsFromAlignment(alignment: CharacterAlignment): WordTiming[] {
-	const words: WordTiming[] = [];
-	let current: WordTiming | null = null;
+	// Rebuild the aligned text with per-character times. Entries are usually
+	// single characters, but expanding defensively keeps indexes correct if
+	// the API ever returns multi-character entries.
+	let text = '';
+	const starts: number[] = [];
+	const ends: number[] = [];
 	alignment.characters.forEach((character, index) => {
-		if (/\s/.test(character)) {
-			if (current) words.push(current);
-			current = null;
-			return;
-		}
 		const start = alignment.character_start_times_seconds[index] ?? 0;
 		const end = alignment.character_end_times_seconds[index] ?? start;
-		if (!current) current = { word: character, start, end };
-		else {
-			current.word += character;
-			current.end = end;
+		for (let offset = 0; offset < character.length; offset += 1) {
+			starts.push(start);
+			ends.push(end);
 		}
+		text += character;
 	});
-	if (current) words.push(current);
-	return words;
+	return wordsFor(text).map((span) => ({
+		word: span.text,
+		start: starts[span.start] ?? 0,
+		end: ends[span.end - 1] ?? starts[span.start] ?? 0
+	}));
 }
 
 export function pcm16ToFloat32(bytes: Uint8Array): Float32Array {

@@ -1877,7 +1877,9 @@ textarea {
 		grid-column: auto;
 	}
 
-	.reader-commandbar .mobile-reader-hidden,
+	/* Zoom and fullscreen give way on phones, but the outline toggle and the
+	 * help button stay — without them the table of contents and the tour are
+	 * unreachable on mobile. */
 	.reader-commandbar .document-zoom {
 		display: none;
 	}

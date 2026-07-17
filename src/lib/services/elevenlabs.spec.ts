@@ -29,6 +29,22 @@ describe('word timings from character alignment', () => {
 		expect(words.map((word) => word.word)).toEqual(['a', 'b']);
 	});
 
+	it('tokenizes like the shared word tokenizer, not by whitespace', () => {
+		// "well - lit" with a spaced hyphen: whitespace grouping would emit a
+		// bare "-" token that has no display-span counterpart and would shift
+		// every later highlight; the shared tokenizer skips it.
+		const text = 'well - lit';
+		const characters = text.split('');
+		const times = characters.map((_, index) => index * 0.1);
+		const words = wordTimingsFromAlignment({
+			characters,
+			character_start_times_seconds: times,
+			character_end_times_seconds: times
+		});
+		expect(words.map((word) => word.word)).toEqual(['well', 'lit']);
+		expect(words[1].start).toBeCloseTo(0.7, 5);
+	});
+
 	it('returns no words for empty alignment', () => {
 		expect(
 			wordTimingsFromAlignment({

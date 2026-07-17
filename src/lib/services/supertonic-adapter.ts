@@ -332,12 +332,17 @@ export class SupertonicAdapter {
 		};
 	}
 
+	private static throwIfCanceled(shouldCancel?: () => boolean): void {
+		if (shouldCancel?.()) throw new DOMException('Speech generation was canceled.', 'AbortError');
+	}
+
 	private async infer(
 		text: string,
 		language: string,
 		style: VoiceStyle,
 		progress?: (step: number, total: number) => void,
-		totalSteps = DEFAULT_GENERATION_STEPS
+		totalSteps = DEFAULT_GENERATION_STEPS,
+		shouldCancel?: () => boolean
 	): Promise<{ audio: Float32Array; duration: number }> {
 		if (!this.config || this.sessions.size !== MODEL_FILES.length)
 			throw new Error('Supertonic 3 is not loaded yet.');
@@ -377,6 +382,9 @@ export class SupertonicAdapter {
 			const totalStep = new (this.ort().Tensor)('float32', new Float32Array([totalSteps]), [1]);
 			totalStepTensor = totalStep;
 			for (let step = 0; step < totalSteps; step += 1) {
+				// A canceled request (seek, voice change, timeout) must release the
+				// GPU promptly instead of finishing a result nobody will use.
+				SupertonicAdapter.throwIfCanceled(shouldCancel);
 				const noisyLatent = new (this.ort().Tensor)('float32', latent, sampled.dims);
 				const currentStep = new (this.ort().Tensor)('float32', new Float32Array([step]), [1]);
 				let denoisedLatent: Tensor | undefined;
@@ -399,6 +407,7 @@ export class SupertonicAdapter {
 					disposeTensor(noisyLatent);
 				}
 			}
+			SupertonicAdapter.throwIfCanceled(shouldCancel);
 			const vocoderLatent = new (this.ort().Tensor)('float32', latent, sampled.dims);
 			vocoderInput = vocoderLatent;
 			const decoded = await vocoder.run({ latent: vocoderLatent });
@@ -425,7 +434,8 @@ export class SupertonicAdapter {
 		voiceId: string,
 		language = 'en',
 		progress?: (step: number, total: number) => void,
-		totalSteps = DEFAULT_GENERATION_STEPS
+		totalSteps = DEFAULT_GENERATION_STEPS,
+		shouldCancel?: () => boolean
 	): Promise<{ audio: Float32Array; sampleRate: number }> {
 		if (!this.config) throw new Error('Supertonic 3 is not loaded yet.');
 		const style = await this.style(voiceId);
@@ -434,7 +444,7 @@ export class SupertonicAdapter {
 		const parts: Float32Array[] = [];
 		let length = 0;
 		for (const [index, chunk] of chunks.entries()) {
-			const result = await this.infer(chunk, language, style, progress, totalSteps);
+			const result = await this.infer(chunk, language, style, progress, totalSteps, shouldCancel);
 			if (index) {
 				parts.push(silence);
 				length += silence.length;

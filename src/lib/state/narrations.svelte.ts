@@ -23,6 +23,11 @@ export type NarrationPhase = 'idle' | 'running' | 'paused-gpu' | 'error';
 
 const GPU_POLL_MS = 500;
 const ITEM_YIELD_MS = 250;
+/** Cloud rewrites are independent HTTP calls with no GPU to share — a small
+ * pool cuts whole-document narration time several-fold without hammering the
+ * provider. The local engine stays strictly serial. */
+const CLOUD_CONCURRENCY = 3;
+const MAX_RETRY_AFTER_MS = 15_000;
 const REBIND_DEBOUNCE_MS = 400;
 const PERSIST_DEBOUNCE_MS = 1_000;
 const OOM_RETRY_IDLE_MS = 10_000;
@@ -353,29 +358,34 @@ export class NarrationState {
 
 	private async run(token: number): Promise<void> {
 		this.phase = 'running';
-		while (token === this.runToken && this.queue.length) {
-			// Cloud engines never contend with the speech engine for the GPU.
-			if (this.engine?.type === 'local') await this.gpuQuiet(token);
-			if (token !== this.runToken) return;
-			const construct = this.queue.shift()!;
-			try {
-				const text = await this.rewrite(construct, token);
+		const worker = async (): Promise<void> => {
+			while (token === this.runToken && this.queue.length) {
+				// Cloud engines never contend with the speech engine for the GPU.
+				if (this.engine?.type === 'local') await this.gpuQuiet(token);
 				if (token !== this.runToken) return;
-				this.applyResult(construct, text);
-				this.completed += 1;
-			} catch (error) {
-				if (token !== this.runToken) return;
-				if (this.isOom(error) && this.engine?.type === 'local') {
-					const stopped = await this.handleOom(construct, token);
-					if (stopped || token !== this.runToken) return;
-					continue;
+				const construct = this.queue.shift();
+				if (!construct) return;
+				try {
+					const text = await this.rewrite(construct, token);
+					if (token !== this.runToken) return;
+					this.applyResult(construct, text);
+					this.completed += 1;
+				} catch (error) {
+					if (token !== this.runToken) return;
+					if (this.isOom(error) && this.engine?.type === 'local') {
+						const stopped = await this.handleOom(construct, token);
+						if (stopped || token !== this.runToken) return;
+						continue;
+					}
+					this.applyFailure(construct);
+					this.failed += 1;
 				}
-				this.applyFailure(construct);
-				this.failed += 1;
+				this.notifyProgress();
+				if (this.engine?.type === 'local') await delay(ITEM_YIELD_MS);
 			}
-			this.notifyProgress();
-			await delay(ITEM_YIELD_MS);
-		}
+		};
+		const workers = this.engine?.type === 'cloud' ? CLOUD_CONCURRENCY : 1;
+		await Promise.all(Array.from({ length: Math.min(workers, this.queue.length) || 1 }, worker));
 		if (token !== this.runToken) return;
 		this.phase = 'idle';
 		this.flushRebind();
@@ -428,8 +438,10 @@ export class NarrationState {
 				!this.isOom(error)
 			) {
 				// One transient-error retry: local waits for the GPU to quiet
-				// down, cloud just backs off briefly.
-				if (engine?.type === 'cloud') await delay(1_500);
+				// down, cloud backs off for the server-requested interval when
+				// one was given (rate limits), briefly otherwise.
+				if (engine?.type === 'cloud')
+					await delay(Math.min(error.retryAfterMs ?? 1_500, MAX_RETRY_AFTER_MS));
 				else await this.gpuQuiet(token);
 				if (token !== this.runToken) throw error;
 				return await rewriteConstruct(request);

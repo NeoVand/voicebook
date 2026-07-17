@@ -9,11 +9,13 @@
 		FileText,
 		FileUp,
 		Plus,
+		Search,
 		Trash2,
 		X
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
+	import CompactSelect from '$lib/components/CompactSelect.svelte';
 	import DocumentKindIcon from '$lib/components/DocumentKindIcon.svelte';
 	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
 	import type { DocumentKind, NormalizedDocument } from '$lib/domain/types';
@@ -27,6 +29,14 @@
 	let pasteOpen = $state(false);
 	let pasteTitle = $state('');
 	let pasteText = $state('');
+	let searchQuery = $state('');
+	let sortOrder = $state('recent');
+	const sortOptions = [
+		{ value: 'recent', label: 'Recent' },
+		{ value: 'title', label: 'Title' },
+		{ value: 'added', label: 'Added' },
+		{ value: 'progress', label: 'Progress' }
+	];
 	let modelInstalled = $derived(appState.installedModels.includes('supertonic-3'));
 	// The unified installer downloads the voice engine first; keep it on
 	// screen while the narration model stage is still fetching a model that
@@ -74,6 +84,19 @@
 		);
 		return Math.max(0, ((index + 1) / document.segments.length) * 100);
 	}
+
+	let visibleDocuments = $derived.by(() => {
+		const query = searchQuery.trim().toLocaleLowerCase();
+		const filtered = query
+			? appState.documents.filter((document) => document.title.toLocaleLowerCase().includes(query))
+			: [...appState.documents];
+		// appState.documents already arrives most-recently-updated first.
+		if (sortOrder === 'title')
+			return filtered.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
+		if (sortOrder === 'added') return filtered.sort((a, b) => b.createdAt - a.createdAt);
+		if (sortOrder === 'progress') return filtered.sort((a, b) => progressFor(b) - progressFor(a));
+		return filtered;
+	});
 
 	function readingMinutes(document: NormalizedDocument): number {
 		return Math.max(
@@ -234,11 +257,37 @@
 							{appState.documents.length === 1 ? 'item' : 'items'}
 						</span>
 					</div>
-					<p>Drop files anywhere in the library to add them.</p>
+					<div class="library-controls">
+						<label class="library-search">
+							<Search size={14} aria-hidden="true" />
+							<input
+								type="search"
+								placeholder="Search titles…"
+								aria-label="Search the library"
+								bind:value={searchQuery}
+							/>
+						</label>
+						<CompactSelect
+							label="Sort documents"
+							value={sortOrder}
+							options={sortOptions}
+							onChange={(value) => {
+								sortOrder = value;
+							}}
+							triggerWidth="86px"
+							menuWidth="110px"
+							align="end"
+						/>
+					</div>
 				</header>
 
 				<div class="document-table">
-					{#each appState.documents as document (document.id)}
+					{#if !visibleDocuments.length}
+						<p class="library-no-matches" role="status">
+							No documents match “{searchQuery.trim()}”.
+						</p>
+					{/if}
+					{#each visibleDocuments as document (document.id)}
 						<article class="document-row">
 							<a
 								class="document-link"
@@ -554,10 +603,59 @@
 		font-size: 10px;
 	}
 
-	.library-meta p {
-		margin: 0;
+	.library-controls {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.library-search {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 0 10px;
+		border: 1px solid var(--control-border);
+		border-radius: 999px;
+		background: var(--control);
 		color: var(--faint);
-		font-size: 10px;
+	}
+
+	.library-search:focus-within {
+		border-color: var(--line-strong);
+		color: var(--muted);
+	}
+
+	.library-search input {
+		width: 148px;
+		height: 28px;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: var(--text);
+		font-size: 11px;
+		outline: none;
+	}
+
+	.library-search input::placeholder {
+		color: var(--faint);
+	}
+
+	.library-no-matches {
+		margin: 0;
+		padding: 22px 0;
+		color: var(--faint);
+		font-size: 11px;
+		text-align: center;
+	}
+
+	@media (max-width: 640px) {
+		.library-meta {
+			flex-wrap: wrap;
+		}
+
+		.library-search input {
+			width: 110px;
+		}
 	}
 
 	.document-table {
@@ -869,10 +967,6 @@
 		.library-action {
 			width: auto;
 			flex: 1;
-		}
-
-		.library-meta p {
-			display: none;
 		}
 
 		.library-welcome {

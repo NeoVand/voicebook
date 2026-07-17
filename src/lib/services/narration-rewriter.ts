@@ -15,7 +15,7 @@ import {
 	type NarrationPromptOverrides
 } from '$lib/domain/narration-prompts';
 import type { CloudLlmProvider } from '$lib/domain/provider-catalog';
-import { generateCloud, type CloudImageAttachment } from './cloud-llm';
+import { CloudLlmError, generateCloud, type CloudImageAttachment } from './cloud-llm';
 import { activeLlmHost, type LlmChatMessage } from './llm/llm-client';
 
 export type NarrationEngine =
@@ -54,7 +54,10 @@ export async function loadImageAttachment(src: string): Promise<CloudImageAttach
 export class NarrationRewriteError extends Error {
 	constructor(
 		message: string,
-		public readonly reason: 'no-model' | 'unusable-output' | 'generation-failed'
+		public readonly reason: 'no-model' | 'unusable-output' | 'generation-failed',
+		/** Provider-requested backoff, carried up so the scheduler's retry can
+		 * honor a Retry-After instead of a blind fixed delay. */
+		public readonly retryAfterMs?: number
 	) {
 		super(message);
 		this.name = 'NarrationRewriteError';
@@ -140,7 +143,8 @@ export async function rewriteConstruct(
 		} catch (error) {
 			throw new NarrationRewriteError(
 				error instanceof Error ? error.message : 'Narration generation failed.',
-				'generation-failed'
+				'generation-failed',
+				error instanceof CloudLlmError ? error.retryAfterMs : undefined
 			);
 		}
 		const cleaned = sanitizeNarration(raw, request.construct.kind, params);

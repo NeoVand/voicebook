@@ -136,6 +136,32 @@ describe('TTS worker client', () => {
 		expect(FakeWorker.instances[0].messages.at(-1)?.type).toBe('cancel');
 	});
 
+	it('cancels a timed-out request without restarting the warm engine', async () => {
+		vi.useFakeTimers();
+		try {
+			const client = new TtsClient();
+			await client.load('supertonic-3');
+			FakeWorker.autoRespond = false;
+			const slow = client.synthesize('Very slow passage', 'F1');
+			vi.advanceTimersByTime(90_000);
+			await expect(slow).rejects.toThrow('did not finish within 90 seconds');
+			// The request was canceled per-request: the worker lives on and the
+			// loaded model does not need to reload for the next passage.
+			expect(FakeWorker.instances[0].messages.at(-1)?.type).toBe('cancel');
+			expect(FakeWorker.instances[0].terminated).toBe(false);
+			expect(client.modelId).toBe('supertonic-3');
+
+			// A second consecutive timeout escalates to a full engine reset.
+			const wedged = client.synthesize('Still stuck', 'F1');
+			vi.advanceTimersByTime(90_000);
+			await expect(wedged).rejects.toThrow('stalled twice in a row');
+			expect(FakeWorker.instances[0].terminated).toBe(true);
+			expect(client.modelId).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('rejects all pending work if the worker crashes', async () => {
 		const client = new TtsClient();
 		const promise = client.capabilities();

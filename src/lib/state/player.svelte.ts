@@ -62,6 +62,14 @@ interface ActiveSynthesis {
 	purpose: 'playback' | 'document';
 }
 
+function isQuotaError(error: unknown): boolean {
+	return (
+		(error instanceof DOMException &&
+			(error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED')) ||
+		(error instanceof Error && /quota|storage.*full|no space/i.test(error.message))
+	);
+}
+
 export interface TimelineSegmentVisual {
 	id: string;
 	left: number;
@@ -90,13 +98,22 @@ export class VoicebookPlayer {
 	volume = $state(0.9);
 	autoFollow = $state(true);
 	errorMessage = $state('');
+	/** One-time notice that generated audio can no longer be saved (quota).
+	 * Cleared by the user or when a document closes. */
+	storageWarning = $state('');
 	engineBackend = $state<'webgpu' | 'wasm' | 'cloud' | undefined>();
 	engineDtype = $state('');
 	lastSynthesisMs = $state<number | undefined>();
 	lastRealtimeFactor = $state<number | undefined>();
 	lastPassageChars = $state(0);
+	/** The sleep-timer option in minutes (null = off). Cycled by the UI. */
+	sleepTimerMinutes = $state<number | null>(null);
+	/** Epoch ms when the sleep timer pauses playback; null when off. */
+	sleepTimerEndsAt = $state<number | null>(null);
 
 	private context?: AudioContext;
+	private wakeLock: WakeLockSentinel | null = null;
+	private visibilityHandler?: () => void;
 	private gain?: GainNode;
 	private soundTouch?: SoundTouchNode;
 	private soundTouchRegistration?: Promise<void>;
@@ -297,8 +314,13 @@ export class VoicebookPlayer {
 		this.position = document.playback?.offset ?? 0;
 		this.currentDuration = document.segments[this.currentSegmentIndex]?.estimatedDuration ?? 0;
 		this.errorMessage = '';
+		this.storageWarning = '';
 		this.configureMediaSession();
 		this.notifySegmentChange();
+	}
+
+	dismissStorageWarning(): void {
+		this.storageWarning = '';
 	}
 
 	private notifySegmentChange(): void {
@@ -707,9 +729,18 @@ export class VoicebookPlayer {
 			if (signal.aborted || version !== this.cancellationVersion) return false;
 			await putAudio({ ...meta, mimeType: encoded.mimeType }, encoded.blob);
 			return true;
-		} catch {
+		} catch (error) {
 			// Persistence is an optimization; generated PCM must remain playable even
-			// if encoding or browser storage is temporarily unavailable.
+			// if encoding or browser storage is temporarily unavailable. Storage
+			// exhaustion still must not stay invisible — everything generated from
+			// here on would quietly regenerate on every future listen.
+			if (isQuotaError(error) && !this.storageWarning) {
+				this.storageWarning =
+					'This device is out of storage space, so newly generated audio is not being saved. ' +
+					'Playback continues, but these passages will regenerate next time. ' +
+					'Free up space or clear generated audio under Settings → System.';
+				void appState.refreshStorage().catch(() => undefined);
+			}
 			return false;
 		}
 	}
@@ -821,6 +852,15 @@ export class VoicebookPlayer {
 		const upcoming = generationPlan(this.book.segments.length, this.currentSegmentIndex, 3).slice(
 			1
 		);
+		if (this.usesElevenLabs) {
+			// Cloud synthesis has no GPU to share — request the whole buffer
+			// window as independent HTTP calls instead of one at a time.
+			for (const index of upcoming) {
+				if (index <= this.currentSegmentIndex) continue;
+				void this.queuedAudio(index).catch(() => undefined);
+			}
+			return;
+		}
 		void (async () => {
 			// Keep inference serialized, but fill a real rolling buffer in narration
 			// order. Each result becomes playable before its storage encoding finishes.
@@ -896,6 +936,7 @@ export class VoicebookPlayer {
 			source.start(0, this.position);
 			this.isPlaying = true;
 			this.lastUiFrameAt = 0;
+			void this.acquireWakeLock();
 			this.tick(performance.now());
 			if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
 		} catch (error) {
@@ -932,6 +973,7 @@ export class VoicebookPlayer {
 			// The document finished: park the playhead at the very end instead
 			// of rewinding to the last passage's start.
 			this.position = this.currentDuration;
+			this.releaseWakeLock();
 			await this.persistPosition(true);
 			if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
 			return;
@@ -955,8 +997,54 @@ export class VoicebookPlayer {
 		this.source = undefined;
 		this.isPlaying = false;
 		cancelAnimationFrame(this.frame);
+		this.releaseWakeLock();
 		if (persistPosition) void this.persistPosition(true);
 		if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+	}
+
+	/** Keep the screen awake while reading aloud — read-along highlighting is
+	 * useless behind a lock screen, and mediaSession alone does not prevent
+	 * the display from sleeping mid-listen. Best effort by design. */
+	private async acquireWakeLock(): Promise<void> {
+		if (!('wakeLock' in navigator)) return;
+		this.visibilityHandler ??= (() => {
+			// Browsers release wake locks when the tab hides; re-acquire when
+			// the reader comes back while still playing.
+			const handler = () => {
+				if (document.visibilityState === 'visible' && this.isPlaying) void this.acquireWakeLock();
+			};
+			document.addEventListener('visibilitychange', handler);
+			return handler;
+		})();
+		if (this.wakeLock) return;
+		try {
+			const sentinel = await navigator.wakeLock.request('screen');
+			this.wakeLock = sentinel;
+			sentinel.addEventListener('release', () => {
+				if (this.wakeLock === sentinel) this.wakeLock = null;
+			});
+		} catch {
+			// Denied in power-save mode or hidden tabs; playback continues.
+			this.wakeLock = null;
+		}
+	}
+
+	private releaseWakeLock(): void {
+		void this.wakeLock?.release().catch(() => undefined);
+		this.wakeLock = null;
+	}
+
+	/** Cycle the sleep timer through Off → 15 → 30 → 60 minutes → Off, in the
+	 * same spirit as the app's other quick pickers. */
+	cycleSleepTimer(): void {
+		const options: Array<number | null> = [null, 15, 30, 60];
+		const next = options[(options.indexOf(this.sleepTimerMinutes) + 1) % options.length];
+		this.sleepTimerMinutes = next;
+		this.sleepTimerEndsAt = next === null ? null : Date.now() + next * 60_000;
+	}
+
+	get sleepTimerRemainingMs(): number | null {
+		return this.sleepTimerEndsAt === null ? null : Math.max(0, this.sleepTimerEndsAt - Date.now());
 	}
 
 	pause(): void {
@@ -970,6 +1058,13 @@ export class VoicebookPlayer {
 
 	private updateClock(now = performance.now()): void {
 		if (!this.context || !this.isPlaying) return;
+		if (this.sleepTimerEndsAt !== null && Date.now() >= this.sleepTimerEndsAt) {
+			// Clear before pausing: pause() re-enters updateClock to persist.
+			this.sleepTimerMinutes = null;
+			this.sleepTimerEndsAt = null;
+			this.pause();
+			return;
+		}
 		const previousPosition = this.position;
 		const nextPosition = Math.min(
 			this.currentDuration,
@@ -1201,18 +1296,31 @@ export class VoicebookPlayer {
 					(index) =>
 						!this.cachedSegments.has(index) && !active.has(index) && !this.cacheQueue.has(index)
 				);
-			while (version === this.cancellationVersion) {
-				const index = nextIndex();
-				if (index === undefined) break;
-				active.add(index);
-				try {
-					await this.queuedCache(index);
-				} finally {
-					active.delete(index);
+			// Local inference is serialized by the worker anyway; ElevenLabs
+			// segments are independent HTTP calls, so a small pool runs them
+			// concurrently. The first failure stops every runner.
+			const concurrency = this.usesElevenLabs ? 3 : 1;
+			let firstError: unknown;
+			let stopped = false;
+			const runner = async (): Promise<void> => {
+				while (!stopped && version === this.cancellationVersion) {
+					const index = nextIndex();
+					if (index === undefined) return;
+					active.add(index);
+					try {
+						await this.queuedCache(index);
+					} catch (error) {
+						stopped = true;
+						firstError ??= error;
+						return;
+					} finally {
+						active.delete(index);
+					}
+					this.generationProgress = this.cachedProgress * 100;
 				}
-				if (version !== this.cancellationVersion) break;
-				this.generationProgress = this.cachedProgress * 100;
-			}
+			};
+			await Promise.all(Array.from({ length: concurrency }, runner));
+			if (firstError) throw firstError;
 			await appState.refreshStorage();
 		} catch (error) {
 			if (
@@ -1328,7 +1436,13 @@ export class VoicebookPlayer {
 			offset: this.position,
 			updatedAt: Date.now()
 		};
-		await appState.saveDocument(this.book);
+		try {
+			await appState.savePlayback(this.book);
+		} catch {
+			// Position saves are best-effort: a failed write (quota pressure,
+			// private-mode eviction) must never interrupt playback. Storage
+			// trouble is surfaced by the audio persistence path instead.
+		}
 	}
 
 	private configureMediaSession(): void {

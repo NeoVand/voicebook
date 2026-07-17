@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	anthropicRequestBody,
+	CloudLlmError,
 	cloudTokenBudget,
 	geminiRequestBody,
+	generateCloud,
 	openaiRequestBody
 } from './cloud-llm';
 import type { LlmChatMessage } from './llm/llm-client';
@@ -52,6 +54,59 @@ describe('openai request body', () => {
 	it('can drop the reasoning parameter for models that reject it', () => {
 		const body = openaiRequestBody('gpt-5.4-mini', MESSAGES, {}, null);
 		expect(body).not.toHaveProperty('reasoning_effort');
+	});
+});
+
+describe('generateCloud transport behavior', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	function jsonResponse(status: number, data: unknown, headers: Record<string, string> = {}) {
+		return new Response(JSON.stringify(data), { status, headers });
+	}
+
+	it('carries the server Retry-After through the thrown error', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () =>
+				jsonResponse(429, { error: { message: 'rate limited' } }, { 'retry-after': '7' })
+			)
+		);
+		const failure = await generateCloud('anthropic', 'claude-haiku-4-5', 'key', MESSAGES).catch(
+			(error) => error
+		);
+		expect(failure).toBeInstanceOf(CloudLlmError);
+		expect(failure.status).toBe(429);
+		expect(failure.retryAfterMs).toBe(7_000);
+	});
+
+	it('remembers the accepted OpenAI reasoning effort across calls', async () => {
+		const bodies: Array<Record<string, unknown>> = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: unknown, init?: RequestInit) => {
+				const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				bodies.push(body);
+				if (body.reasoning_effort === 'none') {
+					return jsonResponse(400, {
+						error: { param: 'reasoning_effort', message: 'unsupported value' }
+					});
+				}
+				return jsonResponse(200, { choices: [{ message: { content: 'A spoken row.' } }] });
+			})
+		);
+		// First call probes 'none' (rejected) then 'minimal' (accepted)…
+		await expect(generateCloud('openai', 'gpt-probe-test', 'key', MESSAGES)).resolves.toBe(
+			'A spoken row.'
+		);
+		expect(bodies.map((body) => body.reasoning_effort)).toEqual(['none', 'minimal']);
+		// …and the second call goes straight to the remembered variant.
+		bodies.length = 0;
+		await expect(generateCloud('openai', 'gpt-probe-test', 'key', MESSAGES)).resolves.toBe(
+			'A spoken row.'
+		);
+		expect(bodies.map((body) => body.reasoning_effort)).toEqual(['minimal']);
 	});
 });
 
