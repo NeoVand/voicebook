@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { completeModelSetup, installFakeTts, openReadyLibrary } from './helpers';
 
 test.beforeEach(async ({ page }) => {
@@ -1434,4 +1435,89 @@ test('table of contents moves the reading canvas and closes its compact drawer',
 	await expect(
 		page.getByRole('heading', { name: 'Opening section', exact: true }).locator('..')
 	).toBeFocused();
+});
+
+test('imports a PDF with page markers, page navigation, and the original-page view', async ({
+	page
+}) => {
+	await openReadyLibrary(page);
+	const pdf = await PDFDocument.create();
+	const font = await pdf.embedFont(StandardFonts.Helvetica);
+	const sourcePages = [
+		['Signals in the Margin', 'The opening page introduces the study of margins in earnest.'],
+		['Methods of Listening', 'The second page describes the measurement approach in detail.'],
+		['Findings and Echoes', 'The third page reports what the overnight recordings held.']
+	];
+	for (const [heading, body] of sourcePages) {
+		const sheet = pdf.addPage([612, 792]);
+		sheet.drawText(heading, { x: 72, y: 720, size: 22, font });
+		sheet.drawText(body, { x: 72, y: 660, size: 12, font });
+	}
+	await page.locator('#document-upload').setInputFiles({
+		name: 'signals.pdf',
+		mimeType: 'application/pdf',
+		buffer: Buffer.from(await pdf.save())
+	});
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+	await expect(page.getByRole('heading', { name: 'Signals in the Margin' })).toBeVisible();
+
+	// Source pages separate with markers in the reflowed text (page 1 opens
+	// the document, so only pages 2 and 3 need announcing).
+	const markers = page.locator('.page-marker');
+	await expect(markers).toHaveCount(2);
+	await expect(markers.first()).toContainText('Page 2');
+
+	// The transport chip tracks the playhead's page and jumps on request.
+	const chip = page.locator('.page-chip');
+	await expect(chip).toContainText('p. 1');
+	await chip.click();
+	await page.getByLabel('Go to page', { exact: false }).last().fill('3');
+	await page.getByRole('button', { name: 'Go', exact: true }).click();
+	await expect(chip).toContainText('p. 3');
+	await expect(page.getByRole('heading', { name: 'Findings and Echoes' })).toBeInViewport();
+
+	// The original-page view renders the stored PDF page and pages through it.
+	await page.getByRole('button', { name: 'View original page 2' }).click();
+	const peek = page.getByRole('dialog', { name: 'Page 2 of 3' });
+	await expect(peek).toBeVisible();
+	await expect(peek.locator('canvas:not(.pending)')).toBeVisible({ timeout: 15_000 });
+	await peek.getByRole('button', { name: 'Next page' }).click();
+	await expect(page.getByRole('dialog', { name: 'Page 3 of 3' })).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+test('recognizes a scanned PDF with on-device text recognition', async ({ page }) => {
+	// Import covers a ~7 MB engine download (local assets) plus recognition.
+	test.setTimeout(180_000);
+	await openReadyLibrary(page);
+	// Paint a page image in the browser so the PDF has pixels but no text layer.
+	const pngDataUrl = await page.evaluate(() => {
+		const canvas = document.createElement('canvas');
+		canvas.width = 1224;
+		canvas.height = 1584;
+		const context = canvas.getContext('2d');
+		if (!context) return '';
+		context.fillStyle = '#ffffff';
+		context.fillRect(0, 0, canvas.width, canvas.height);
+		context.fillStyle = '#111111';
+		context.font = '600 44px Arial';
+		context.fillText('The scanned page speaks after recognition.', 80, 220);
+		context.fillText('A second sentence survives the round trip.', 80, 320);
+		return canvas.toDataURL('image/png');
+	});
+	const pdf = await PDFDocument.create();
+	const png = await pdf.embedPng(Buffer.from(pngDataUrl.split(',')[1], 'base64'));
+	const sheet = pdf.addPage([612, 792]);
+	sheet.drawImage(png, { x: 0, y: 0, width: 612, height: 792 });
+	await page.locator('#document-upload').setInputFiles({
+		name: 'scan.pdf',
+		mimeType: 'application/pdf',
+		buffer: Buffer.from(await pdf.save())
+	});
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/, { timeout: 120_000 });
+	await expect(page.locator('.reading-canvas')).toContainText('scanned page speaks', {
+		timeout: 30_000
+	});
+	await expect(page.locator('.import-warning')).toContainText('text recognition');
 });

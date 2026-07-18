@@ -23,6 +23,7 @@
 	import type { Attachment } from 'svelte/attachments';
 	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { fly } from 'svelte/transition';
 	import AudioActionsMenu from '$lib/components/AudioActionsMenu.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
 	import CompactSelect from '$lib/components/CompactSelect.svelte';
@@ -34,6 +35,8 @@
 	import MediaFigure from '$lib/components/MediaFigure.svelte';
 	import MermaidDiagram from '$lib/components/MermaidDiagram.svelte';
 	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
+	import PageMarker from '$lib/components/PageMarker.svelte';
+	import PdfPagePeek from '$lib/components/PdfPagePeek.svelte';
 	import SafeHtml from '$lib/components/SafeHtml.svelte';
 	import VolumeControl from '$lib/components/VolumeControl.svelte';
 	import type {
@@ -46,6 +49,8 @@
 	import { tableMarkdown } from '$lib/domain/narration';
 	import { assembleExplainContext } from '$lib/domain/explain-prompts';
 	import { generateExplanation } from '$lib/services/explain';
+	import { blockForPage, pageCount, pageForSegmentIndex, pageStartMap } from '$lib/domain/pages';
+	import { releasePdfRenderer } from '$lib/services/pdf-pages';
 	import { readerTourSeen, startTour } from '$lib/services/tours';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { llmState } from '$lib/state/llm.svelte';
@@ -154,6 +159,19 @@
 	let rootBlocks = $derived.by(() =>
 		(book?.blocks ?? []).filter((block) => !block.parentId && block.id !== titleBlock?.id)
 	);
+	let pageStartsById = $derived(book ? pageStartMap(book.blocks) : new Map<string, number>());
+	let documentPageCount = $derived(book ? pageCount(book.blocks) : undefined);
+	let hasPageMarkers = $derived(pageStartsById.size > 0);
+	let currentPlayheadPage = $derived(
+		book ? pageForSegmentIndex(book.segments, player.currentSegmentIndex) : undefined
+	);
+	let peekAvailable = $derived(
+		book?.sourceKind === 'pdf' && Boolean(book.sourcePath || book.sourceBlob)
+	);
+	let pagePeek = $state<{ page: number }>();
+	let pageJumpOpen = $state(false);
+	let pageJumpRoot = $state<HTMLDivElement>();
+	let pageJumpValue = $state('');
 
 	function childBlocks(block: DocumentBlock): DocumentBlock[] {
 		return (block.children ?? [])
@@ -186,6 +204,7 @@
 			if (scrollbarTimer) clearTimeout(scrollbarTimer);
 			player.onSegmentChange = undefined;
 			narrationState.stop();
+			void releasePdfRenderer();
 		};
 	});
 
@@ -212,6 +231,9 @@
 		closeExplainBox();
 		outlineNavigationBlockId = undefined;
 		activeOutlineBlockId = undefined;
+		pagePeek = undefined;
+		pageJumpOpen = false;
+		void releasePdfRenderer();
 		if (!next) {
 			openingTitle = undefined;
 			book = null;
@@ -522,6 +544,33 @@
 		const element = segmentElements.get(segment.id);
 		if (element) scrollReaderTo(element);
 		void player.goToSegment(segmentIndexes.get(segment.id) ?? 0);
+	}
+
+	function openPagePeek(peekPage: number): void {
+		pagePeek = { page: peekPage };
+	}
+
+	/** Mirrors outline-click semantics: scroll and move the playhead, keeping
+	 * the play/pause state, with the auto-follow guard held while both land. */
+	function navigateToPage(target: number): void {
+		if (!book || documentPageCount === undefined || !Number.isFinite(target)) return;
+		const destination = blockForPage(book.blocks, target);
+		if (!destination) return;
+		const clamped = Math.max(1, Math.min(documentPageCount, Math.round(target)));
+		const element = elementInReader(destination.id);
+		if (!element) return;
+		pageJumpOpen = false;
+		outlineNavigationBlockId = destination.id;
+		outlineAnnouncement = `Moved to page ${clamped}`;
+		scrollReaderTo(element);
+		const index = firstSegmentIndex(destination);
+		if (index === undefined) {
+			outlineNavigationBlockId = undefined;
+			return;
+		}
+		void player.goToSegment(index).finally(() => {
+			if (outlineNavigationBlockId === destination.id) outlineNavigationBlockId = undefined;
+		});
 	}
 
 	async function startNarrationFrom(
@@ -876,7 +925,25 @@
 		return minutes + ':' + remainder.toString().padStart(2, '0');
 	}
 
+	function handleGlobalPointer(event: PointerEvent): void {
+		if (pageJumpOpen && pageJumpRoot && !pageJumpRoot.contains(event.target as Node)) {
+			pageJumpOpen = false;
+		}
+	}
+
 	function handleKeydown(event: KeyboardEvent): void {
+		// The page peek owns the keyboard while open (its own Escape/arrows);
+		// reader shortcuts must not drive playback underneath the dialog.
+		// Escape closes it even when focus fell outside (e.g. onto a control
+		// that just became disabled).
+		if (pagePeek) {
+			if (event.key === 'Escape') pagePeek = undefined;
+			return;
+		}
+		if (pageJumpOpen && event.key === 'Escape') {
+			pageJumpOpen = false;
+			return;
+		}
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
 		// Escape stops a speaking answer or closes the explain box from
 		// anywhere — its textarea handles its own keys, but focus may sit on a
@@ -900,7 +967,7 @@
 	}
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onpointerdown={handleGlobalPointer} />
 
 <svelte:head>
 	<title>{book ? book.title + ' — Voicebook' : 'Reader — Voicebook'}</title>
@@ -959,7 +1026,7 @@
 
 {#snippet renderBlock(block: DocumentBlock)}
 	{@const children = childBlocks(block)}
-	{@const pageLabel = block.anchor.page ? `Page ${block.anchor.page}` : ''}
+	{@const pageLabel = !hasPageMarkers && block.anchor.page ? `Page ${block.anchor.page}` : ''}
 	{#if block.kind === 'list'}
 		{#if block.list?.ordered}
 			<ol
@@ -1326,7 +1393,14 @@
 								style={'--outline-level:' + Math.max(0, item.level - 1)}
 								onclick={() => outlineBlock && navigateToOutlineBlock(outlineBlock)}
 							>
-								<span class="outline-label">{compactOutlineTitle(item.title)}</span>
+								{#if item.page}
+									<span class="outline-label has-page">
+										<span class="outline-title">{compactOutlineTitle(item.title)}</span>
+										<span class="outline-page" aria-hidden="true">{item.page}</span>
+									</span>
+								{:else}
+									<span class="outline-label">{compactOutlineTitle(item.title)}</span>
+								{/if}
 								<span class="outline-state" aria-hidden="true">
 									{#if narrationOutlineBlockId === item.blockId}
 										<span class="narration-indicator"><Volume2 size={12} strokeWidth={2.2} /></span>
@@ -1392,12 +1466,16 @@
 					</h1>
 					<p>
 						{Math.max(1, Math.round(player.totalDuration / 60))} min read · {book.segments.length}
-						passages
+						passages{#if documentPageCount}&nbsp;· {documentPageCount} pages{/if}
 					</p>
 				</header>
 
 				<div class="document-body">
 					{#each rootBlocks as block (block.id)}
+						{@const markerPage = pageStartsById.get(block.id)}
+						{#if markerPage !== undefined}
+							<PageMarker page={markerPage} onPeek={peekAvailable ? openPagePeek : undefined} />
+						{/if}
 						{#if block.kind === 'list-item'}
 							<ul class="document-list legacy-list">{@render renderBlock(block)}</ul>
 						{:else}
@@ -1661,6 +1739,44 @@
 			</div>
 
 			<div class="player-options" role="group" aria-label="Playback settings">
+				{#if documentPageCount}
+					<div class="page-jump" bind:this={pageJumpRoot}>
+						<button
+							class="page-chip"
+							class:open={pageJumpOpen}
+							type="button"
+							aria-label={`Page ${currentPlayheadPage ?? 1} of ${documentPageCount}. Go to page`}
+							aria-expanded={pageJumpOpen}
+							aria-controls="page-jump-popover"
+							title="Go to page"
+							onclick={() => {
+								pageJumpValue = String(currentPlayheadPage ?? 1);
+								pageJumpOpen = !pageJumpOpen;
+							}}
+						>
+							p. {currentPlayheadPage ?? '–'}<span class="page-chip-total"
+								>/{documentPageCount}</span
+							>
+						</button>
+						{#if pageJumpOpen}
+							<form
+								id="page-jump-popover"
+								class="page-jump-popover"
+								transition:fly={{ y: 5, duration: 120 }}
+								onsubmit={(event) => {
+									event.preventDefault();
+									navigateToPage(Number(pageJumpValue));
+								}}
+							>
+								<label>
+									<span>Go to page</span>
+									<input type="number" min="1" max={documentPageCount} bind:value={pageJumpValue} />
+								</label>
+								<button class="button" type="submit">Go</button>
+							</form>
+						{/if}
+					</div>
+				{/if}
 				<div class="speed-control" data-tour="speed">
 					<CompactSelect
 						label="Playback speed"
@@ -1709,6 +1825,15 @@
 				</div>
 			{/if}
 		</footer>
+
+		{#if pagePeek && documentPageCount}
+			<PdfPagePeek
+				document={book}
+				page={pagePeek.page}
+				pageCount={documentPageCount}
+				onClose={() => (pagePeek = undefined)}
+			/>
+		{/if}
 	</div>
 {/if}
 
@@ -1918,6 +2043,27 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.outline-panel .outline-label.has-page {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+	}
+
+	.outline-panel .outline-label.has-page .outline-title {
+		overflow: hidden;
+		min-width: 0;
+		flex: 1;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.outline-panel .outline-page {
+		color: var(--faint);
+		font-family: var(--font-ui);
+		font-size: 10px;
+		font-variant-numeric: tabular-nums;
 	}
 
 	.outline-panel nav button:hover {
@@ -3098,6 +3244,80 @@
 		justify-self: end;
 		justify-content: flex-end;
 		gap: 4px;
+	}
+
+	.page-jump {
+		position: relative;
+	}
+
+	.page-chip {
+		display: inline-flex;
+		height: 30px;
+		align-items: baseline;
+		padding: 0 10px;
+		border: 1px solid var(--control-border);
+		border-radius: 8px;
+		background: var(--control);
+		color: var(--muted);
+		font-family: var(--font-ui);
+		font-size: 12px;
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.page-chip:hover,
+	.page-chip.open {
+		background: var(--control-hover);
+		color: var(--text);
+	}
+
+	.page-chip-total {
+		color: var(--faint);
+	}
+
+	.page-jump-popover {
+		position: absolute;
+		bottom: calc(100% + 10px);
+		left: 50%;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 10px 12px;
+		border: 1px solid var(--control-border);
+		border-radius: 10px;
+		background: var(--surface-overlay);
+		box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+		transform: translateX(-50%);
+	}
+
+	.page-jump-popover label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: var(--muted);
+		font-family: var(--font-ui);
+		font-size: 12px;
+		white-space: nowrap;
+	}
+
+	.page-jump-popover input {
+		width: 64px;
+		padding: 6px 8px;
+		border: 1px solid var(--control-border);
+		border-radius: 7px;
+		background: var(--control);
+		color: var(--text);
+		font-family: var(--font-ui);
+		font-size: 13px;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.page-jump-popover .button {
+		padding: 6px 12px;
+		font-size: 12px;
 	}
 
 	.sleep-timer {

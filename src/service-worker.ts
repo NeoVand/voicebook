@@ -5,13 +5,20 @@ import { base, build, files, prerendered, version } from '$service-worker';
 const worker = self as unknown as ServiceWorkerGlobalScope;
 const CACHE = `voicebook-shell-${version}`;
 const ASSETS = [...build, ...files, ...prerendered];
-const PRECACHE = ASSETS.filter(
-	(asset) =>
-		!asset.endsWith('.wasm') &&
-		!asset.includes('/workers/') &&
-		!asset.includes('pdf.worker') &&
-		!asset.includes('soundtouch-processor')
-);
+/** Heavy assets stay out of the install-time precache (the OCR engine alone
+ * is ~7 MB and most users never import a scanned PDF) and are instead cached
+ * on first successful fetch below, so the original-page view and OCR keep
+ * working offline once used. */
+const heavyAsset = (asset: string) =>
+	asset.endsWith('.wasm') ||
+	asset.includes('/workers/') ||
+	asset.includes('worker.min') ||
+	asset.includes('pdf.worker') ||
+	asset.includes('soundtouch-processor') ||
+	asset.includes('tesseract') ||
+	asset.includes('traineddata');
+const PRECACHE = ASSETS.filter((asset) => !heavyAsset(asset));
+const RUNTIME_CACHEABLE = new Set(ASSETS.filter(heavyAsset));
 
 worker.addEventListener('install', (event) => {
 	event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(PRECACHE)));
@@ -73,7 +80,12 @@ worker.addEventListener('fetch', (event) => {
 			const cached = await caches.match(event.request);
 			if (cached) return cached;
 			try {
-				return await fetch(event.request);
+				const response = await fetch(event.request);
+				if (response.ok && RUNTIME_CACHEABLE.has(url.pathname)) {
+					const copy = response.clone();
+					void caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+				}
+				return response;
 			} catch {
 				return Response.error();
 			}
