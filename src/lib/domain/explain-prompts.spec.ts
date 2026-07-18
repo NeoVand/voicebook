@@ -72,6 +72,17 @@ describe('buildExplainMessages', () => {
 		expect(messages[1].content).toContain('The listener asks: Why is it recursive?');
 	});
 
+	it('names the construct kind when one is given', () => {
+		const messages = buildExplainMessages({
+			documentTitle: 'Doc',
+			selection: 'E = mc^2',
+			selectionKind: 'equation',
+			context: { before: '', after: '' }
+		});
+		expect(messages[1].content).toContain('The listener selected this equation:\nE = mc^2');
+		expect(messages[1].content).toContain('The listener wants this equation explained.');
+	});
+
 	it('uses the default prompt and a generic ask when nothing is provided', () => {
 		const messages = buildExplainMessages({
 			documentTitle: 'Doc',

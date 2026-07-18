@@ -64,6 +64,9 @@ export function assembleExplainContext(
 export interface ExplainRequest {
 	documentTitle: string;
 	selection: string;
+	/** What the selection is — 'passage' (default) for prose, or a construct
+	 * noun like 'equation', 'table', 'code block', 'diagram', 'image'. */
+	selectionKind?: string;
 	context: ExplainContext;
 	/** The listener's own question, when they typed one. */
 	question?: string;
@@ -73,16 +76,17 @@ export function buildExplainMessages(
 	request: ExplainRequest,
 	systemPrompt = DEFAULT_EXPLAIN_PROMPT
 ): NarrationPromptMessage[] {
+	const kind = request.selectionKind?.trim() || 'passage';
 	const parts = [
 		`The document is titled "${request.documentTitle}".`,
 		request.context.before
 			? `Document excerpt before and around the selection:\n${request.context.before}`
 			: '',
-		`The listener selected this passage:\n${request.selection}`,
+		`The listener selected this ${kind}:\n${request.selection}`,
 		request.context.after ? `The document continues:\n${request.context.after}` : '',
 		request.question?.trim()
 			? `The listener asks: ${request.question.trim()}`
-			: 'The listener wants this passage explained.'
+			: `The listener wants this ${kind} explained.`
 	].filter(Boolean);
 	return [
 		{ role: 'system', content: systemPrompt },

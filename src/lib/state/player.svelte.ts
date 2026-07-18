@@ -1092,6 +1092,7 @@ export class VoicebookPlayer {
 		try {
 			const context = await this.audioGraph();
 			await this.ensureEngine();
+			if (controller.signal.aborted) return;
 			const variant = this.speechVariant();
 			let generated: SynthesisResult;
 			if (this.usesElevenLabs) {
@@ -1113,6 +1114,7 @@ export class VoicebookPlayer {
 			}
 			if (controller.signal.aborted) return;
 			await this.requireAudioOutput(context);
+			if (controller.signal.aborted) return;
 			const buffer = context.createBuffer(1, generated.audio.length, generated.sampleRate);
 			buffer.getChannelData(0).set(generated.audio);
 			await new Promise<void>((resolve) => {
@@ -1125,10 +1127,23 @@ export class VoicebookPlayer {
 				} else {
 					source.connect(this.gain!);
 				}
+				// Stopping must always release the awaiting caller, even if the
+				// browser skips onended for a stopped suspended-context source.
 				source.onended = () => resolve();
+				controller.signal.addEventListener('abort', () => resolve(), { once: true });
 				this.asideSource = source;
 				source.start(0);
 			});
+		} catch (error) {
+			// The box that started this answer is gone by now — the player's
+			// error strip is the surface that can still tell the user.
+			if (
+				!controller.signal.aborted &&
+				!(error instanceof DOMException && error.name === 'AbortError')
+			) {
+				this.errorMessage =
+					error instanceof Error ? error.message : 'The spoken answer could not be played.';
+			}
 		} finally {
 			this.asideSource = undefined;
 			if (this.asideAbort === controller) {

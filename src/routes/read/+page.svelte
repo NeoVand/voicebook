@@ -7,6 +7,7 @@
 		Check,
 		ChevronLeft,
 		ChevronRight,
+		LoaderCircle,
 		LocateFixed,
 		MoonStar,
 		Pause,
@@ -75,17 +76,22 @@
 	let narrationStartAction = $state<NarrationStartAction>();
 	interface ExplainBoxState {
 		selection: string;
-		startSegmentId: string;
-		endSegmentId: string;
+		/** 'passage' for prose selections, or a construct noun ('equation', …). */
+		kind: string;
+		startBlockId: string;
+		endBlockId: string;
 		left: number;
 		top: number;
 		placement: 'above' | 'below';
 	}
 	let explainBox = $state<ExplainBoxState>();
 	let explainQuestion = $state('');
-	let explainStatus = $state<'idle' | 'thinking' | 'speaking'>('idle');
+	let explainStatus = $state<'idle' | 'thinking'>('idle');
 	let explainError = $state('');
 	let explainAbort: AbortController | undefined;
+	/** While the spoken answer plays, the source blocks pulse instead of the
+	 * box staying open. */
+	let explainSpeaking = $state<{ startBlockId: string; endBlockId: string }>();
 	let narrationAnnouncement = $state('');
 	let appReady = $state(false);
 	let openingTitle = $state<string>();
@@ -108,6 +114,15 @@
 	let blockIndexes = $derived.by(
 		() => new SvelteMap((book?.blocks ?? []).map((block, index) => [block.id, index]))
 	);
+	let explainingBlockIds = $derived.by(() => {
+		if (!explainSpeaking || !book) return new Set<string>();
+		const start = blockIndexes.get(explainSpeaking.startBlockId);
+		const end = blockIndexes.get(explainSpeaking.endBlockId);
+		if (start === undefined || end === undefined) return new Set<string>();
+		return new Set(
+			book.blocks.slice(Math.min(start, end), Math.max(start, end) + 1).map((block) => block.id)
+		);
+	});
 	let narrationOutlineBlockId = $derived.by(() => {
 		const currentBlockId = player.currentSegment?.blockId;
 		if (!currentBlockId || !book?.outline.length) return undefined;
@@ -541,19 +556,59 @@
 
 	function openExplainBox(): void {
 		const action = narrationStartAction;
-		if (!action) return;
+		if (!action || !book) return;
+		const startBlockId = book.segments.find((s) => s.id === action.segmentId)?.blockId;
+		if (!startBlockId) return;
+		const endBlockId =
+			book.segments.find((s) => s.id === action.endSegmentId)?.blockId ?? startBlockId;
 		narrationStartAction = undefined;
 		window.getSelection()?.removeAllRanges();
+		player.stopAside();
 		explainQuestion = '';
 		explainError = '';
 		explainStatus = 'idle';
 		explainBox = {
 			selection: action.excerpt,
-			startSegmentId: action.segmentId,
-			endSegmentId: action.endSegmentId,
+			kind: 'passage',
+			startBlockId,
+			endBlockId,
 			left: action.left,
 			top: action.top,
 			placement: action.placement
+		};
+	}
+
+	/** The Explain button in a construct's expander row: the construct's own
+	 * source (or spoken description) becomes the selection, anchored at the
+	 * clicked button. Long sources clip — the surrounding context matters more
+	 * than the tail of a big table or code block. */
+	function openExplainForConstruct(
+		event: MouseEvent,
+		block: DocumentBlock,
+		kind: string,
+		selection: string
+	): void {
+		if (!readingCanvas || !(event.currentTarget instanceof HTMLElement)) return;
+		const rect = event.currentTarget.getBoundingClientRect();
+		const canvasRect = readingCanvas.getBoundingClientRect();
+		const placement = rect.top - canvasRect.top >= 250 ? 'above' : 'below';
+		const unclampedLeft = readingCanvas.scrollLeft + rect.left + rect.width / 2 - canvasRect.left;
+		const left = Math.max(170, Math.min(readingCanvas.clientWidth - 170, unclampedLeft));
+		const top =
+			readingCanvas.scrollTop +
+			(placement === 'above' ? rect.top - canvasRect.top - 8 : rect.bottom - canvasRect.top + 8);
+		player.stopAside();
+		explainQuestion = '';
+		explainError = '';
+		explainStatus = 'idle';
+		explainBox = {
+			selection: selection.trim().slice(0, 2000),
+			kind,
+			startBlockId: block.id,
+			endBlockId: block.id,
+			left,
+			top,
+			placement
 		};
 	}
 
@@ -584,17 +639,12 @@
 				const ready = await llmState.ensureReadyForNarration();
 				if (!ready) throw new Error('The on-device language model could not load.');
 			}
-			const startBlockId = book.segments.find((s) => s.id === box.startSegmentId)?.blockId;
-			const endBlockId =
-				book.segments.find((s) => s.id === box.endSegmentId)?.blockId ?? startBlockId;
-			const context =
-				startBlockId && endBlockId
-					? assembleExplainContext(book.blocks, startBlockId, endBlockId)
-					: { before: '', after: '' };
+			const context = assembleExplainContext(book.blocks, box.startBlockId, box.endBlockId);
 			const answer = await generateExplanation(
 				{
 					documentTitle: book.title,
 					selection: box.selection,
+					selectionKind: box.kind,
 					context,
 					question: explainQuestion
 				},
@@ -603,9 +653,21 @@
 				controller.signal
 			);
 			if (explainBox !== box || controller.signal.aborted) return;
-			explainStatus = 'speaking';
-			await player.speakAside(answer);
-			if (explainBox === box) closeExplainBox();
+			// The box gets out of the way once the answer speaks — the source
+			// passage pulses instead, and Escape (or starting any playback)
+			// cuts the voice.
+			explainBox = undefined;
+			explainQuestion = '';
+			explainStatus = 'idle';
+			explainSpeaking = { startBlockId: box.startBlockId, endBlockId: box.endBlockId };
+			// Read the $state back: assignment wraps the object in a reactive
+			// proxy, so guarding on the raw object would never match.
+			const speaking = explainSpeaking;
+			try {
+				await player.speakAside(answer);
+			} finally {
+				if (explainSpeaking === speaking) explainSpeaking = undefined;
+			}
 		} catch (error) {
 			if (explainBox === box && !controller.signal.aborted) {
 				explainStatus = 'idle';
@@ -703,11 +765,16 @@
 			narrationStartAction = undefined;
 			return;
 		}
+		// Both prose spans and construct containers (equations, tables, code,
+		// media) carry data-segment-id, so a selection can start or end in
+		// either. A construct container registers every segment of its group
+		// under the same element — the boundary scan below resolves "ends in
+		// this table" to the group's last segment.
 		const startElement =
 			range.startContainer instanceof Element
 				? range.startContainer
 				: range.startContainer.parentElement;
-		const segmentElement = startElement?.closest<HTMLElement>('.speech-segment');
+		const segmentElement = startElement?.closest<HTMLElement>('[data-segment-id]');
 		const segmentId = segmentElement?.dataset.segmentId;
 		const segment = segmentId
 			? book.segments.find((candidate) => candidate.id === segmentId)
@@ -727,13 +794,17 @@
 		// to reading the start segment to its natural end.
 		const endElement =
 			range.endContainer instanceof Element ? range.endContainer : range.endContainer.parentElement;
-		const endSegmentElement = endElement?.closest<HTMLElement>('.speech-segment');
-		const endSegmentId = endSegmentElement?.dataset.segmentId;
-		const endSegment = endSegmentId
-			? book.segments.find((candidate) => candidate.id === endSegmentId)
-			: undefined;
-		const boundarySegment =
-			endSegment && readingCanvas.contains(endSegmentElement!) ? endSegment : segment;
+		const endSegmentElement = endElement?.closest<HTMLElement>('[data-segment-id]');
+		let boundarySegment = segment;
+		if (endSegmentElement && readingCanvas.contains(endSegmentElement)) {
+			for (let index = book.segments.length - 1; index >= 0; index -= 1) {
+				const candidate = book.segments[index];
+				if (segmentElements.get(candidate.id) === endSegmentElement) {
+					boundarySegment = candidate;
+					break;
+				}
+			}
+		}
 		const endWordElement = endElement?.closest<HTMLElement>('[data-word-index]');
 		const parsedEndWordIndex = Number(endWordElement?.dataset.wordIndex ?? NaN);
 		const endWordIndex = Number.isFinite(parsedEndWordIndex)
@@ -807,11 +878,13 @@
 
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
-		// Escape closes the explain box from anywhere — its textarea handles
-		// its own keys, but focus may sit on a button (or nowhere) by then.
-		if (event.key === 'Escape' && explainBox) {
+		// Escape stops a speaking answer or closes the explain box from
+		// anywhere — its textarea handles its own keys, but focus may sit on a
+		// button (or nowhere) by then.
+		if (event.key === 'Escape' && (explainBox || player.asideActive)) {
 			event.preventDefault();
-			closeExplainBox();
+			player.stopAside();
+			if (explainBox) closeExplainBox();
 			return;
 		}
 		const target = event.target as HTMLElement | null;
@@ -847,6 +920,7 @@
 	<span
 		class="speech-segment"
 		class:active={isActive}
+		class:explaining={explainingBlockIds.has(block.id)}
 		role="button"
 		tabindex="0"
 		aria-label={segment.text}
@@ -937,6 +1011,7 @@
 		{@const segs = segmentsByBlock.get(block.id) ?? []}
 		<div
 			class="construct-segment diagram-construct"
+			class:explaining={explainingBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
 			class:narration-pending={segs[0]?.narration?.pending}
 			role="button"
@@ -956,6 +1031,11 @@
 						items={[panelItem(block.id, block.id)]}
 						onEdit={editConstruct}
 						onRegenerate={regenerateConstruct}
+						explaining={explainSpeaking?.startBlockId === block.id}
+						onExplain={(event) =>
+							explainSpeaking?.startBlockId === block.id
+								? player.stopAside()
+								: openExplainForConstruct(event, block, 'diagram', block.text)}
 					/>
 				{/snippet}
 			</MermaidDiagram>
@@ -964,6 +1044,7 @@
 		{@const segs = segmentsByBlock.get(block.id) ?? []}
 		<div
 			class="construct-segment code-construct"
+			class:explaining={explainingBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
 			class:narration-pending={segs[0]?.narration?.pending}
 			role="button"
@@ -982,6 +1063,11 @@
 						items={[panelItem(block.id, block.id)]}
 						onEdit={editConstruct}
 						onRegenerate={regenerateConstruct}
+						explaining={explainSpeaking?.startBlockId === block.id}
+						onExplain={(event) =>
+							explainSpeaking?.startBlockId === block.id
+								? player.stopAside()
+								: openExplainForConstruct(event, block, 'code block', block.text)}
 					/>
 				{/snippet}
 			</CodeBlock>
@@ -990,6 +1076,7 @@
 		{@const segs = segmentsByBlock.get(block.id) ?? []}
 		<div
 			class="construct-segment math-construct"
+			class:explaining={explainingBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
 			class:narration-pending={segs[0]?.narration?.pending}
 			role="button"
@@ -1009,6 +1096,11 @@
 						items={[panelItem(block.id, block.id)]}
 						onEdit={editConstruct}
 						onRegenerate={regenerateConstruct}
+						explaining={explainSpeaking?.startBlockId === block.id}
+						onExplain={(event) =>
+							explainSpeaking?.startBlockId === block.id
+								? player.stopAside()
+								: openExplainForConstruct(event, block, 'equation', block.text)}
 					/>
 				{/snippet}
 			</MathFormula>
@@ -1075,7 +1167,13 @@
 		</dd>
 	{:else if block.kind === 'table' && block.table}
 		{@const headerSegs = constructSegments(block.id, `${block.id}:rh`)}
-		<div class="table-region" id={block.id} role="region" aria-label="Document table">
+		<div
+			class="table-region"
+			class:explaining={explainingBlockIds.has(block.id)}
+			id={block.id}
+			role="region"
+			aria-label="Document table"
+		>
 			<table>
 				<thead>
 					<tr
@@ -1122,6 +1220,11 @@
 				items={tablePanelItems(block)}
 				onEdit={editConstruct}
 				onRegenerate={regenerateConstruct}
+				explaining={explainSpeaking?.startBlockId === block.id}
+				onExplain={(event) =>
+					explainSpeaking?.startBlockId === block.id
+						? player.stopAside()
+						: openExplainForConstruct(event, block, 'table', tableMarkdown(block.table!))}
 			/>
 		</div>
 	{:else if block.kind === 'divider'}
@@ -1138,6 +1241,7 @@
 		)}
 		<div
 			class="construct-segment media-construct"
+			class:explaining={explainingBlockIds.has(block.id)}
 			id={block.id}
 			class:active={activeConstructIds.includes(imageId)}
 			class:narration-pending={segs[0]?.narration?.pending}
@@ -1159,6 +1263,16 @@
 							items={[panelItem(block.id, imageId)]}
 							onEdit={editConstruct}
 							onRegenerate={regenerateConstruct}
+							explaining={explainSpeaking?.startBlockId === block.id}
+							onExplain={(event) =>
+								explainSpeaking?.startBlockId === block.id
+									? player.stopAside()
+									: openExplainForConstruct(
+											event,
+											block,
+											noun.toLowerCase(),
+											panelItem(block.id, imageId).spoken
+										)}
 						/>
 					{/if}
 				{/snippet}
@@ -1340,7 +1454,7 @@
 						aria-label="Explain the selected passage"
 					>
 						<div class="explain-head">
-							<Sparkles size={13} aria-hidden="true" />
+							<Sparkles size={12} aria-hidden="true" />
 							<span class="explain-excerpt">{explainBox.selection}</span>
 							<button
 								class="explain-close"
@@ -1351,32 +1465,40 @@
 								<X size={13} />
 							</button>
 						</div>
-						<textarea
-							rows="2"
-							placeholder="What are you wondering? (optional)"
-							aria-label="Your question about the selection"
-							disabled={explainStatus !== 'idle'}
-							bind:value={explainQuestion}
-							onkeydown={handleExplainKeydown}
-							{@attach focusExplainInput}></textarea>
-						{#if explainError}
-							<p class="explain-error" role="alert">{explainError}</p>
-						{/if}
-						<div class="explain-actions">
+						<div class="explain-row">
+							<textarea
+								rows="1"
+								placeholder="What are you wondering? (optional)"
+								aria-label="Your question about the selection"
+								disabled={explainStatus !== 'idle'}
+								bind:value={explainQuestion}
+								onkeydown={handleExplainKeydown}
+								{@attach focusExplainInput}></textarea>
 							{#if explainStatus === 'idle'}
-								<button class="explain-run" type="button" onclick={() => void runExplain()}>
-									<Sparkles size={12} /> Explain aloud
+								<button
+									class="explain-run"
+									type="button"
+									aria-label="Explain aloud"
+									title="Explain aloud"
+									onclick={() => void runExplain()}
+								>
+									<Sparkles size={13} />
 								</button>
-							{:else if explainStatus === 'thinking'}
-								<span class="explain-status">Thinking…</span>
-								<button class="explain-stop" type="button" onclick={closeExplainBox}>Cancel</button>
 							{:else}
-								<span class="explain-status">Speaking…</span>
-								<button class="explain-stop" type="button" onclick={closeExplainBox}>
-									<Square size={11} fill="currentColor" /> Stop
+								<button
+									class="explain-run thinking"
+									type="button"
+									aria-label="Cancel"
+									title="Cancel"
+									onclick={closeExplainBox}
+								>
+									<LoaderCircle class="spin" size={13} />
 								</button>
 							{/if}
 						</div>
+						{#if explainError}
+							<p class="explain-error" role="alert">{explainError}</p>
+						{/if}
 					</div>
 				{/if}
 			</article>
@@ -2369,11 +2491,11 @@
 		position: absolute;
 		z-index: 30;
 		display: grid;
-		width: min(320px, 82%);
-		gap: 8px;
-		padding: 10px;
+		width: min(300px, 80%);
+		gap: 6px;
+		padding: 8px;
 		border: 1px solid var(--line-strong);
-		border-radius: 11px;
+		border-radius: 10px;
 		background: var(--surface-overlay);
 		box-shadow: 0 14px 42px rgba(0, 0, 0, 0.4);
 		font-family: var(--font-ui);
@@ -2417,16 +2539,25 @@
 		color: var(--text);
 	}
 
+	.explain-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
 	.explain-box textarea {
 		width: 100%;
-		padding: 7px 9px;
+		min-height: 30px;
+		max-height: 76px;
+		padding: 6px 8px;
 		border: 1px solid var(--line);
 		border-radius: 7px;
 		background: transparent;
 		color: var(--text);
+		field-sizing: content;
 		font-family: var(--font-ui);
 		font-size: 12px;
-		line-height: 1.45;
+		line-height: 1.4;
 		resize: none;
 	}
 
@@ -2441,56 +2572,75 @@
 
 	.explain-error {
 		margin: 0;
-		color: var(--danger, #e5484d);
+		color: var(--danger);
 		font-size: 11px;
 		line-height: 1.4;
 	}
 
-	.explain-actions {
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		gap: 8px;
-	}
-
-	.explain-status {
-		margin-right: auto;
-		color: var(--muted);
-		font-size: 11px;
-	}
-
-	.explain-run,
-	.explain-stop {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
+	.explain-run {
+		display: grid;
+		flex-shrink: 0;
+		width: 28px;
 		height: 28px;
-		padding: 0 12px;
 		border: 0;
 		border-radius: 999px;
-		font-size: 11px;
-		font-weight: 640;
-		line-height: 1;
-	}
-
-	.explain-run {
 		background: var(--primary);
-		color: var(--primary-contrast, #fff);
+		color: var(--primary-ink);
+		place-items: center;
 	}
 
 	.explain-run:hover {
-		filter: brightness(1.08);
+		background: var(--primary-hover);
 	}
 
-	.explain-stop {
-		border: 1px solid var(--line-strong);
-		background: transparent;
-		color: var(--text-soft);
+	.explain-run.thinking {
+		background: color-mix(in srgb, var(--primary) 18%, transparent);
+		color: var(--primary);
 	}
 
-	.explain-stop:hover {
-		background: var(--hover);
-		color: var(--text);
+	.explain-run :global(.spin) {
+		animation: explain-spin 800ms linear infinite;
+	}
+
+	@keyframes explain-spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+
+	/* While the answer is being spoken the source pulses gently — the box
+	   itself is gone by then. */
+	.speech-segment.explaining,
+	.construct-segment.explaining,
+	.table-region.explaining {
+		border-radius: 6px;
+		animation: explain-pulse 1.8s ease-in-out infinite;
+	}
+
+	@keyframes explain-pulse {
+		0%,
+		100% {
+			background: color-mix(in srgb, var(--primary) 7%, transparent);
+			box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 7%, transparent);
+		}
+		50% {
+			background: color-mix(in srgb, var(--primary) 20%, transparent);
+			box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.explain-run :global(.spin) {
+			animation: none;
+		}
+
+		.speech-segment.explaining,
+		.construct-segment.explaining,
+		.table-region.explaining {
+			background: color-mix(in srgb, var(--primary) 13%, transparent);
+			box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
+			animation: none;
+		}
 	}
 
 	.speech-segment + .speech-segment::before {
