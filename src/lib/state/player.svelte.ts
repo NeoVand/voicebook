@@ -10,6 +10,7 @@ import type {
 } from '$lib/domain/types';
 import { audioVariantKey, decodeAudio, encodeAudio } from '$lib/services/audio-codec';
 import { segmentsEqual } from '$lib/domain/segmenter';
+import { normalizeForSpeech } from '$lib/domain/speech-words';
 import {
 	deleteAudioForSegments,
 	getAudio,
@@ -110,6 +111,8 @@ export class VoicebookPlayer {
 	sleepTimerMinutes = $state<number | null>(null);
 	/** Epoch ms when the sleep timer pauses playback; null when off. */
 	sleepTimerEndsAt = $state<number | null>(null);
+	/** An ad-hoc spoken answer (the Explain flow) is being voiced. */
+	asideActive = $state(false);
 
 	private context?: AudioContext;
 	private wakeLock: WakeLockSentinel | null = null;
@@ -126,6 +129,10 @@ export class VoicebookPlayer {
 	private lastUiFrameAt = 0;
 	private lastMediaUpdateAt = 0;
 	private requestedWordIndex?: number;
+	/** Playback stops after this segment/word when set (selection reading). */
+	private playThrough?: { segmentIndex: number; wordIndex: number };
+	private asideSource?: AudioBufferSourceNode;
+	private asideAbort?: AbortController;
 	private audioCache = new SvelteMap<string, PreparedAudio>();
 	private preparedBySegment = new SvelteMap<number, PreparedAudio>();
 	private queue = new SvelteMap<number, Promise<PreparedAudio>>();
@@ -879,6 +886,7 @@ export class VoicebookPlayer {
 	async play(): Promise<void> {
 		if (!this.book || !this.currentSegment) return;
 		if (this.isPlaying) return;
+		this.stopAside();
 		this.errorMessage = '';
 		this.isBuffering = true;
 		this.bufferingStage = 'Preparing this passage…';
@@ -965,6 +973,16 @@ export class VoicebookPlayer {
 
 	private async advanceAfterEnd(): Promise<void> {
 		this.isPlaying = false;
+		if (this.playThrough && this.currentSegmentIndex >= this.playThrough.segmentIndex) {
+			// A selection reading reached its boundary: park at the end of the
+			// passage instead of rolling into the rest of the document.
+			this.playThrough = undefined;
+			this.position = this.currentDuration;
+			this.releaseWakeLock();
+			await this.persistPosition(true);
+			if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+			return;
+		}
 		if (!this.book || this.currentSegmentIndex >= this.book.segments.length - 1) {
 			this.currentSegmentIndex = Math.max(
 				0,
@@ -987,6 +1005,7 @@ export class VoicebookPlayer {
 
 	private stopPlayback(persistPosition: boolean): void {
 		if (this.isPlaying && persistPosition) this.updateClock();
+		this.playThrough = undefined;
 		this.manualStop = true;
 		try {
 			this.source?.stop();
@@ -1056,6 +1075,98 @@ export class VoicebookPlayer {
 		else await this.play();
 	}
 
+	/**
+	 * Voice an ad-hoc answer (the Explain flow) with the current speech engine
+	 * and voice, outside the document's segment/cache pipeline: nothing is
+	 * persisted, no highlight moves, and the reading position stays put.
+	 * Resolves when the answer has finished playing.
+	 */
+	async speakAside(text: string): Promise<void> {
+		const spoken = normalizeForSpeech(text.trim());
+		if (!spoken) return;
+		this.stopAside();
+		if (this.isPlaying) this.pause();
+		const controller = new AbortController();
+		this.asideAbort = controller;
+		this.asideActive = true;
+		try {
+			const context = await this.audioGraph();
+			await this.ensureEngine();
+			if (controller.signal.aborted) return;
+			const variant = this.speechVariant();
+			let generated: SynthesisResult;
+			if (this.usesElevenLabs) {
+				generated = await synthesizeElevenLabs({
+					apiKey: providersState.keyFor('elevenlabs') ?? '',
+					voiceId: variant.voiceId,
+					modelId: variant.revision,
+					text: spoken,
+					signal: controller.signal
+				});
+			} else {
+				generated = await ttsClient.synthesize(
+					spoken,
+					variant.voiceId,
+					controller.signal,
+					undefined,
+					appState.generationSteps
+				);
+			}
+			if (controller.signal.aborted) return;
+			await this.requireAudioOutput(context);
+			if (controller.signal.aborted) return;
+			const buffer = context.createBuffer(1, generated.audio.length, generated.sampleRate);
+			buffer.getChannelData(0).set(generated.audio);
+			await new Promise<void>((resolve) => {
+				const source = context.createBufferSource();
+				source.buffer = buffer;
+				source.playbackRate.value = this.rate;
+				if (this.soundTouch && this.rate !== 1) {
+					this.soundTouch.playbackRate.value = this.rate;
+					source.connect(this.soundTouch);
+				} else {
+					source.connect(this.gain!);
+				}
+				// Stopping must always release the awaiting caller, even if the
+				// browser skips onended for a stopped suspended-context source.
+				source.onended = () => resolve();
+				controller.signal.addEventListener('abort', () => resolve(), { once: true });
+				this.asideSource = source;
+				source.start(0);
+			});
+		} catch (error) {
+			// The box that started this answer is gone by now — the player's
+			// error strip is the surface that can still tell the user.
+			if (
+				!controller.signal.aborted &&
+				!(error instanceof DOMException && error.name === 'AbortError')
+			) {
+				this.errorMessage =
+					error instanceof Error ? error.message : 'The spoken answer could not be played.';
+			}
+		} finally {
+			this.asideSource = undefined;
+			if (this.asideAbort === controller) {
+				this.asideAbort = undefined;
+				this.asideActive = false;
+			}
+		}
+	}
+
+	/** Cut short an in-flight or speaking aside. Safe to call when idle. */
+	stopAside(): void {
+		this.asideAbort?.abort();
+		this.asideAbort = undefined;
+		try {
+			this.asideSource?.stop();
+		} catch {
+			// An already-ended source cannot be stopped twice.
+		}
+		this.asideSource?.disconnect();
+		this.asideSource = undefined;
+		this.asideActive = false;
+	}
+
 	private updateClock(now = performance.now()): void {
 		if (!this.context || !this.isPlaying) return;
 		if (this.sleepTimerEndsAt !== null && Date.now() >= this.sleepTimerEndsAt) {
@@ -1077,6 +1188,16 @@ export class VoicebookPlayer {
 			const index = timing.words.findLastIndex((word) => word.start <= this.position);
 			const nextWordIndex = Math.max(0, index);
 			if (nextWordIndex !== this.currentWordIndex) this.currentWordIndex = nextWordIndex;
+		}
+		if (
+			this.playThrough &&
+			this.currentSegmentIndex === this.playThrough.segmentIndex &&
+			this.currentWordIndex > this.playThrough.wordIndex
+		) {
+			// Clear before pausing: pause() re-enters updateClock to persist.
+			this.playThrough = undefined;
+			this.pause();
+			return;
 		}
 		if (now - this.lastMediaUpdateAt >= 1_000) {
 			this.lastMediaUpdateAt = now;
@@ -1147,7 +1268,13 @@ export class VoicebookPlayer {
 		await this.seekBy(target - current);
 	}
 
-	async playFromSegment(index: number, wordIndex = 0): Promise<void> {
+	/** Start narration at a position; with `stopAfter` set, stop again once the
+	 * word at that boundary has been spoken (reading a text selection). */
+	async playFromSegment(
+		index: number,
+		wordIndex = 0,
+		stopAfter?: { segmentIndex: number; wordIndex: number }
+	): Promise<void> {
 		if (!this.book) return;
 		this.stopPlayback(false);
 		this.cancellationVersion += 1;
@@ -1167,6 +1294,11 @@ export class VoicebookPlayer {
 		);
 		this.requestedWordIndex = this.currentWordIndex;
 		this.position = 0;
+		// After stopPlayback cleared any previous boundary; segments before the
+		// start (or boundary words past the segment's end) mean "play to the
+		// segment's natural end".
+		this.playThrough =
+			stopAfter && stopAfter.segmentIndex >= this.currentSegmentIndex ? stopAfter : undefined;
 		this.notifySegmentChange();
 		await this.persistPosition(true);
 		await this.play();

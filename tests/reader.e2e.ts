@@ -960,11 +960,22 @@ test('starts narration from a chosen passage or selected word', async ({ page })
 	});
 	await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe('begins');
 	const playSelection = page.getByRole('button', {
-		name: 'Play from selected text: begins'
+		name: 'Play the selected text: begins'
 	});
 	await expect(playSelection).toBeVisible();
+	await expect(
+		page.getByRole('button', { name: 'Explain the selected text: begins' })
+	).toBeVisible();
 	await playSelection.click();
 	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+	await expect(page.locator('.speech-segment.active')).toContainText(
+		'The second passage begins gently.'
+	);
+
+	// Reading a selection stops at its end instead of rolling on: the fake
+	// passage lasts one second, then the transport returns to Play with the
+	// selected passage still current.
+	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
 	await expect(page.locator('.speech-segment.active')).toContainText(
 		'The second passage begins gently.'
 	);
@@ -983,6 +994,27 @@ test('starts narration from a chosen passage or selected word', async ({ page })
 		'The opening passage should remain untouched.',
 		'The second passage begins gently.'
 	]);
+
+	// The Explain flow opens its floating box from the same selection popover;
+	// without any description engine configured it reports that instead of
+	// silently doing nothing.
+	const explainWord = page.locator('.spoken-word').filter({ hasText: /^gently$/ });
+	await explainWord.evaluate((element) => {
+		const range = document.createRange();
+		range.selectNodeContents(element);
+		const selection = window.getSelection();
+		selection?.removeAllRanges();
+		selection?.addRange(range);
+		element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+	});
+	await page.getByRole('button', { name: 'Explain the selected text: gently' }).click();
+	const explainDialog = page.getByRole('dialog', { name: 'Explain the selected passage' });
+	await expect(explainDialog).toBeVisible();
+	await explainDialog.getByRole('textbox').fill('What does gently mean here?');
+	await explainDialog.getByRole('button', { name: 'Explain aloud' }).click();
+	await expect(explainDialog.getByRole('alert')).toContainText('No description engine');
+	await page.keyboard.press('Escape');
+	await expect(explainDialog).toHaveCount(0);
 });
 
 test('detects duplicate file imports and keeps navigation under the Pages base path', async ({

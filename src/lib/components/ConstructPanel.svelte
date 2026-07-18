@@ -15,7 +15,7 @@
 </script>
 
 <script lang="ts">
-	import { Check, LoaderCircle, PencilLine, RefreshCw, X } from '@lucide/svelte';
+	import { Check, LoaderCircle, PencilLine, RefreshCw, Sparkles, X } from '@lucide/svelte';
 	import hljs from 'highlight.js/lib/core';
 	import latex from 'highlight.js/lib/languages/latex';
 	import markdown from 'highlight.js/lib/languages/markdown';
@@ -36,9 +36,24 @@
 		items: ConstructPanelItem[];
 		onEdit: (constructId: string, text: string) => void | Promise<void>;
 		onRegenerate?: (constructId: string) => void | Promise<void>;
+		/** Opens the spoken-explanation box for this construct — or stops the
+		 * answer mid-speech when `explaining` is on. */
+		onExplain?: (event: MouseEvent) => void;
+		/** The spoken answer for this construct is playing right now. */
+		explaining?: boolean;
 	}
 
-	let { noun, sourceLabel, source, sourceLanguage, items, onEdit, onRegenerate }: Props = $props();
+	let {
+		noun,
+		sourceLabel,
+		source,
+		sourceLanguage,
+		items,
+		onEdit,
+		onRegenerate,
+		onExplain,
+		explaining = false
+	}: Props = $props();
 
 	function escapeHtml(value: string): string {
 		return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -105,91 +120,158 @@
 	}
 </script>
 
-<details class="construct-panel">
-	<summary>{source === undefined ? 'Spoken text' : `${noun} source & spoken text`}</summary>
-	<div class="construct-panel-body">
-		{#if source !== undefined}
-			<section class="panel-source" aria-label={sourceLabel}>
-				<h4>{sourceLabel}</h4>
-				<pre><code class="hljs" {@attach highlightedSource(source, sourceLanguage)}></code></pre>
-			</section>
-		{/if}
-		<section class="panel-descriptions" aria-label="Spoken descriptions">
-			<h4>{items.length === 1 ? 'Spoken as' : 'Spoken as, per row'}</h4>
-			{#each items as item (item.constructId)}
-				{@const status = statusFor(item)}
-				{@const editing = editingId === item.constructId}
-				<div class="panel-item" class:editing>
-					<div class="panel-item-head">
-						{#if item.label}<span class="panel-item-label">{item.label}</span>{/if}
-						<span class={`panel-item-status ${status.kind}`} title={item.entry?.modelId}>
-							{#if status.kind === 'busy'}<LoaderCircle class="spin" size={11} />{/if}
-							{status.label}
-						</span>
-						<span class="panel-item-actions">
-							{#if !editing}
-								<button
-									type="button"
-									class="panel-action"
-									title="Edit the spoken text"
-									aria-label={`Edit the spoken text${item.label ? ` for ${item.label}` : ''}`}
-									onclick={() => beginEdit(item)}
-								>
-									<PencilLine size={13} />
-								</button>
-								{#if onRegenerate && item.canRegenerate !== false}
+<div class="construct-panel">
+	{#if onExplain}
+		<button
+			type="button"
+			class="panel-explain"
+			class:speaking={explaining}
+			title={explaining
+				? 'Stop the spoken answer'
+				: `Ask about this ${noun.toLowerCase()} and hear the answer`}
+			aria-label={explaining ? 'Stop explaining' : `Explain this ${noun.toLowerCase()} aloud`}
+			onclick={(event) => onExplain?.(event)}
+		>
+			<Sparkles size={12} /> Explain
+		</button>
+	{/if}
+	<details>
+		<summary>{source === undefined ? 'Spoken text' : `${noun} source & spoken text`}</summary>
+		<div class="construct-panel-body">
+			{#if source !== undefined}
+				<section class="panel-source" aria-label={sourceLabel}>
+					<h4>{sourceLabel}</h4>
+					<pre><code class="hljs" {@attach highlightedSource(source, sourceLanguage)}></code></pre>
+				</section>
+			{/if}
+			<section class="panel-descriptions" aria-label="Spoken descriptions">
+				<h4>{items.length === 1 ? 'Spoken as' : 'Spoken as, per row'}</h4>
+				{#each items as item (item.constructId)}
+					{@const status = statusFor(item)}
+					{@const editing = editingId === item.constructId}
+					<div class="panel-item" class:editing>
+						<div class="panel-item-head">
+							{#if item.label}<span class="panel-item-label">{item.label}</span>{/if}
+							<span class={`panel-item-status ${status.kind}`} title={item.entry?.modelId}>
+								{#if status.kind === 'busy'}<LoaderCircle class="spin" size={11} />{/if}
+								{status.label}
+							</span>
+							<span class="panel-item-actions">
+								{#if !editing}
 									<button
 										type="button"
 										class="panel-action"
-										title="Rewrite with the language model"
-										aria-label={`Rewrite${item.label ? ` ${item.label}` : ''} with the language model`}
-										disabled={Boolean(item.regenerating)}
-										onclick={() => void onRegenerate(item.constructId)}
+										title="Edit the spoken text"
+										aria-label={`Edit the spoken text${item.label ? ` for ${item.label}` : ''}`}
+										onclick={() => beginEdit(item)}
 									>
-										<RefreshCw size={13} />
+										<PencilLine size={13} />
 									</button>
+									{#if onRegenerate && item.canRegenerate !== false}
+										<button
+											type="button"
+											class="panel-action"
+											title="Rewrite with the language model"
+											aria-label={`Rewrite${item.label ? ` ${item.label}` : ''} with the language model`}
+											disabled={Boolean(item.regenerating)}
+											onclick={() => void onRegenerate(item.constructId)}
+										>
+											<RefreshCw size={13} />
+										</button>
+									{/if}
 								{/if}
-							{/if}
-						</span>
-					</div>
-					{#if editing}
-						<!-- svelte-ignore a11y_autofocus -->
-						<textarea
-							rows="3"
-							autofocus
-							spellcheck="true"
-							aria-label="Spoken text"
-							bind:value={draft}
-							onkeydown={(event) => {
-								if (event.key === 'Escape') cancelEdit();
-								else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void saveEdit();
-							}}></textarea>
-						<div class="panel-edit-actions">
-							<button
-								type="button"
-								class="panel-save"
-								disabled={!draft.trim()}
-								onclick={() => void saveEdit()}
-							>
-								<Check size={13} /> Save
-							</button>
-							<button type="button" class="panel-cancel" onclick={cancelEdit}>
-								<X size={13} /> Cancel
-							</button>
+							</span>
 						</div>
-					{:else}
-						<p class="panel-item-text">{item.spoken}</p>
-					{/if}
-				</div>
-			{/each}
-		</section>
-	</div>
-</details>
+						{#if editing}
+							<!-- svelte-ignore a11y_autofocus -->
+							<textarea
+								rows="3"
+								autofocus
+								spellcheck="true"
+								aria-label="Spoken text"
+								bind:value={draft}
+								onkeydown={(event) => {
+									if (event.key === 'Escape') cancelEdit();
+									else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey))
+										void saveEdit();
+								}}></textarea>
+							<div class="panel-edit-actions">
+								<button
+									type="button"
+									class="panel-save"
+									disabled={!draft.trim()}
+									onclick={() => void saveEdit()}
+								>
+									<Check size={13} /> Save
+								</button>
+								<button type="button" class="panel-cancel" onclick={cancelEdit}>
+									<X size={13} /> Cancel
+								</button>
+							</div>
+						{:else}
+							<p class="panel-item-text">{item.spoken}</p>
+						{/if}
+					</div>
+				{/each}
+			</section>
+		</div>
+	</details>
+</div>
 
 <style>
 	.construct-panel {
+		position: relative;
 		border-top: 1px solid var(--reader-rule);
 		font-family: var(--font-ui);
+	}
+
+	.panel-explain {
+		position: absolute;
+		top: 5px;
+		right: 8px;
+		z-index: 1;
+		display: inline-flex;
+		height: 26px;
+		align-items: center;
+		gap: 5px;
+		padding: 0 10px;
+		border: 0;
+		border-radius: 999px;
+		background: transparent;
+		color: var(--reader-quiet);
+		cursor: pointer;
+		font-size: 0.6em;
+		font-weight: 660;
+		transition:
+			background 140ms var(--ease),
+			color 140ms var(--ease);
+	}
+
+	.panel-explain:hover {
+		background: color-mix(in srgb, var(--primary) 12%, transparent);
+		color: var(--reader-ink-strong);
+	}
+
+	.panel-explain.speaking {
+		color: var(--primary);
+		animation: explain-button-pulse 1.6s ease-in-out infinite;
+	}
+
+	@keyframes explain-button-pulse {
+		0%,
+		100% {
+			background: color-mix(in srgb, var(--primary) 6%, transparent);
+		}
+		50% {
+			background: color-mix(in srgb, var(--primary) 22%, transparent);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.panel-explain.speaking {
+			background: color-mix(in srgb, var(--primary) 14%, transparent);
+			animation: none;
+		}
 	}
 
 	/* The disclosure arrow needs air from the host's border — panels sit

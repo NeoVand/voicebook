@@ -25,6 +25,7 @@ import {
 	type NarrationParamsMap,
 	type NarrationPresetId
 } from '$lib/domain/narration-presets';
+import { DEFAULT_EXPLAIN_PROMPT } from '$lib/domain/explain-prompts';
 import { getSetting, setSetting } from '$lib/services/repository';
 import { narrationRuntimePolicy, type NarrationRuntimePolicy } from '$lib/services/runtime-policy';
 import { appState } from './app-state.svelte';
@@ -63,6 +64,13 @@ export class LlmState {
 	promptPreset = $state<NarrationPresetId>('balanced');
 	/** User-edited prompt templates; absent keys fall back to the defaults. */
 	promptOverrides = $state<NarrationPromptOverrides>({});
+	/** User-edited Explain system prompt; undefined falls back to the default. */
+	explainPromptOverride = $state<string | undefined>(undefined);
+
+	/** The system prompt the spoken Explain flow actually sends. */
+	get explainPrompt(): string {
+		return this.explainPromptOverride ?? DEFAULT_EXPLAIN_PROMPT;
+	}
 
 	/** The templates the active preset actually sends. */
 	get promptTemplates(): NarrationPromptTemplates {
@@ -146,16 +154,25 @@ export class LlmState {
 
 	private async load(): Promise<void> {
 		try {
-			const [installed, selected, accepted, enabled, hintDismissed, promptOverrides, preset] =
-				await Promise.all([
-					getSetting<string[]>('llm-installed-models', []),
-					getSetting<string | null>('llm-selected-model', null),
-					getSetting<string[]>('llm-accepted-licenses', []),
-					getSetting('narration-enabled', true),
-					getSetting('narration-hint-dismissed', false),
-					getSetting<NarrationPromptOverrides>('narration-prompt-overrides', {}),
-					getSetting<string>('narration-preset', 'balanced')
-				]);
+			const [
+				installed,
+				selected,
+				accepted,
+				enabled,
+				hintDismissed,
+				promptOverrides,
+				preset,
+				explain
+			] = await Promise.all([
+				getSetting<string[]>('llm-installed-models', []),
+				getSetting<string | null>('llm-selected-model', null),
+				getSetting<string[]>('llm-accepted-licenses', []),
+				getSetting('narration-enabled', true),
+				getSetting('narration-hint-dismissed', false),
+				getSetting<NarrationPromptOverrides>('narration-prompt-overrides', {}),
+				getSetting<string>('narration-preset', 'balanced'),
+				getSetting<string | null>('explain-prompt', null)
+			]);
 			this.installedModels = installed.filter((id) => getLlmModel(id) !== null);
 			this.selectedModelId =
 				selected && getLlmModel(selected) ? selected : (this.installedModels[0] ?? DEFAULT_LLM_ID);
@@ -164,6 +181,7 @@ export class LlmState {
 			this.narrationHintDismissed = Boolean(hintDismissed);
 			this.promptOverrides = promptOverrides ?? {};
 			this.promptPreset = isNarrationPresetId(preset) ? preset : 'balanced';
+			this.explainPromptOverride = explain?.trim() ? explain : undefined;
 		} finally {
 			this.initialized = true;
 		}
@@ -200,6 +218,15 @@ export class LlmState {
 		this.promptOverrides = next;
 		await setSetting('narration-prompt-overrides', { ...next });
 		if (this.promptPreset !== 'custom') await this.setPromptPreset('custom');
+	}
+
+	/** Save the user-edited Explain system prompt; text equal to the default
+	 * (or empty) removes the override. */
+	async setExplainPrompt(text: string): Promise<void> {
+		const trimmed = text.replace(/\r\n/g, '\n').trim();
+		this.explainPromptOverride =
+			!trimmed || trimmed === DEFAULT_EXPLAIN_PROMPT.trim() ? undefined : trimmed;
+		await setSetting('explain-prompt', this.explainPromptOverride ?? null);
 	}
 
 	async setLicenseAcceptance(modelId: string, accepted: boolean): Promise<void> {
