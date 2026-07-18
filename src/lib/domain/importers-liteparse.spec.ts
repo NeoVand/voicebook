@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { liteparsePageMarkdown, pdfLooksScanned, stripBlanketBold } from './importers';
+import {
+	liteparsePageMarkdown,
+	parsedSourceFromLiteparse,
+	pdfLooksScanned,
+	stripBlanketBold,
+	type LiteparseResultLike
+} from './importers';
 
 describe('liteparsePageMarkdown', () => {
 	it('prefers page markdown and falls back to plain text', () => {
@@ -74,5 +80,78 @@ describe('pdfLooksScanned', () => {
 		const thin = 'twenty five letters here now'; // > 24 letters, < 8 per page × 30
 		expect(pdfLooksScanned(thin, 1)).toBe(false);
 		expect(pdfLooksScanned(thin, 30)).toBe(true);
+	});
+});
+
+describe('parsedSourceFromLiteparse', () => {
+	// A synthetic ParseResult drives the whole post-wasm pipeline in node,
+	// where the wasm itself cannot initialize.
+	const result = (pages: Array<Partial<LiteparseResultLike['pages'][number]>>, images: LiteparseResultLike['images'] = []): LiteparseResultLike => ({
+		pages: pages.map((page, index) => ({
+			pageNum: index + 1,
+			width: 612,
+			height: 792,
+			...page
+		})),
+		images
+	});
+
+	it('builds page-anchored blocks from per-page markdown', () => {
+		const parsed = parsedSourceFromLiteparse(
+			result([
+				{ markdown: '# The Anatomy of Reading\n\nFirst page paragraph.' },
+				{ markdown: 'Second page paragraph.' }
+			])
+		);
+		expect(parsed).not.toBeNull();
+		expect(parsed?.title).toBe('The Anatomy of Reading');
+		const paragraphs = parsed!.blocks.filter((candidate) => candidate.kind === 'paragraph');
+		expect(paragraphs[0].anchor.page).toBe(1);
+		expect(paragraphs[1].anchor.page).toBe(2);
+		expect(parsed?.pages?.map((page) => page.page)).toEqual([1, 2]);
+	});
+
+	it('replaces the empty fence of a scanned page with recognized text and marks it', () => {
+		const parsed = parsedSourceFromLiteparse(
+			result([
+				{ markdown: '# Title\n\nReal first page text.' },
+				{ markdown: '```text\n\n```' },
+				{ markdown: 'Closing page text.' }
+			]),
+			new Map([[2, 'Recovered scanned paragraph.']])
+		);
+		const texts = parsed!.blocks.map((candidate) => candidate.text);
+		expect(texts).toContain('Recovered scanned paragraph.');
+		expect(parsed?.pages?.[1]).toMatchObject({ page: 2, ocr: true });
+		expect(parsed?.pages?.[0].ocr).toBeUndefined();
+	});
+
+	it('turns embedded image references into image paragraphs', () => {
+		const parsed = parsedSourceFromLiteparse(
+			result(
+				[{ markdown: 'Intro paragraph text for the figure.\n\n![](image_p1_0.png)' }],
+				[{ id: 'p1_0', page: 1, format: 'png', bytes: new Uint8Array(8192).fill(65) }]
+			)
+		);
+		const withImage = parsed!.blocks.find((candidate) =>
+			candidate.inlines?.some((run) => run.image)
+		);
+		expect(withImage?.inlines?.[0].image?.src).toMatch(/^data:image\/png;base64,/);
+	});
+
+	it('mends a sentence split across a page break into one paragraph', () => {
+		const parsed = parsedSourceFromLiteparse(
+			result([
+				{ markdown: 'The evidence continues across the page bound-' },
+				{ markdown: 'ary without a break.' }
+			])
+		);
+		const paragraph = parsed!.blocks.find((candidate) => candidate.kind === 'paragraph');
+		expect(paragraph?.text).toBe('The evidence continues across the page boundary without a break.');
+		expect(paragraph?.anchor.page).toBe(1);
+	});
+
+	it('returns null when nothing survives cleanup', () => {
+		expect(parsedSourceFromLiteparse(result([{ markdown: '```text\n\n```' }]))).toBeNull();
 	});
 });

@@ -25,6 +25,7 @@ import {
 	importFile,
 	kindForFile,
 	pageLines,
+	pdfFailureError,
 	renumberBlocks,
 	repeatedEdgeLines
 } from './importers';
@@ -728,6 +729,20 @@ describe('document importers', () => {
 		expect(document.blocks.every((item) => !item.text.includes('Voicebook research notes'))).toBe(
 			true
 		);
+		// Per-page dimensions ride along for the original-page view.
+		expect(document.pages).toHaveLength(3);
+		expect(document.pages?.[0]).toMatchObject({ page: 1, width: 612, height: 792 });
+	});
+
+	it('maps pdf.js password errors to a password-protected import error', () => {
+		const password = Object.assign(new Error('No password given'), {
+			name: 'PasswordException'
+		});
+		expect(pdfFailureError(password).code).toBe('password-protected');
+		const passthrough = new ImportError('kept', 'scanned-pdf');
+		expect(pdfFailureError(passthrough)).toBe(passthrough);
+		expect(pdfFailureError(new Error('bad xref')).code).toBe('malformed');
+		expect(pdfFailureError(undefined).code).toBe('malformed');
 	});
 
 	it('returns the planned OCR recovery error for a scanned/textless PDF', async () => {

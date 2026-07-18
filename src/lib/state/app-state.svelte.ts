@@ -87,17 +87,23 @@ async function migrateDocumentNormalization(
 	document: NormalizedDocument
 ): Promise<NormalizedDocument> {
 	if (document.normalizationVersion === DOCUMENT_NORMALIZATION_VERSION) return document;
-	// Markdown and DOCX re-parse from the stored original so normalization
-	// improvements (v9: Word tables, equations, diagrams) reach existing
-	// documents; other kinds only re-stamp.
-	if (document.sourceKind !== 'markdown' && document.sourceKind !== 'docx') {
+	// Markdown, DOCX, and PDF re-parse from the stored original so
+	// normalization improvements (v9: Word tables, equations, diagrams;
+	// v13: PDF pages, images, bookmarks) reach existing documents; other
+	// kinds only re-stamp.
+	const reparseKinds = ['markdown', 'docx', 'pdf'];
+	if (!reparseKinds.includes(document.sourceKind)) {
 		return { ...document, normalizationVersion: DOCUMENT_NORMALIZATION_VERSION };
 	}
 	const source = await getSource(document);
 	if (!source) return document;
 	try {
+		// OCR stays off during startup migrations: a stored document already
+		// imported without it, and re-normalizing a library must never
+		// trigger surprise model downloads.
 		const reparsed = await importFile(
-			new File([source], document.sourceName, { type: document.mimeType })
+			new File([source], document.sourceName, { type: document.mimeType }),
+			{ enableOcr: false }
 		);
 		reparsed.includeCode = document.includeCode;
 		// The stored title is user-visible identity (duplicates get "— Copy",
@@ -263,7 +269,14 @@ export class VoicebookState {
 					this.duplicate = { file, existing };
 					continue;
 				}
-				const document = await importFile(file);
+				const document = await importFile(file, {
+					onProgress: (progress) => {
+						this.statusMessage =
+							progress.stage === 'ocr'
+								? `Reading scanned pages in ${file.name}… (${progress.page ?? '…'} of ${progress.pageCount ?? '…'})`
+								: `Reading ${file.name}…`;
+					}
+				});
 				imported.push(await this.addImportedDocument(document, file));
 			}
 			this.statusMessage = imported.length
