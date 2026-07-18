@@ -49,11 +49,19 @@ worker.addEventListener('fetch', (event) => {
 				} catch {
 					const relativePath = url.pathname.slice(base.length).replace(/^\//, '');
 					const route = relativePath.startsWith('read')
-						? `${base}/read/`
+						? `${base}/read`
 						: relativePath.startsWith('settings')
-							? `${base}/settings/`
+							? `${base}/settings`
 							: `${base}/`;
-					return (await caches.match(route)) ?? Response.error();
+					// The prerendered shell may be cached with or without a trailing
+					// slash depending on the adapter; a query string must never
+					// defeat the match. The root shell is the last resort — an error
+					// response here leaves the user staring at a dead tab.
+					const shell =
+						(await caches.match(route, { ignoreSearch: true })) ??
+						(await caches.match(`${route}/`, { ignoreSearch: true })) ??
+						(await caches.match(`${base}/`, { ignoreSearch: true }));
+					return shell ?? Response.error();
 				}
 			})()
 		);

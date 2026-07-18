@@ -305,7 +305,13 @@
 			player.pause();
 			ttsClient.cancelAll();
 			llmState.cancelActivation();
-			await eraseAllData();
+			// A wedged browser store must not hold the reset hostage — after the
+			// watchdog the reload proceeds and the remaining cleanup re-runs on a
+			// fresh session.
+			await Promise.race([
+				eraseAllData(),
+				new Promise<void>((resolve) => setTimeout(resolve, 10_000))
+			]);
 		} finally {
 			window.location.assign(resolve('/'));
 		}
