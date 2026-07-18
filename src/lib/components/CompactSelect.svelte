@@ -185,8 +185,7 @@
 		height: 40px;
 		min-width: 0;
 		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
+		justify-content: center;
 		padding: 0 7px;
 		border: 0;
 		border-radius: 5px;
