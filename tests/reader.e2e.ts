@@ -1471,7 +1471,8 @@ test('imports a PDF with page markers, page navigation, and the original-page vi
 	const chip = page.locator('.page-chip');
 	await expect(chip).toContainText('p. 1');
 	await chip.click();
-	await page.getByLabel('Go to page', { exact: false }).last().fill('3');
+	// Exact match reaches the popover input; the chip's label is longer.
+	await page.getByLabel('Go to page', { exact: true }).fill('3');
 	await page.getByRole('button', { name: 'Go', exact: true }).click();
 	await expect(chip).toContainText('p. 3');
 	await expect(page.getByRole('heading', { name: 'Findings and Echoes' })).toBeInViewport();

@@ -63,6 +63,44 @@ export function pagesNeedingOcr(stats: PageComplexity[]): number[] {
 		.map((page) => page.pageNumber);
 }
 
+/**
+ * User-facing summary of an OCR pass. Recognition is partial-success by
+ * design (one unreadable page must not sink the rest), so the counts here
+ * must reflect what actually produced text — never how many pages were
+ * attempted.
+ */
+export function ocrOutcomeWarnings(requestedPages: number, recognizedPages: number): string[] {
+	const warnings: string[] = [];
+	if (recognizedPages > 0) {
+		warnings.push(
+			recognizedPages === 1
+				? 'One scanned page was read with on-device text recognition; its text may contain errors.'
+				: `${recognizedPages} scanned pages were read with on-device text recognition; their text may contain errors.`
+		);
+	}
+	const unrecognized = requestedPages - recognizedPages;
+	if (unrecognized > 0) {
+		warnings.push(
+			unrecognized === 1
+				? 'One scanned page could not be read and was left out.'
+				: `${unrecognized} scanned pages could not be read and were left out.`
+		);
+	}
+	return warnings;
+}
+
+/** The per-page markdown with recognized text standing in where it exists —
+ * the input to the single scanned-or-not authority (`pdfLooksScanned`). */
+export function withRecognizedPages(
+	pages: LiteparsePage[],
+	ocrText: Map<number, string>
+): Array<{ markdown?: string; text?: string }> {
+	return pages.map((page) => ({
+		markdown: ocrText.get(page.pageNum) ?? page.markdown,
+		text: page.text
+	}));
+}
+
 /** LiteParse emits pages without font metadata (blank or scanned pages) as a
  * lone ```text fence "so content is never silently dropped" — but downstream
  * that renders a whole page as one code block. Unwrap to plain paragraphs. */
@@ -92,12 +130,15 @@ export function collapseSpacedHeadings(pageMarkdown: string): string {
 			const [, indent = '', marker = '', body] = match;
 			const words = body.split(/\s{2,}/);
 			let totalLetters = 0;
+			let hasLetter = false;
 			const collapsible = words.every((word) => {
 				const letters = word.split(' ');
 				totalLetters += letters.length;
+				hasLetter ||= letters.some((letter) => /\p{Lu}/u.test(letter));
 				return letters.length >= 2 && letters.every((letter) => /^[\p{Lu}\p{N}]$/u.test(letter));
 			});
-			if (!collapsible || totalLetters < 4) return line;
+			// At least one real letter: "1 2 3 4" is a number row, not a heading.
+			if (!collapsible || totalLetters < 4 || !hasLetter) return line;
 			return indent + marker + words.map((word) => word.replaceAll(' ', '')).join(' ');
 		})
 		.join('\n');

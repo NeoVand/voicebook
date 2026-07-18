@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { DocumentBlock } from './types';
 import {
 	assemblePages,
+	ocrOutcomeWarnings,
+	withRecognizedPages,
 	assignPageAnchors,
 	blanketBoldShare,
 	collapseSpacedHeadings,
@@ -95,6 +97,52 @@ describe('collapseSpacedHeadings', () => {
 		expect(collapseSpacedHeadings(fenced)).toBe(fenced);
 		expect(collapseSpacedHeadings('  N A S A  H Q')).toBe('  NASA HQ');
 	});
+
+	it('leaves letterless number rows alone', () => {
+		expect(collapseSpacedHeadings('1 2 3 4')).toBe('1 2 3 4');
+		expect(collapseSpacedHeadings('S E C T I O N 2')).toBe('SECTION2');
+	});
+});
+
+describe('ocrOutcomeWarnings', () => {
+	it('counts what recognition actually produced, singular and plural', () => {
+		expect(ocrOutcomeWarnings(1, 1)).toEqual([
+			'One scanned page was read with on-device text recognition; its text may contain errors.'
+		]);
+		expect(ocrOutcomeWarnings(3, 3)).toEqual([
+			'3 scanned pages were read with on-device text recognition; their text may contain errors.'
+		]);
+	});
+
+	it('reports partial success as both read and left out', () => {
+		expect(ocrOutcomeWarnings(3, 2)).toEqual([
+			'2 scanned pages were read with on-device text recognition; their text may contain errors.',
+			'One scanned page could not be read and was left out.'
+		]);
+		expect(ocrOutcomeWarnings(5, 0)).toEqual([
+			'5 scanned pages could not be read and were left out.'
+		]);
+		expect(ocrOutcomeWarnings(1, 0)).toEqual([
+			'One scanned page could not be read and was left out.'
+		]);
+	});
+
+	it('is silent when no pages needed recognition', () => {
+		expect(ocrOutcomeWarnings(0, 0)).toEqual([]);
+	});
+});
+
+describe('withRecognizedPages', () => {
+	it('substitutes recognized text and keeps native pages untouched', () => {
+		const pages = [
+			{ pageNum: 1, markdown: 'Native one.', text: 'plain one' },
+			{ pageNum: 2, markdown: '```text\n\n```', text: '' }
+		];
+		expect(withRecognizedPages(pages, new Map([[2, 'Recovered.']]))).toEqual([
+			{ markdown: 'Native one.', text: 'plain one' },
+			{ markdown: 'Recovered.', text: '' }
+		]);
+	});
 });
 
 describe('stripRepeatedPageChrome', () => {
@@ -124,6 +172,23 @@ describe('stripRepeatedPageChrome', () => {
 			'# Chapter 1\n\nBody three.'
 		];
 		expect(stripRepeatedPageChrome(pages)).toEqual(pages);
+	});
+
+	it('strips repeated footers from the trailing edge too', () => {
+		const pages = [
+			'Body one.\n\nvoicebook.press · 7',
+			'Body two.\n\nvoicebook.press · 8',
+			'Body three.\n\nvoicebook.press · 9'
+		];
+		expect(stripRepeatedPageChrome(pages)).toEqual(['Body one.', 'Body two.', 'Body three.']);
+	});
+
+	it('empties a page that was nothing but chrome', () => {
+		expect(stripRepeatedPageChrome(['Runner · 1', 'Runner · 2', 'Runner · 3'])).toEqual([
+			'',
+			'',
+			''
+		]);
 	});
 });
 
@@ -242,6 +307,10 @@ describe('pagesJoinSeam', () => {
 		expect(pagesJoinSeam('A finished sentence.', 'A new paragraph.')).toBe('break');
 		expect(pagesJoinSeam('Text before.', '# Heading')).toBe('break');
 		expect(pagesJoinSeam('| a | b |', 'lowercase after table')).toBe('break');
+		// Terminal punctuation before a lowercase start is still a boundary
+		// (a quoted sentence end, for instance).
+		expect(pagesJoinSeam('He said "stop."', 'then everything went quiet.')).toBe('break');
+		expect(pagesJoinSeam('', 'anything')).toBe('break');
 	});
 });
 
@@ -378,6 +447,24 @@ describe('outlineFromBookmarks', () => {
 				richBlocks
 			)
 		).toBeNull();
+	});
+
+	it('tolerates a heading shifted one page by cross-page mending', () => {
+		const shifted = [
+			block('b0', 'heading', 'Methods', { level: 2, anchor: { page: 4 } }),
+			block('b1', 'paragraph', 'Text.', { anchor: { page: 4 } }),
+			block('b2', 'heading', 'Results', { level: 2, anchor: { page: 7 } })
+		];
+		const outline = outlineFromBookmarks(
+			[
+				{ title: 'Methods', page: 3, level: 1 },
+				{ title: 'Results', page: 7, level: 0 }
+			],
+			shifted
+		);
+		expect(outline?.[0].blockId).toBe('b0');
+		// Bookmark depths below one clamp up to a valid outline level.
+		expect(outline?.[1].level).toBe(1);
 	});
 
 	it('does not match a same-titled heading in a distant chapter', () => {

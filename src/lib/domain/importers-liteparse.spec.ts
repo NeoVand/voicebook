@@ -189,4 +189,23 @@ describe('parsedSourceFromLiteparse', () => {
 	it('returns null when nothing survives cleanup', () => {
 		expect(parsedSourceFromLiteparse(result([{ markdown: '```text\n\n```' }]))).toBeNull();
 	});
+
+	it('falls back to plain page text and default dimensions', () => {
+		const parsed = parsedSourceFromLiteparse({
+			pages: [{ pageNum: 1, text: 'Only plain text extraction survived on this page.' }],
+			images: []
+		});
+		expect(parsed?.blocks[0]?.text).toBe('Only plain text extraction survived on this page.');
+		expect(parsed?.pages?.[0]).toMatchObject({ page: 1, width: 612, height: 792 });
+	});
+
+	it('propagates image-budget warnings from reference resolution', () => {
+		const parsed = parsedSourceFromLiteparse(
+			result(
+				[{ markdown: 'A paragraph before the oversized figure.\n\n![](image_p1_0.png)' }],
+				[{ id: 'p1_0', page: 1, format: 'png', bytes: new Uint8Array(3_000_000).fill(1) }]
+			)
+		);
+		expect(parsed?.warnings).toEqual(['One image was too large to keep and was skipped.']);
+	});
 });

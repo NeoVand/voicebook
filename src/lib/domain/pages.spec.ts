@@ -81,6 +81,11 @@ describe('blockForPage', () => {
 	it('returns undefined for unpaged documents', () => {
 		expect(blockForPage([block('b0')], 1)).toBeUndefined();
 	});
+
+	it('falls back to the last top-level block when only a child holds the deepest page', () => {
+		const withDeepChild = [block('b0', 1), block('b1', 2), block('b2', 5, 'b1')];
+		expect(blockForPage(withDeepChild, 5)?.id).toBe('b1');
+	});
 });
 
 describe('pageForSegmentIndex', () => {

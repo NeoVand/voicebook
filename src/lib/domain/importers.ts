@@ -13,6 +13,7 @@ import {
 	collapseSpacedHeadings,
 	liteparsePageMarkdown,
 	normalizeHeadingLevels,
+	ocrOutcomeWarnings,
 	outlineFromBookmarks,
 	pagesNeedingOcr,
 	pdfLooksScanned,
@@ -20,6 +21,7 @@ import {
 	stripBlanketBoldPage,
 	stripRepeatedPageChrome,
 	unwrapTextFences,
+	withRecognizedPages,
 	type LiteparseImage,
 	type LiteparsePage,
 	type PageComplexity,
@@ -1451,36 +1453,15 @@ async function parsePdfWithLiteparse(
 					pageCount: ocrPages.length
 				})
 			).catch(() => null);
-			// Recognition is partial-success by design: count what actually
-			// produced text, never the number of pages we asked about.
-			if (recognized?.size) {
-				ocrText = recognized;
-				warnings.push(
-					ocrText.size === 1
-						? 'One scanned page was read with on-device text recognition; its text may contain errors.'
-						: `${ocrText.size} scanned pages were read with on-device text recognition; their text may contain errors.`
-				);
-			}
+			if (recognized?.size) ocrText = recognized;
 		}
-		const unrecognized = ocrPages.length - ocrText.size;
-		if (unrecognized > 0) {
-			warnings.push(
-				unrecognized === 1
-					? 'One scanned page could not be read and was left out.'
-					: `${unrecognized} scanned pages could not be read and were left out.`
-			);
-		}
+		warnings.push(...ocrOutcomeWarnings(ocrPages.length, ocrText.size));
 
 		// The one scanned-PDF authority: after recognition has had its say,
 		// a document whose usable text (native + recognized) is still this
 		// thin has nothing to read — regardless of why the probe, engine, or
 		// individual pages failed along the way.
-		const usableMarkdown = liteparsePageMarkdown(
-			result.pages.map((page) => ({
-				markdown: ocrText.get(page.pageNum) ?? page.markdown,
-				text: page.text
-			}))
-		);
+		const usableMarkdown = liteparsePageMarkdown(withRecognizedPages(result.pages, ocrText));
 		if (pdfLooksScanned(usableMarkdown, result.pages.length)) {
 			throw new ImportError(SCANNED_PDF_MESSAGE, 'scanned-pdf');
 		}

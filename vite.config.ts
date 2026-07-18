@@ -73,6 +73,8 @@ export default defineConfig({
 				'src/lib/domain/explain-prompts.ts',
 				'src/lib/domain/importers.ts',
 				'src/lib/domain/model-catalog.ts',
+				'src/lib/domain/pages.ts',
+				'src/lib/domain/pdf-markdown.ts',
 				'src/lib/domain/segmenter.ts',
 				'src/lib/domain/speech-words.ts',
 				'src/lib/services/generation-plan.ts',
