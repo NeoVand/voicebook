@@ -13,6 +13,7 @@
 		Play,
 		RotateCcw,
 		RotateCw,
+		Sparkles,
 		Square,
 		Volume2,
 		X
@@ -42,6 +43,8 @@
 		TableCell
 	} from '$lib/domain/types';
 	import { tableMarkdown } from '$lib/domain/narration';
+	import { assembleExplainContext } from '$lib/domain/explain-prompts';
+	import { generateExplanation } from '$lib/services/explain';
 	import { readerTourSeen, startTour } from '$lib/services/tours';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { llmState } from '$lib/state/llm.svelte';
@@ -62,12 +65,27 @@
 	interface NarrationStartAction {
 		segmentId: string;
 		wordIndex: number;
+		endSegmentId: string;
+		endWordIndex: number;
 		excerpt: string;
 		left: number;
 		top: number;
 		placement: 'above' | 'below';
 	}
 	let narrationStartAction = $state<NarrationStartAction>();
+	interface ExplainBoxState {
+		selection: string;
+		startSegmentId: string;
+		endSegmentId: string;
+		left: number;
+		top: number;
+		placement: 'above' | 'below';
+	}
+	let explainBox = $state<ExplainBoxState>();
+	let explainQuestion = $state('');
+	let explainStatus = $state<'idle' | 'thinking' | 'speaking'>('idle');
+	let explainError = $state('');
+	let explainAbort: AbortController | undefined;
 	let narrationAnnouncement = $state('');
 	let appReady = $state(false);
 	let openingTitle = $state<string>();
@@ -138,7 +156,7 @@
 			if (!player.autoFollow || outlineNavigationBlockId) return;
 			requestAnimationFrame(() => {
 				const element = segmentElements.get(segmentId);
-				if (element) scrollNarrationIntoView(element, false);
+				if (element) scrollNarrationIntoView(element);
 			});
 		};
 		void providersState.initialize().then(() => {
@@ -176,6 +194,7 @@
 	async function openBook(next: NormalizedDocument | null): Promise<void> {
 		narrationState.stop();
 		narrationStartAction = undefined;
+		closeExplainBox();
 		outlineNavigationBlockId = undefined;
 		activeOutlineBlockId = undefined;
 		if (!next) {
@@ -201,7 +220,7 @@
 			const element = player.currentSegment
 				? segmentElements.get(player.currentSegment.id)
 				: undefined;
-			if (element) scrollNarrationIntoView(element, false);
+			if (element) scrollNarrationIntoView(element);
 			else readingCanvas?.scrollTo({ top: 0 });
 			scheduleVisibleSectionUpdate();
 			// First document ever opened on this device: show the reader around.
@@ -415,7 +434,7 @@
 		scheduleVisibleSectionUpdate();
 	}
 
-	function scrollNarrationIntoView(element: HTMLElement, userRequested: boolean): void {
+	function scrollNarrationIntoView(element: HTMLElement): void {
 		if (!readingCanvas) return;
 		const canvasRect = readingCanvas.getBoundingClientRect();
 		const elementRect = element.getBoundingClientRect();
@@ -438,10 +457,10 @@
 		const top = Math.max(0, Math.min(maximumTop, centeredTop));
 		const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 		const longJump = Math.abs(top - readingCanvas.scrollTop) > readingCanvas.clientHeight * 1.5;
-		readingCanvas.scrollTo({
-			top,
-			behavior: userRequested && !reducedMotion && !longJump ? 'smooth' : 'auto'
-		});
+		// Follow-along re-centers glide instead of jumping — the cut only stays
+		// for reduced-motion users and cross-document leaps, where animating
+		// would disorient more than it soothes.
+		readingCanvas.scrollTo({ top, behavior: reducedMotion || longJump ? 'auto' : 'smooth' });
 		scheduleVisibleSectionUpdate();
 	}
 
@@ -451,7 +470,7 @@
 		if (!segment) return;
 		requestAnimationFrame(() => {
 			const element = segmentElements.get(segment.id);
-			if (element) scrollNarrationIntoView(element, true);
+			if (element) scrollNarrationIntoView(element);
 		});
 	}
 
@@ -504,14 +523,122 @@
 		await player.playFromSegment(index, wordIndex);
 	}
 
+	function playSelectedPassage(): void {
+		const action = narrationStartAction;
+		if (!action || !book) return;
+		const startIndex = segmentIndexes.get(action.segmentId);
+		if (startIndex === undefined) return;
+		const endIndex = segmentIndexes.get(action.endSegmentId) ?? startIndex;
+		narrationStartAction = undefined;
+		window.getSelection()?.removeAllRanges();
+		player.autoFollow = true;
+		narrationAnnouncement = `Reading the selection: ${action.excerpt}`;
+		void player.playFromSegment(startIndex, action.wordIndex, {
+			segmentIndex: Math.max(startIndex, endIndex),
+			wordIndex: action.endWordIndex
+		});
+	}
+
+	function openExplainBox(): void {
+		const action = narrationStartAction;
+		if (!action) return;
+		narrationStartAction = undefined;
+		window.getSelection()?.removeAllRanges();
+		explainQuestion = '';
+		explainError = '';
+		explainStatus = 'idle';
+		explainBox = {
+			selection: action.excerpt,
+			startSegmentId: action.segmentId,
+			endSegmentId: action.endSegmentId,
+			left: action.left,
+			top: action.top,
+			placement: action.placement
+		};
+	}
+
+	function closeExplainBox(): void {
+		explainAbort?.abort();
+		explainAbort = undefined;
+		player.stopAside();
+		explainBox = undefined;
+		explainQuestion = '';
+		explainStatus = 'idle';
+		explainError = '';
+	}
+
+	async function runExplain(): Promise<void> {
+		const box = explainBox;
+		if (!box || !book || explainStatus !== 'idle') return;
+		const engine = narrationState.engine;
+		if (!engine) {
+			explainError = 'No description engine is set up yet. Choose one under Settings → LLM.';
+			return;
+		}
+		const controller = new AbortController();
+		explainAbort = controller;
+		explainError = '';
+		explainStatus = 'thinking';
+		try {
+			if (engine.type === 'local') {
+				const ready = await llmState.ensureReadyForNarration();
+				if (!ready) throw new Error('The on-device language model could not load.');
+			}
+			const startBlockId = book.segments.find((s) => s.id === box.startSegmentId)?.blockId;
+			const endBlockId =
+				book.segments.find((s) => s.id === box.endSegmentId)?.blockId ?? startBlockId;
+			const context =
+				startBlockId && endBlockId
+					? assembleExplainContext(book.blocks, startBlockId, endBlockId)
+					: { before: '', after: '' };
+			const answer = await generateExplanation(
+				{
+					documentTitle: book.title,
+					selection: box.selection,
+					context,
+					question: explainQuestion
+				},
+				engine,
+				llmState.explainPrompt,
+				controller.signal
+			);
+			if (explainBox !== box || controller.signal.aborted) return;
+			explainStatus = 'speaking';
+			await player.speakAside(answer);
+			if (explainBox === box) closeExplainBox();
+		} catch (error) {
+			if (explainBox === box && !controller.signal.aborted) {
+				explainStatus = 'idle';
+				explainError =
+					error instanceof Error ? error.message : 'The explanation could not be generated.';
+			}
+		} finally {
+			if (explainAbort === controller) explainAbort = undefined;
+		}
+	}
+
+	function handleExplainKeydown(event: KeyboardEvent): void {
+		if (event.key === 'Enter' && !event.shiftKey) {
+			event.preventDefault();
+			void runExplain();
+		} else if (event.key === 'Escape') {
+			event.preventDefault();
+			closeExplainBox();
+		}
+	}
+
+	const focusExplainInput: Attachment<HTMLTextAreaElement> = (element) => {
+		requestAnimationFrame(() => element.focus());
+	};
+
 	function segmentForElement(element: Element | null): SpeechSegment | undefined {
 		const segmentId = element?.closest<HTMLElement>('[data-segment-id]')?.dataset.segmentId;
 		return segmentId ? book?.segments.find((candidate) => candidate.id === segmentId) : undefined;
 	}
 
 	function positionedNarrationAction(
-		segment: SpeechSegment,
-		wordIndex: number,
+		start: { segment: SpeechSegment; wordIndex: number },
+		end: { segmentId: string; wordIndex: number },
 		excerpt: string,
 		rect: DOMRect
 	): NarrationStartAction | undefined {
@@ -519,11 +646,20 @@
 		const canvasRect = readingCanvas.getBoundingClientRect();
 		const placement = rect.top - canvasRect.top >= 54 ? 'above' : 'below';
 		const unclampedLeft = readingCanvas.scrollLeft + rect.left + rect.width / 2 - canvasRect.left;
-		const left = Math.max(86, Math.min(readingCanvas.clientWidth - 86, unclampedLeft));
+		const left = Math.max(120, Math.min(readingCanvas.clientWidth - 120, unclampedLeft));
 		const top =
 			readingCanvas.scrollTop +
 			(placement === 'above' ? rect.top - canvasRect.top - 8 : rect.bottom - canvasRect.top + 8);
-		return { segmentId: segment.id, wordIndex, excerpt, left, top, placement };
+		return {
+			segmentId: start.segment.id,
+			wordIndex: start.wordIndex,
+			endSegmentId: end.segmentId,
+			endWordIndex: end.wordIndex,
+			excerpt,
+			left,
+			top,
+			placement
+		};
 	}
 
 	function startClickedPassage(event: MouseEvent): void {
@@ -584,10 +720,30 @@
 		const wordElement = startElement?.closest<HTMLElement>('[data-word-index]');
 		const parsedWordIndex = Number(wordElement?.dataset.wordIndex ?? 0);
 		const wordIndex = Number.isFinite(parsedWordIndex) ? parsedWordIndex : 0;
+
+		// Where the selection ends: its last segment and word, so "Play
+		// selection" knows where to stop. A selection ending outside any
+		// segment (or before the start, which Range never produces) falls back
+		// to reading the start segment to its natural end.
+		const endElement =
+			range.endContainer instanceof Element ? range.endContainer : range.endContainer.parentElement;
+		const endSegmentElement = endElement?.closest<HTMLElement>('.speech-segment');
+		const endSegmentId = endSegmentElement?.dataset.segmentId;
+		const endSegment = endSegmentId
+			? book.segments.find((candidate) => candidate.id === endSegmentId)
+			: undefined;
+		const boundarySegment =
+			endSegment && readingCanvas.contains(endSegmentElement!) ? endSegment : segment;
+		const endWordElement = endElement?.closest<HTMLElement>('[data-word-index]');
+		const parsedEndWordIndex = Number(endWordElement?.dataset.wordIndex ?? NaN);
+		const endWordIndex = Number.isFinite(parsedEndWordIndex)
+			? parsedEndWordIndex
+			: Math.max(0, boundarySegment.words.length - 1);
+
 		const rangeRect = range.getBoundingClientRect();
 		narrationStartAction = positionedNarrationAction(
-			segment,
-			wordIndex,
+			{ segment, wordIndex },
+			{ segmentId: boundarySegment.id, wordIndex: endWordIndex },
 			selection.toString().replace(/\s+/g, ' ').trim(),
 			rangeRect
 		);
@@ -651,6 +807,13 @@
 
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
+		// Escape closes the explain box from anywhere — its textarea handles
+		// its own keys, but focus may sit on a button (or nowhere) by then.
+		if (event.key === 'Escape' && explainBox) {
+			event.preventDefault();
+			closeExplainBox();
+			return;
+		}
 		const target = event.target as HTMLElement | null;
 		if (target?.matches('input,textarea,select,button,[data-segment-id]')) return;
 		if (event.code === 'Space') {
@@ -1134,21 +1297,87 @@
 						(segment) => segment.id === narrationStartAction?.segmentId
 					)}
 					{#if selectedSegment}
-						<button
-							class="selection-start"
+						<div
+							class="selection-actions"
 							class:below={narrationStartAction.placement === 'below'}
-							type="button"
 							style:left={`${narrationStartAction.left}px`}
 							style:top={`${narrationStartAction.top}px`}
-							aria-label={`Play from selected text: ${narrationStartAction.excerpt}`}
-							onpointerdown={(event) => event.preventDefault()}
-							onclick={() =>
-								void startNarrationFrom(selectedSegment, narrationStartAction?.wordIndex, true)}
+							role="group"
+							aria-label="Actions for the selected text"
 						>
-							<Play size={12} fill="currentColor" />
-							Play from here
-						</button>
+							<button
+								class="selection-action"
+								type="button"
+								aria-label={`Play the selected text: ${narrationStartAction.excerpt}`}
+								onpointerdown={(event) => event.preventDefault()}
+								onclick={playSelectedPassage}
+							>
+								<Play size={12} fill="currentColor" />
+								Play selection
+							</button>
+							<span class="selection-actions-divider" aria-hidden="true"></span>
+							<button
+								class="selection-action"
+								type="button"
+								aria-label={`Explain the selected text: ${narrationStartAction.excerpt}`}
+								onpointerdown={(event) => event.preventDefault()}
+								onclick={openExplainBox}
+							>
+								<Sparkles size={12} />
+								Explain
+							</button>
+						</div>
 					{/if}
+				{/if}
+
+				{#if explainBox}
+					<div
+						class="explain-box"
+						class:below={explainBox.placement === 'below'}
+						style:left={`${explainBox.left}px`}
+						style:top={`${explainBox.top}px`}
+						role="dialog"
+						aria-label="Explain the selected passage"
+					>
+						<div class="explain-head">
+							<Sparkles size={13} aria-hidden="true" />
+							<span class="explain-excerpt">{explainBox.selection}</span>
+							<button
+								class="explain-close"
+								type="button"
+								aria-label="Close the explain panel"
+								onclick={closeExplainBox}
+							>
+								<X size={13} />
+							</button>
+						</div>
+						<textarea
+							rows="2"
+							placeholder="What are you wondering? (optional)"
+							aria-label="Your question about the selection"
+							disabled={explainStatus !== 'idle'}
+							bind:value={explainQuestion}
+							onkeydown={handleExplainKeydown}
+							{@attach focusExplainInput}></textarea>
+						{#if explainError}
+							<p class="explain-error" role="alert">{explainError}</p>
+						{/if}
+						<div class="explain-actions">
+							{#if explainStatus === 'idle'}
+								<button class="explain-run" type="button" onclick={() => void runExplain()}>
+									<Sparkles size={12} /> Explain aloud
+								</button>
+							{:else if explainStatus === 'thinking'}
+								<span class="explain-status">Thinking…</span>
+								<button class="explain-stop" type="button" onclick={closeExplainBox}>Cancel</button>
+							{:else}
+								<span class="explain-status">Speaking…</span>
+								<button class="explain-stop" type="button" onclick={closeExplainBox}>
+									<Square size={11} fill="currentColor" /> Stop
+								</button>
+							{/if}
+						</div>
+					</div>
 				{/if}
 			</article>
 			<p class="sr-only" aria-live="polite">{narrationAnnouncement}</p>
@@ -2082,18 +2311,31 @@
 		background: color-mix(in srgb, var(--primary) 7%, transparent);
 	}
 
-	.selection-start {
+	.selection-actions {
 		position: absolute;
 		z-index: 20;
 		display: inline-flex;
 		min-height: 34px;
-		align-items: center;
-		gap: 7px;
-		padding: 0 12px;
+		align-items: stretch;
 		border: 1px solid color-mix(in srgb, var(--reader-ink-strong) 70%, transparent);
 		border-radius: 999px;
 		background: var(--reader-ink-strong);
 		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.26);
+		transform: translate(-50%, -100%);
+		white-space: nowrap;
+	}
+
+	.selection-actions.below {
+		transform: translate(-50%, 0);
+	}
+
+	.selection-action {
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		padding: 0 12px;
+		border: 0;
+		background: transparent;
 		color: var(--reader);
 		cursor: pointer;
 		font-family: var(--font-ui);
@@ -2101,16 +2343,154 @@
 		font-weight: 680;
 		letter-spacing: 0.01em;
 		line-height: 1;
-		transform: translate(-50%, -100%);
-		white-space: nowrap;
 	}
 
-	.selection-start.below {
+	.selection-action:first-child {
+		border-radius: 999px 0 0 999px;
+		padding-left: 14px;
+	}
+
+	.selection-action:last-child {
+		border-radius: 0 999px 999px 0;
+		padding-right: 14px;
+	}
+
+	.selection-action:hover {
+		background: color-mix(in srgb, var(--primary) 24%, transparent);
+	}
+
+	.selection-actions-divider {
+		width: 1px;
+		margin: 7px 0;
+		background: color-mix(in srgb, var(--reader) 26%, transparent);
+	}
+
+	.explain-box {
+		position: absolute;
+		z-index: 30;
+		display: grid;
+		width: min(320px, 82%);
+		gap: 8px;
+		padding: 10px;
+		border: 1px solid var(--line-strong);
+		border-radius: 11px;
+		background: var(--surface-overlay);
+		box-shadow: 0 14px 42px rgba(0, 0, 0, 0.4);
+		font-family: var(--font-ui);
+		transform: translate(-50%, -100%);
+	}
+
+	.explain-box.below {
 		transform: translate(-50%, 0);
 	}
 
-	.selection-start:hover {
-		background: color-mix(in srgb, var(--reader-ink-strong) 88%, var(--primary));
+	.explain-head {
+		display: grid;
+		align-items: center;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		gap: 7px;
+		color: var(--text-soft);
+	}
+
+	.explain-excerpt {
+		overflow: hidden;
+		color: var(--muted);
+		font-size: 11px;
+		font-style: italic;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.explain-close {
+		display: grid;
+		width: 24px;
+		height: 24px;
+		border: 0;
+		border-radius: 5px;
+		background: transparent;
+		color: var(--muted);
+		place-items: center;
+	}
+
+	.explain-close:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
+
+	.explain-box textarea {
+		width: 100%;
+		padding: 7px 9px;
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		background: transparent;
+		color: var(--text);
+		font-family: var(--font-ui);
+		font-size: 12px;
+		line-height: 1.45;
+		resize: none;
+	}
+
+	.explain-box textarea:focus-visible {
+		border-color: var(--primary);
+		outline: none;
+	}
+
+	.explain-box textarea:disabled {
+		color: var(--muted);
+	}
+
+	.explain-error {
+		margin: 0;
+		color: var(--danger, #e5484d);
+		font-size: 11px;
+		line-height: 1.4;
+	}
+
+	.explain-actions {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+
+	.explain-status {
+		margin-right: auto;
+		color: var(--muted);
+		font-size: 11px;
+	}
+
+	.explain-run,
+	.explain-stop {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		height: 28px;
+		padding: 0 12px;
+		border: 0;
+		border-radius: 999px;
+		font-size: 11px;
+		font-weight: 640;
+		line-height: 1;
+	}
+
+	.explain-run {
+		background: var(--primary);
+		color: var(--primary-contrast, #fff);
+	}
+
+	.explain-run:hover {
+		filter: brightness(1.08);
+	}
+
+	.explain-stop {
+		border: 1px solid var(--line-strong);
+		background: transparent;
+		color: var(--text-soft);
+	}
+
+	.explain-stop:hover {
+		background: var(--hover);
+		color: var(--text);
 	}
 
 	.speech-segment + .speech-segment::before {

@@ -45,6 +45,7 @@
 		DEFAULT_NARRATION_PROMPTS,
 		type NarrationPromptKey
 	} from '$lib/domain/narration-prompts';
+	import { DEFAULT_EXPLAIN_PROMPT } from '$lib/domain/explain-prompts';
 	import { NARRATION_PRESETS, type NarrationPresetId } from '$lib/domain/narration-presets';
 	import { READER_FONTS, THEMES, appearanceState } from '$lib/state/appearance.svelte';
 	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
@@ -523,10 +524,13 @@
 	});
 	let promptsSynced = $state(false);
 	let promptSavedKey = $state<NarrationPromptKey | null>(null);
+	let explainDraft = $state(DEFAULT_EXPLAIN_PROMPT);
+	let explainSaved = $state(false);
 
 	$effect(() => {
 		if (llmState.initialized && !promptsSynced) {
 			promptDrafts = { ...llmState.promptTemplates };
+			explainDraft = llmState.explainPrompt;
 			promptsSynced = true;
 		}
 	});
@@ -567,6 +571,20 @@
 	async function resetPrompt(key: NarrationPromptKey): Promise<void> {
 		promptDrafts = { ...promptDrafts, [key]: DEFAULT_NARRATION_PROMPTS[key] };
 		await llmState.setPromptTemplate(key, DEFAULT_NARRATION_PROMPTS[key]);
+	}
+
+	async function saveExplainPrompt(): Promise<void> {
+		await llmState.setExplainPrompt(explainDraft);
+		explainDraft = llmState.explainPrompt;
+		explainSaved = true;
+		setTimeout(() => {
+			explainSaved = false;
+		}, 2_000);
+	}
+
+	async function resetExplainPrompt(): Promise<void> {
+		explainDraft = DEFAULT_EXPLAIN_PROMPT;
+		await llmState.setExplainPrompt(DEFAULT_EXPLAIN_PROMPT);
 	}
 </script>
 
@@ -1302,6 +1320,56 @@
 					</div>
 				{/each}
 			{/if}
+		</section>
+
+		<section class="settings-section" aria-labelledby="explain-title">
+			<header class="section-title">
+				<div>
+					<h2 id="explain-title">Explain aloud</h2>
+					<p>
+						Select any passage in the reader and choose Explain: the model answers with the document
+						as context, and the answer is spoken in your reading voice — never shown as text.
+					</p>
+				</div>
+			</header>
+			<div class="prompt-editor">
+				<div class="prompt-editor-head">
+					<div>
+						<strong>System prompt</strong>
+						{#if llmState.explainPromptOverride !== undefined}<span class="prompt-custom-badge"
+								>Custom</span
+							>{/if}
+						<p>Sent with the document excerpt, your selection, and your question.</p>
+					</div>
+					<div class="prompt-editor-actions">
+						{#if explainSaved}
+							<span class="installed-mark"><Check size={13} /> Saved</span>
+						{/if}
+						<button
+							class="button"
+							type="button"
+							disabled={llmState.explainPromptOverride === undefined &&
+								explainDraft.trim() === DEFAULT_EXPLAIN_PROMPT.trim()}
+							onclick={() => void resetExplainPrompt()}
+						>
+							Reset
+						</button>
+						<button
+							class="button primary"
+							type="button"
+							disabled={explainDraft.trim() === llmState.explainPrompt.trim()}
+							onclick={() => void saveExplainPrompt()}
+						>
+							Save
+						</button>
+					</div>
+				</div>
+				<textarea
+					rows={6}
+					spellcheck="false"
+					aria-label="Explain system prompt"
+					bind:value={explainDraft}></textarea>
+			</div>
 		</section>
 	{:else if activeSection === 'appearance'}
 		<section class="settings-section" aria-labelledby="theme-title">
