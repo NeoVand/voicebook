@@ -12,9 +12,9 @@
  * (core wasm, worker, English language data) are separate Vite assets
  * fetched on first use, never part of the entry chunk.
  */
+import { base } from '$app/paths';
 import workerUrl from 'tesseract.js/dist/worker.min.js?url';
 import coreUrl from 'tesseract.js-core/tesseract-core-simd-lstm.wasm.js?url';
-import engDataUrl from '@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz?url';
 import { createPageRasterizer } from './pdf-pages';
 
 /** ~150 DPI relative to PDF points (72/inch): plenty for print-size text. */
@@ -45,10 +45,7 @@ export function tesseractBlocksToMarkdown(blocks: TesseractBlockLike[] | null | 
 		for (const paragraph of source) {
 			const text = paragraph.text?.replace(/\s+/g, ' ').trim();
 			if (!text) continue;
-			if (
-				paragraph.confidence !== undefined &&
-				paragraph.confidence < MIN_PARAGRAPH_CONFIDENCE
-			) {
+			if (paragraph.confidence !== undefined && paragraph.confidence < MIN_PARAGRAPH_CONFIDENCE) {
 				continue;
 			}
 			paragraphs.push(text);
@@ -68,19 +65,17 @@ interface TesseractWorkerLike {
 
 async function createTesseractWorker(): Promise<TesseractWorkerLike | null> {
 	try {
-		const [{ createWorker, OEM }, langData] = await Promise.all([
-			import('tesseract.js'),
-			fetch(engDataUrl).then((response) => {
-				if (!response.ok) throw new Error(`language data: HTTP ${response.status}`);
-				return response.arrayBuffer();
-			})
-		]);
-		// Language bytes are fetched here and handed over directly (the worker
-		// gunzips by magic number), so tesseract's own caching/network layers
-		// stay out of the picture and the app remains fully same-origin.
-		return (await createWorker([{ code: 'eng', data: new Uint8Array(langData) }], OEM.LSTM_ONLY, {
+		const { createWorker, OEM } = await import('tesseract.js');
+		// Language data comes from our own origin: a Vite plugin emits
+		// eng.traineddata.gz at the stable /tessdata/ path the worker's
+		// `${langPath}/${lang}.traineddata.gz` convention requires. (Passing
+		// bytes via `{code, data}` lang objects is broken in tesseract.js ≤7 —
+		// `initialize` uses `data` as the language name.)
+		return (await createWorker('eng', OEM.LSTM_ONLY, {
 			workerPath: workerUrl,
 			corePath: coreUrl,
+			langPath: `${base}/tessdata`,
+			gzip: true,
 			cacheMethod: 'none'
 		})) as unknown as TesseractWorkerLike;
 	} catch {
