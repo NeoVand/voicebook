@@ -231,6 +231,25 @@ export interface OutlineEntry {
 	blockId: string;
 	title: string;
 	level: number;
+	/** Source page for PDF bookmarks; shown alongside the entry in the TOC. */
+	page?: number;
+}
+
+/**
+ * Per-page metadata for PDF sources. Sizes the original-page view before
+ * pdf.js renders anything, and records which pages came from OCR. Word boxes
+ * and text items are deliberately NOT persisted — a future synced page view
+ * can recompute them for a single page from the stored source bytes
+ * (LiteParse `targetPages` + `emitWordBoxes`) far cheaper than storing them
+ * for every document up front.
+ */
+export interface DocumentPageInfo {
+	page: number;
+	/** PDF points (1/72 inch), from LiteParse's ParsedPage. */
+	width: number;
+	height: number;
+	/** True when this page's text came from on-device OCR. */
+	ocr?: boolean;
 }
 
 export interface PlaybackPosition {
@@ -266,6 +285,8 @@ export interface NormalizedDocument {
 	includeCode: boolean;
 	sourcePath?: string;
 	sourceBlob?: Blob;
+	/** Present for PDF sources parsed since normalization v13. */
+	pages?: DocumentPageInfo[];
 }
 
 export type TimingConfidence = 'native' | 'estimated';
