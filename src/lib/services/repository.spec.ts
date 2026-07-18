@@ -3,8 +3,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { documentFromText } from '$lib/domain/importers';
 import type { AudioVariantMeta } from '$lib/domain/types';
 import {
+	DATABASE_LOCKED_MESSAGE,
 	clearGeneratedAudio,
 	eraseAllData,
+	setDatabaseOpenTimeout,
 	deleteAudioForSegments,
 	deleteDocument,
 	getAudio,
@@ -251,6 +253,46 @@ describe('local repository', () => {
 		expect(await getAudio(stored.key)).toBeNull();
 		expect(await getSource({ ...document, sourcePath: 'voicebook/missing/source.txt' })).toBeNull();
 		await deleteDocument(document.id);
+	});
+
+	it('reports a locked database instead of spinning forever, then recovers', async () => {
+		// Simulate a stale Voicebook window: wipe the database, then hold an
+		// old schema version open while ignoring the upgrade request. This
+		// setup needs real timers — fake-indexeddb schedules its own events.
+		await eraseAllData();
+		const staleConnection = await new Promise<IDBDatabase>((resolve, reject) => {
+			const request = indexedDB.open('voicebook-v1', 1);
+			request.onupgradeneeded = () => {
+				// Recreate the real version-1 schema, as an old deploy would have.
+				const db = request.result;
+				const documents = db.createObjectStore('documents', { keyPath: 'id' });
+				documents.createIndex('fingerprint', 'fingerprint');
+				documents.createIndex('updatedAt', 'updatedAt');
+				const audio = db.createObjectStore('audio', { keyPath: 'key' });
+				audio.createIndex('documentId', 'documentId');
+				audio.createIndex('segmentId', 'segmentId');
+				db.createObjectStore('settings', { keyPath: 'key' });
+			};
+			request.onsuccess = () => resolve(request.result);
+			request.onerror = () => reject(request.error);
+		});
+
+		let error: unknown;
+		// Real timers with a shortened watchdog: fake timers cannot drive
+		// fake-indexeddb's blocked-event delivery.
+		setDatabaseOpenTimeout(200);
+		try {
+			error = await getSetting('anything', 'fallback').catch((reason: unknown) => reason);
+		} finally {
+			setDatabaseOpenTimeout(8_000);
+		}
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toBe(DATABASE_LOCKED_MESSAGE);
+
+		// Once the stale window closes, the very next call works — a failed
+		// open must not poison the session.
+		staleConnection.close();
+		await expect(getSetting('anything', 'fallback')).resolves.toBe('fallback');
 	});
 
 	it('factory reset unregisters service workers and settles without hanging', async () => {
