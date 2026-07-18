@@ -1251,7 +1251,13 @@ export function pdfFailureError(error: unknown): ImportError {
 }
 
 const SCANNED_PDF_MESSAGE =
-	'This PDF appears to be scanned. On-device text recognition could not start here (it downloads once on first use) — check your connection and try again.';
+	'This PDF appears to be scanned, and its pages could not be read with on-device text recognition. Check your connection and try again — the recognition engine downloads once on first use.';
+
+/** Below this many non-space characters a page's native extraction is
+ * considered empty enough for recognized text to stand in for it. Pages with
+ * real native text keep their structure (headings, tables, image refs)
+ * rather than being flattened to OCR prose. */
+const OCR_REPLACEMENT_MAX_NATIVE_CHARS = 40;
 
 /** The slice of LiteParse's ParseResult the assembly step consumes. */
 export interface LiteparseResultLike {
@@ -1271,14 +1277,31 @@ export function parsedSourceFromLiteparse(
 	result: LiteparseResultLike,
 	ocrText: Map<number, string> = new Map()
 ): ParsedSource | null {
+	const ocrUsed = new Set<number>();
 	let pageMarkdown = result.pages.map((page) => {
-		const replaced = ocrText.get(page.pageNum)?.trim();
-		const raw = replaced || page.markdown?.trim() || page.text?.trim() || '';
-		return collapseSpacedHeadings(unwrapTextFences(raw));
+		const native = collapseSpacedHeadings(
+			unwrapTextFences(page.markdown?.trim() || page.text?.trim() || '')
+		);
+		const recognized = ocrText.get(page.pageNum)?.trim();
+		// Recognized text only stands in when the page has no usable native
+		// extraction — a 'garbled' page that still extracted substance keeps
+		// its structure instead of flat OCR prose (and keeps its image refs).
+		if (recognized && native.replace(/\s+/g, '').length < OCR_REPLACEMENT_MAX_NATIVE_CHARS) {
+			ocrUsed.add(page.pageNum);
+			return collapseSpacedHeadings(unwrapTextFences(recognized));
+		}
+		return native;
 	});
 	pageMarkdown = stripRepeatedPageChrome(pageMarkdown);
 	if (blanketBoldShare(pageMarkdown) >= 0.6) {
 		pageMarkdown = pageMarkdown.map(stripBlanketBoldPage);
+	}
+	// A document-leading '---' would read as a YAML frontmatter fence in
+	// parseMarkdown and swallow prose up to the next rule. '***' is the same
+	// LENGTH (page spans must not shift) and stays a plain thematic break.
+	const firstIndex = pageMarkdown.findIndex((page) => page.trim());
+	if (firstIndex >= 0 && /^---(\n|$)/.test(pageMarkdown[firstIndex])) {
+		pageMarkdown[firstIndex] = `***${pageMarkdown[firstIndex].slice(3)}`;
 	}
 	const { pages: withImages, warnings: imageWarnings } = resolveImageRefs(
 		pageMarkdown,
@@ -1299,14 +1322,15 @@ export function parsedSourceFromLiteparse(
 			page: page.pageNum,
 			width: page.width ?? 612,
 			height: page.height ?? 792,
-			...(ocrText.has(page.pageNum) ? { ocr: true } : {})
+			...(ocrUsed.has(page.pageNum) ? { ocr: true } : {})
 		}))
 	};
 }
 
 /** Title metadata and embedded bookmarks via pdf.js; best-effort — any
- * failure just means no bookmarks. `data` is copied because pdf.js transfers
- * the buffer to its worker. */
+ * failure just means no bookmarks. CONSUMES `data` (pdf.js transfers the
+ * buffer to its worker): callers must pass it as the buffer's last use, or
+ * pass a copy. */
 async function pdfDocumentExtras(
 	data: Uint8Array
 ): Promise<{ title?: string; bookmarks: PdfBookmark[] }> {
@@ -1319,7 +1343,7 @@ async function pdfDocumentExtras(
 			const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
 			pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
 		}
-		const loadingTask = pdfjs.getDocument({ data: data.slice() });
+		const loadingTask = pdfjs.getDocument({ data });
 		try {
 			const pdf = await loadingTask.promise;
 			const metadata = await pdf.getMetadata().catch(() => null);
@@ -1427,35 +1451,44 @@ async function parsePdfWithLiteparse(
 					pageCount: ocrPages.length
 				})
 			).catch(() => null);
+			// Recognition is partial-success by design: count what actually
+			// produced text, never the number of pages we asked about.
 			if (recognized?.size) {
 				ocrText = recognized;
 				warnings.push(
-					ocrPages.length === 1
+					ocrText.size === 1
 						? 'One scanned page was read with on-device text recognition; its text may contain errors.'
-						: `${ocrPages.length} scanned pages were read with on-device text recognition; their text may contain errors.`
+						: `${ocrText.size} scanned pages were read with on-device text recognition; their text may contain errors.`
 				);
 			}
 		}
-		if (!ocrText.size && ocrPages.length) {
-			if (ocrPages.length >= result.pages.length) {
-				throw new ImportError(SCANNED_PDF_MESSAGE, 'scanned-pdf');
-			}
+		const unrecognized = ocrPages.length - ocrText.size;
+		if (unrecognized > 0) {
 			warnings.push(
-				ocrPages.length === 1
-					? 'One scanned page could not be read and was skipped.'
-					: `${ocrPages.length} scanned pages could not be read and were skipped.`
+				unrecognized === 1
+					? 'One scanned page could not be read and was left out.'
+					: `${unrecognized} scanned pages could not be read and were left out.`
 			);
+		}
+
+		// The one scanned-PDF authority: after recognition has had its say,
+		// a document whose usable text (native + recognized) is still this
+		// thin has nothing to read — regardless of why the probe, engine, or
+		// individual pages failed along the way.
+		const usableMarkdown = liteparsePageMarkdown(
+			result.pages.map((page) => ({
+				markdown: ocrText.get(page.pageNum) ?? page.markdown,
+				text: page.text
+			}))
+		);
+		if (pdfLooksScanned(usableMarkdown, result.pages.length)) {
+			throw new ImportError(SCANNED_PDF_MESSAGE, 'scanned-pdf');
 		}
 
 		const parsed = parsedSourceFromLiteparse(result, ocrText);
 		if (!parsed) return null;
-		if (
-			!ocrText.size &&
-			pdfLooksScanned(liteparsePageMarkdown(result.pages), result.pages.length)
-		) {
-			throw new ImportError(SCANNED_PDF_MESSAGE, 'scanned-pdf');
-		}
 
+		// Last use of `data` — pdfDocumentExtras transfers it to its worker.
 		const extras = await pdfDocumentExtras(data);
 		return {
 			...parsed,
@@ -1502,7 +1535,7 @@ async function parsePdf(file: File, options: ImportOptions = {}): Promise<Parsed
 		const totalCharacters = pages.flat().join('').length;
 		if (totalCharacters < Math.max(24, pdf.numPages * 8)) {
 			throw new ImportError(
-				'This PDF has no embedded text, and on-device text recognition is not available in this browser.',
+				'This PDF appears to be scanned, and no readable text could be extracted from it. Please try importing it again.',
 				'scanned-pdf'
 			);
 		}

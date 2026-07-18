@@ -19,6 +19,10 @@ const heavyAsset = (asset: string) =>
 	asset.includes('traineddata');
 const PRECACHE = ASSETS.filter((asset) => !heavyAsset(asset));
 const RUNTIME_CACHEABLE = new Set(ASSETS.filter(heavyAsset));
+// The OCR language data is emitted outside the Vite asset graph (see
+// tessdataPlugin in vite.config.ts), so $service-worker's lists never
+// include it — without this line it would never be cached at all.
+RUNTIME_CACHEABLE.add(`${base}/tessdata/eng.traineddata.gz`);
 
 worker.addEventListener('install', (event) => {
 	event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(PRECACHE)));

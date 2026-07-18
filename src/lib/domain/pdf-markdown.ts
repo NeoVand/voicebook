@@ -54,15 +54,12 @@ export function pdfLooksScanned(markdown: string, pageCount: number): boolean {
 
 /** LiteParse's `needsOcr` verdict fires for merely light pages (`sparse-text`
  * on a short chapter opener), so recognizing every flagged page would OCR
- * perfectly good text. Only pages that are genuinely unreadable qualify. */
+ * perfectly good text. Only pages whose reasons say the text layer itself is
+ * unusable qualify — a short legitimate page keeps its native extraction. */
 export function pagesNeedingOcr(stats: PageComplexity[]): number[] {
 	const unreadable = new Set(['scanned', 'no-text', 'garbled']);
 	return stats
-		.filter(
-			(page) =>
-				page.needsOcr &&
-				(page.reasons.some((reason) => unreadable.has(reason)) || page.textLength < 40)
-		)
+		.filter((page) => page.needsOcr && page.reasons.some((reason) => unreadable.has(reason)))
 		.map((page) => page.pageNumber);
 }
 
@@ -78,14 +75,21 @@ export function unwrapTextFences(pageMarkdown: string): string {
 /** "R E F E R E N C E S" → "REFERENCES". PDFs letter-space display headings;
  * extraction keeps the spaces and the speech engine spells them out. Only
  * short lines made entirely of spaced-out capitals collapse (double spaces
- * separate words), so ordinary prose can never match. */
+ * separate words), so ordinary prose can never match. Fenced code passes
+ * through verbatim, and indentation is preserved so nested structure holds. */
 export function collapseSpacedHeadings(pageMarkdown: string): string {
+	let inFence = false;
 	return pageMarkdown
 		.split('\n')
 		.map((line) => {
-			const match = /^(#{1,6}\s+)?(.+)$/.exec(line.trim());
+			if (/^\s*```/.test(line)) {
+				inFence = !inFence;
+				return line;
+			}
+			if (inFence) return line;
+			const match = /^(\s*)(#{1,6}\s+)?(.+?)\s*$/.exec(line);
 			if (!match) return line;
-			const [, marker = '', body] = match;
+			const [, indent = '', marker = '', body] = match;
 			const words = body.split(/\s{2,}/);
 			let totalLetters = 0;
 			const collapsible = words.every((word) => {
@@ -94,7 +98,7 @@ export function collapseSpacedHeadings(pageMarkdown: string): string {
 				return letters.length >= 2 && letters.every((letter) => /^[\p{Lu}\p{N}]$/u.test(letter));
 			});
 			if (!collapsible || totalLetters < 4) return line;
-			return marker + words.map((word) => word.replaceAll(' ', '')).join(' ');
+			return indent + marker + words.map((word) => word.replaceAll(' ', '')).join(' ');
 		})
 		.join('\n');
 }
@@ -172,7 +176,11 @@ export function stripBlanketBoldPage(pageMarkdown: string): string {
 		.map((line) => {
 			const trimmed = line.trim();
 			if (!structuralLine(trimmed) && fullyBold(trimmed)) {
-				return line.replace(trimmed, trimmed.slice(2, -2));
+				// Splice by index, not String.replace — `$`-sequences in the
+				// line ("Costs $$40") would otherwise act as replacement
+				// patterns and mangle the text.
+				const start = line.indexOf(trimmed);
+				return line.slice(0, start) + trimmed.slice(2, -2) + line.slice(start + trimmed.length);
 			}
 			return line;
 		})
@@ -236,25 +244,30 @@ export function resolveImageRefs(
 	limits: ImageRefLimits = {}
 ): { pages: string[]; warnings: string[] } {
 	const { minBytes, perImageBytes, totalBytes } = { ...IMAGE_LIMITS, ...limits };
-	const byId = new Map(images.map((image) => [image.id, image]));
+	const byId = new Map(
+		images.map((image) => {
+			const bytes = image.bytes instanceof Uint8Array ? image.bytes : new Uint8Array(image.bytes);
+			return [image.id, { image, bytes, hash: imageByteHash(bytes) }];
+		})
+	);
 	const repeats = new Map<string, number>();
-	for (const image of images) {
-		const bytes = image.bytes instanceof Uint8Array ? image.bytes : new Uint8Array(image.bytes);
-		const key = imageByteHash(bytes);
-		repeats.set(key, (repeats.get(key) ?? 0) + 1);
+	for (const { hash } of byId.values()) {
+		repeats.set(hash, (repeats.get(hash) ?? 0) + 1);
 	}
 	let budget = totalBytes;
 	let skipped = 0;
+	// The alt capture is lazy up to the closing `](image_…` so brackets inside
+	// alt text cannot leave a reference unmatched (and thus rendered broken).
 	const resolved = pages.map((page) =>
 		page.replace(
-			/!\[([^\]]*)\]\(image_(p\d+_\d+)\.(?:png|jpe?g)\)/g,
+			/!\[([^\n]*?)\]\(image_(p\d+_\d+)\.(?:png|jpe?g)\)/g,
 			(match, alt: string, id: string) => {
-				const image = byId.get(id);
-				if (!image) return '';
-				const bytes = image.bytes instanceof Uint8Array ? image.bytes : new Uint8Array(image.bytes);
+				const entry = byId.get(id);
+				if (!entry) return '';
+				const { image, bytes, hash } = entry;
 				const tooSmall = bytes.length < minBytes;
 				const tooBig = bytes.length > perImageBytes || bytes.length > budget;
-				const repeated = (repeats.get(imageByteHash(bytes)) ?? 0) >= 3;
+				const repeated = (repeats.get(hash) ?? 0) >= 3;
 				if (tooSmall || repeated) return '';
 				if (tooBig) {
 					skipped += 1;
@@ -302,6 +315,7 @@ export function assemblePages(pages: Array<{ page: number; markdown: string }>):
 	spans: PageSpan[];
 } {
 	let markdown = '';
+	let previousContent = '';
 	const spans: PageSpan[] = [];
 	for (const { page, markdown: raw } of pages) {
 		const content = raw.trim();
@@ -309,13 +323,17 @@ export function assemblePages(pages: Array<{ page: number; markdown: string }>):
 		if (!markdown) {
 			spans.push({ page, start: 0, end: content.length });
 			markdown = content;
+			previousContent = content;
 			continue;
 		}
-		const seam = pagesJoinSeam(markdown, content);
+		// Seam detection only needs the previous page's tail — passing the
+		// whole accumulated document would make assembly quadratic.
+		const seam = pagesJoinSeam(previousContent, content);
 		if (seam === 'hyphen') markdown = markdown.replace(/-\s*$/, '');
 		const separator = seam === 'break' ? '\n\n' : seam === 'space' ? ' ' : '';
 		const start = markdown.length + separator.length;
 		markdown = markdown + separator + content;
+		previousContent = content;
 		spans.push({ page, start, end: markdown.length });
 	}
 	return { markdown, spans };
@@ -349,13 +367,15 @@ export function assignPageAnchors(blocks: DocumentBlock[], spans: PageSpan[]): D
 
 /** PDFs frequently jump heading levels (H1 title straight to H3 sections).
  * Clamp each heading to at most one level deeper than the previous one so the
- * outline nests sensibly. Shallower moves are kept as authored. */
+ * outline nests sensibly. Shallower moves are kept as authored, and the first
+ * heading keeps its own level — promoting it to H1 would make the reader
+ * mistake an opening "## Abstract" for the document title. */
 export function normalizeHeadingLevels(blocks: DocumentBlock[]): DocumentBlock[] {
 	let previous = 0;
 	return blocks.map((candidate) => {
 		if (candidate.kind !== 'heading') return candidate;
-		const level = candidate.level ?? 2;
-		const normalized = previous === 0 ? Math.min(level, 1) || 1 : Math.min(level, previous + 1);
+		const level = Math.max(1, candidate.level ?? 2);
+		const normalized = previous === 0 ? level : Math.min(level, previous + 1);
 		previous = normalized;
 		return normalized === candidate.level ? candidate : { ...candidate, level: normalized };
 	});
@@ -370,11 +390,17 @@ const bookmarkTitleKey = (title: string) =>
 
 /**
  * The PDF's own bookmarks beat guessed headings as a table of contents. Each
- * bookmark resolves to a block: a heading on the destination page with the
- * same normalized title, else any same-titled heading, else the first block
- * anchored at or after the destination page. Unresolvable bookmarks are
- * dropped (the reader assumes every outline entry navigates), and if fewer
- * than two survive the caller keeps the heading-derived outline.
+ * bookmark resolves to a block: a heading with the same normalized title on
+ * the destination page (±1 page — cross-page paragraph mending can shift a
+ * heading's anchor), else the first block anchored at or after the page. A
+ * document-wide title match is deliberately NOT attempted: with recurring
+ * titles ("Introduction" per chapter) it navigates to the wrong chapter.
+ * Unresolvable bookmarks are dropped (the reader assumes every outline entry
+ * navigates). The heading-derived outline is kept instead when fewer than two
+ * bookmarks survive or when the bookmark tree is far poorer than the actual
+ * heading structure (a vestigial "Cover"/"Back Matter" pair must not replace
+ * thirty real sections). Entries may share a blockId — the outline list must
+ * key on entry id, never blockId.
  */
 export function outlineFromBookmarks(
 	bookmarks: PdfBookmark[],
@@ -385,13 +411,15 @@ export function outlineFromBookmarks(
 	const entries: OutlineEntry[] = [];
 	for (const [index, bookmark] of bookmarks.entries()) {
 		const key = bookmarkTitleKey(bookmark.title);
+		const titledNearPage = (window: number) =>
+			headings.find(
+				(heading) =>
+					heading.anchor.page !== undefined &&
+					Math.abs(heading.anchor.page - bookmark.page) <= window &&
+					bookmarkTitleKey(heading.text) === key
+			);
 		const target =
-			(key &&
-				(headings.find(
-					(heading) =>
-						heading.anchor.page === bookmark.page && bookmarkTitleKey(heading.text) === key
-				) ??
-					headings.find((heading) => bookmarkTitleKey(heading.text) === key))) ||
+			(key && (titledNearPage(0) ?? titledNearPage(1))) ||
 			blocks.find(
 				(candidate) => candidate.anchor.page !== undefined && candidate.anchor.page >= bookmark.page
 			);
@@ -404,5 +432,6 @@ export function outlineFromBookmarks(
 			page: bookmark.page
 		});
 	}
-	return entries.length >= 2 ? entries : null;
+	if (entries.length < 2) return null;
+	return entries.length * 3 >= headings.length ? entries : null;
 }

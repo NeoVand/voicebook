@@ -115,7 +115,13 @@ export function openPdfRenderer(document: NormalizedDocument): Promise<PageRaste
 			return null;
 		}
 	})();
-	openRenderer = { documentId: document.id, rasterizer };
+	const entry = { documentId: document.id, rasterizer };
+	openRenderer = entry;
+	// A failed open must not stick for the session — clear the slot so the
+	// next click retries (transient OPFS reads do recover).
+	void rasterizer.then((resolved) => {
+		if (!resolved && openRenderer === entry) openRenderer = undefined;
+	});
 	return rasterizer;
 }
 

@@ -156,6 +156,36 @@ describe('parsedSourceFromLiteparse', () => {
 		expect(paragraph?.anchor.page).toBe(1);
 	});
 
+	it('keeps substantial native text even when recognition ran for the page', () => {
+		const parsed = parsedSourceFromLiteparse(
+			result([
+				{
+					markdown:
+						'## Partly Garbled\n\nThe native extraction of this page still carries real structure and enough text to keep.'
+				},
+				{ markdown: 'A second page so the outline math has company.' }
+			]),
+			new Map([[1, 'Flat OCR text that must not replace the native structure.']])
+		);
+		const texts = parsed!.blocks.map((candidate) => candidate.text);
+		expect(texts).toContain('Partly Garbled');
+		expect(texts.join(' ')).not.toContain('Flat OCR text');
+		// The page keeps its native provenance — no ocr flag.
+		expect(parsed?.pages?.[0].ocr).toBeUndefined();
+	});
+
+	it('defuses a document-leading horizontal rule before it reads as frontmatter', () => {
+		const parsed = parsedSourceFromLiteparse(
+			result([
+				{ markdown: '---\n\nOpening prose that must stay narrated.\n\n---\n\nMore prose.' },
+				{ markdown: 'Second page paragraph.' }
+			])
+		);
+		const texts = parsed!.blocks.map((candidate) => candidate.text);
+		expect(texts.join(' ')).toContain('Opening prose that must stay narrated.');
+		expect(parsed!.blocks.some((candidate) => candidate.kind === 'frontmatter')).toBe(false);
+	});
+
 	it('returns null when nothing survives cleanup', () => {
 		expect(parsedSourceFromLiteparse(result([{ markdown: '```text\n\n```' }]))).toBeNull();
 	});

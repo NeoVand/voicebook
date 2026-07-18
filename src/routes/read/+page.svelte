@@ -159,8 +159,20 @@
 	let rootBlocks = $derived.by(() =>
 		(book?.blocks ?? []).filter((block) => !block.parentId && block.id !== titleBlock?.id)
 	);
-	let pageStartsById = $derived(book ? pageStartMap(book.blocks) : new Map<string, number>());
-	let documentPageCount = $derived(book ? pageCount(book.blocks) : undefined);
+	// Markers are computed over the blocks that actually render (rootBlocks
+	// excludes the hoisted title block) — a page start landing on the title
+	// must fall through to the next rendered block, not vanish.
+	let pageStartsById = $derived(book ? pageStartMap(rootBlocks) : new Map<string, number>());
+	// Stored page metadata is authoritative: trailing blank or image-only
+	// pages produce no anchored blocks, but the original-page view and the
+	// jump chip must still reach them.
+	let documentPageCount = $derived.by(() => {
+		if (!book) return undefined;
+		const anchored = pageCount(book.blocks);
+		const declared = book.pages?.at(-1)?.page;
+		if (declared === undefined) return anchored;
+		return anchored === undefined ? declared : Math.max(declared, anchored);
+	});
 	let hasPageMarkers = $derived(pageStartsById.size > 0);
 	let currentPlayheadPage = $derived(
 		book ? pageForSegmentIndex(book.segments, player.currentSegmentIndex) : undefined
@@ -171,7 +183,8 @@
 	let pagePeek = $state<{ page: number }>();
 	let pageJumpOpen = $state(false);
 	let pageJumpRoot = $state<HTMLDivElement>();
-	let pageJumpValue = $state('');
+	// Svelte's number-input binding yields null for an empty field.
+	let pageJumpValue = $state<number | null>(null);
 
 	function childBlocks(block: DocumentBlock): DocumentBlock[] {
 		return (block.children ?? [])
@@ -1377,7 +1390,9 @@
 				<span class="sr-only" aria-live="polite">{outlineAnnouncement}</span>
 				<nav aria-label="Table of contents">
 					{#if book.outline.length}
-						{#each book.outline as item (item.blockId)}
+						<!-- Keyed by entry id: PDF bookmarks may resolve several
+						     entries to the same block, and duplicate keys throw. -->
+						{#each book.outline as item (item.id)}
 							{@const outlineBlock = blockFor(item.blockId)}
 							<button
 								type="button"
@@ -1473,7 +1488,8 @@
 				<div class="document-body">
 					{#each rootBlocks as block (block.id)}
 						{@const markerPage = pageStartsById.get(block.id)}
-						{#if markerPage !== undefined}
+						<!-- The document's start needs no separator above it. -->
+						{#if markerPage !== undefined && block.id !== rootBlocks[0]?.id}
 							<PageMarker page={markerPage} onPeek={peekAvailable ? openPagePeek : undefined} />
 						{/if}
 						{#if block.kind === 'list-item'}
@@ -1750,7 +1766,7 @@
 							aria-controls="page-jump-popover"
 							title="Go to page"
 							onclick={() => {
-								pageJumpValue = String(currentPlayheadPage ?? 1);
+								pageJumpValue = currentPlayheadPage ?? 1;
 								pageJumpOpen = !pageJumpOpen;
 							}}
 						>
@@ -1765,7 +1781,8 @@
 								transition:fly={{ y: 5, duration: 120 }}
 								onsubmit={(event) => {
 									event.preventDefault();
-									navigateToPage(Number(pageJumpValue));
+									// An empty field is a no-op, not a jump to page one.
+									if (pageJumpValue !== null) navigateToPage(pageJumpValue);
 								}}
 							>
 								<label>

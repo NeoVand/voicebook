@@ -54,8 +54,10 @@ describe('pagesNeedingOcr', () => {
 		).toEqual([2, 3, 4]);
 	});
 
-	it('treats a flagged page with almost no text as unreadable regardless of reason', () => {
-		expect(pagesNeedingOcr([stats(1, true, ['sparse-text'], 12)])).toEqual([1]);
+	it('never recognizes a short legitimate page — reasons alone decide', () => {
+		// A sparse chapter opener (or a short CJK page) keeps its native text;
+		// English-model OCR must not replace correct extraction.
+		expect(pagesNeedingOcr([stats(1, true, ['sparse-text'], 12)])).toEqual([]);
 	});
 });
 
@@ -86,6 +88,12 @@ describe('collapseSpacedHeadings', () => {
 		expect(collapseSpacedHeadings('I am a U S citizen')).toBe('I am a U S citizen');
 		expect(collapseSpacedHeadings('A B testing works')).toBe('A B testing works');
 		expect(collapseSpacedHeadings('Normal heading text')).toBe('Normal heading text');
+	});
+
+	it('never rewrites fenced code and preserves indentation elsewhere', () => {
+		const fenced = '```python\n    W A R N I N G\n```';
+		expect(collapseSpacedHeadings(fenced)).toBe(fenced);
+		expect(collapseSpacedHeadings('  N A S A  H Q')).toBe('  NASA HQ');
 	});
 });
 
@@ -135,6 +143,10 @@ describe('blanket bold across pages', () => {
 		const pages = ['Plain one.\n\n**A callout.**\n\nPlain two.', 'Plain three.'];
 		expect(blanketBoldShare(pages)).toBeLessThan(0.6);
 	});
+
+	it('dollar signs survive the unwrap (no replacement-pattern mangling)', () => {
+		expect(stripBlanketBoldPage('**Costs $$40 and $& more**')).toBe('Costs $$40 and $& more');
+	});
 });
 
 describe('resolveImageRefs', () => {
@@ -152,6 +164,14 @@ describe('resolveImageRefs', () => {
 		);
 		expect(pages[0]).toContain('![Figure 1](data:image/png;base64,');
 		expect(warnings).toEqual([]);
+	});
+
+	it('resolves references whose alt text contains brackets', () => {
+		const { pages } = resolveImageRefs(
+			['![Results [n=4] (draft)](image_p1_0.png)'],
+			[image('p1_0', 1, 8192)]
+		);
+		expect(pages[0]).toContain('![Results [n=4] (draft)](data:image/png;base64,');
 	});
 
 	it('drops unknown and decorative references without warning', () => {
@@ -279,7 +299,7 @@ describe('assemblePages + pageForOffset + assignPageAnchors', () => {
 describe('normalizeHeadingLevels', () => {
 	it('caps each heading at one level deeper than the previous', () => {
 		const blocks = normalizeHeadingLevels([
-			block('b0', 'heading', 'Title', { level: 2 }),
+			block('b0', 'heading', 'Title', { level: 1 }),
 			block('b1', 'paragraph', 'Text.'),
 			block('b2', 'heading', 'Deep jump', { level: 5 }),
 			block('b3', 'heading', 'Back up', { level: 2 })
@@ -287,6 +307,17 @@ describe('normalizeHeadingLevels', () => {
 		expect(blocks[0].level).toBe(1);
 		expect(blocks[2].level).toBe(2);
 		expect(blocks[3].level).toBe(2);
+	});
+
+	it('keeps the first heading at its own level — no promotion to title', () => {
+		// A paper opening with "## Abstract" must not have "Abstract" hoisted
+		// into the reader's document-title slot.
+		const blocks = normalizeHeadingLevels([
+			block('b0', 'heading', 'Abstract', { level: 2 }),
+			block('b1', 'heading', 'Deeper', { level: 4 })
+		]);
+		expect(blocks[0].level).toBe(2);
+		expect(blocks[1].level).toBe(3);
 	});
 });
 
@@ -332,5 +363,39 @@ describe('outlineFromBookmarks', () => {
 				[block('b0', 'paragraph', 'no anchors')]
 			)
 		).toBeNull();
+	});
+
+	it('keeps the heading outline when the bookmark tree is vestigial', () => {
+		const richBlocks = Array.from({ length: 12 }, (_, index) =>
+			block(`h${index}`, 'heading', `Section ${index}`, { level: 2, anchor: { page: index + 1 } })
+		);
+		expect(
+			outlineFromBookmarks(
+				[
+					{ title: 'Cover', page: 1, level: 1 },
+					{ title: 'Back Matter', page: 12, level: 1 }
+				],
+				richBlocks
+			)
+		).toBeNull();
+	});
+
+	it('does not match a same-titled heading in a distant chapter', () => {
+		const chapters = [
+			block('b0', 'heading', 'Introduction', { level: 2, anchor: { page: 3 } }),
+			block('b1', 'paragraph', 'Chapter seven text.', { anchor: { page: 150 } }),
+			block('b2', 'heading', 'Summary', { level: 2, anchor: { page: 160 } })
+		];
+		const outline = outlineFromBookmarks(
+			[
+				{ title: 'Introduction', page: 150, level: 1 },
+				{ title: 'Summary', page: 160, level: 1 }
+			],
+			chapters
+		);
+		// The page-150 "Introduction" bookmark must not navigate to page 3's
+		// heading; it falls to the first block on its own page instead.
+		expect(outline?.[0].blockId).toBe('b1');
+		expect(outline?.[1].blockId).toBe('b2');
 	});
 });
