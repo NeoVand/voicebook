@@ -24,7 +24,7 @@ import type {
 	TableCell
 } from './types';
 
-export const DOCUMENT_NORMALIZATION_VERSION = 12;
+export const DOCUMENT_NORMALIZATION_VERSION = 13;
 
 interface AstNode {
 	type: string;
@@ -460,8 +460,39 @@ function safeHtmlText(nodes: SafeHtmlNode[]): string {
 		.trim();
 }
 
+/**
+ * AI-assistant citation artifacts: text exported from ChatGPT wraps inline
+ * citations in Unicode private-use characters (U+E200 "filecite" U+E202
+ * "turn0file0" U+E201) that no font can draw — the reader shows placeholder
+ * boxes and the voice reads the tokens aloud. Complete spans vanish with
+ * their payload; naked tokens whose delimiters were already lost in a copy
+ * step, and any remaining private-use characters, are stripped individually.
+ * Runs on raw markdown and on mammoth's HTML, so it must never touch syntax
+ * characters — only private-use code points and the citation token grammar.
+ */
+export function stripCitationArtifacts(text: string): string {
+	return (
+		text
+			// A complete delimited citation span, payload and all. Pairs match
+			// strictly, and the payload (which may hold U+E202 separators) can
+			// contain no open/close delimiter: a stray opener must fail here
+			// (and sweep below as a lone character) rather than reach across
+			// real text to some later span's closer.
+			.replace(/ ?\ue200[^\ue200\ue201\ue203\ue204]{0,120}\ue201/g, '')
+			.replace(/ ?\ue203[^\ue200\ue201\ue203\ue204]{0,120}\ue204/g, '')
+			// Naked "citeturn0search3" / "fileciteturn0file0" leftovers.
+			.replace(/ ?\b(?:file|news|image|video|forecast)?cite\w{0,20}?turn\d+\w+/g, '')
+			.replace(
+				/ ?\bturn\d+(?:file|search|news|image|video|fetch|forecast|sports|finance)\d+\b/g,
+				''
+			)
+			// Anything else from the private-use planes is unrenderable junk.
+			.replace(/[\ue000-\uf8ff\u{f0000}-\u{ffffd}\u{100000}-\u{10fffd}]/gu, '')
+	);
+}
+
 function parseMarkdown(markdown: string): ParsedSource {
-	const frontmatter = frontmatterFrom(markdown);
+	const frontmatter = frontmatterFrom(stripCitationArtifacts(markdown));
 	const parsedTree = unified()
 		.use(remarkParse)
 		.use(remarkGfm)
@@ -994,8 +1025,10 @@ async function parseDocx(file: File): Promise<ParsedSource> {
 		});
 		// The explicit wrapper matters: linkedom (unit tests) leaves fragment
 		// children outside `body` without it, while browsers auto-wrap.
+		// Citation artifacts strip from the HTML string so every text node
+		// (and therefore every inline run) cleans consistently.
 		const dom = new DOMParser().parseFromString(
-			`<html><body>${result.value}</body></html>`,
+			`<html><body>${stripCitationArtifacts(result.value)}</body></html>`,
 			'text/html'
 		);
 		const blocks: DocumentBlock[] = [];
