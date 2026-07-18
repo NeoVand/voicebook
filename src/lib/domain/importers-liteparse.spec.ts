@@ -86,7 +86,10 @@ describe('pdfLooksScanned', () => {
 describe('parsedSourceFromLiteparse', () => {
 	// A synthetic ParseResult drives the whole post-wasm pipeline in node,
 	// where the wasm itself cannot initialize.
-	const result = (pages: Array<Partial<LiteparseResultLike['pages'][number]>>, images: LiteparseResultLike['images'] = []): LiteparseResultLike => ({
+	const result = (
+		pages: Array<Partial<LiteparseResultLike['pages'][number]>>,
+		images: LiteparseResultLike['images'] = []
+	): LiteparseResultLike => ({
 		pages: pages.map((page, index) => ({
 			pageNum: index + 1,
 			width: 612,
@@ -147,7 +150,9 @@ describe('parsedSourceFromLiteparse', () => {
 			])
 		);
 		const paragraph = parsed!.blocks.find((candidate) => candidate.kind === 'paragraph');
-		expect(paragraph?.text).toBe('The evidence continues across the page boundary without a break.');
+		expect(paragraph?.text).toBe(
+			'The evidence continues across the page boundary without a break.'
+		);
 		expect(paragraph?.anchor.page).toBe(1);
 	});
 

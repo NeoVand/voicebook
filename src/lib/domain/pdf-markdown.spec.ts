@@ -17,7 +17,12 @@ import {
 	unwrapTextFences
 } from './pdf-markdown';
 
-function block(id: string, kind: DocumentBlock['kind'], text: string, extras: Partial<DocumentBlock> = {}): DocumentBlock {
+function block(
+	id: string,
+	kind: DocumentBlock['kind'],
+	text: string,
+	extras: Partial<DocumentBlock> = {}
+): DocumentBlock {
 	return {
 		id,
 		kind,
@@ -29,12 +34,12 @@ function block(id: string, kind: DocumentBlock['kind'], text: string, extras: Pa
 }
 
 describe('pagesNeedingOcr', () => {
-	const stats = (
-		pageNumber: number,
-		needsOcr: boolean,
-		reasons: string[],
-		textLength = 500
-	) => ({ pageNumber, needsOcr, reasons, textLength });
+	const stats = (pageNumber: number, needsOcr: boolean, reasons: string[], textLength = 500) => ({
+		pageNumber,
+		needsOcr,
+		reasons,
+		textLength
+	});
 
 	it('selects genuinely unreadable pages, not merely light ones', () => {
 		expect(

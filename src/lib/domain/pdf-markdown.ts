@@ -91,9 +91,7 @@ export function collapseSpacedHeadings(pageMarkdown: string): string {
 			const collapsible = words.every((word) => {
 				const letters = word.split(' ');
 				totalLetters += letters.length;
-				return (
-					letters.length >= 2 && letters.every((letter) => /^[\p{Lu}\p{N}]$/u.test(letter))
-				);
+				return letters.length >= 2 && letters.every((letter) => /^[\p{Lu}\p{N}]$/u.test(letter));
 			});
 			if (!collapsible || totalLetters < 4) return line;
 			return marker + words.map((word) => word.replaceAll(' ', '')).join(' ');
@@ -248,22 +246,24 @@ export function resolveImageRefs(
 	let budget = totalBytes;
 	let skipped = 0;
 	const resolved = pages.map((page) =>
-		page.replace(/!\[([^\]]*)\]\(image_(p\d+_\d+)\.(?:png|jpe?g)\)/g, (match, alt: string, id: string) => {
-			const image = byId.get(id);
-			if (!image) return '';
-			const bytes =
-				image.bytes instanceof Uint8Array ? image.bytes : new Uint8Array(image.bytes);
-			const tooSmall = bytes.length < minBytes;
-			const tooBig = bytes.length > perImageBytes || bytes.length > budget;
-			const repeated = (repeats.get(imageByteHash(bytes)) ?? 0) >= 3;
-			if (tooSmall || repeated) return '';
-			if (tooBig) {
-				skipped += 1;
-				return '';
+		page.replace(
+			/!\[([^\]]*)\]\(image_(p\d+_\d+)\.(?:png|jpe?g)\)/g,
+			(match, alt: string, id: string) => {
+				const image = byId.get(id);
+				if (!image) return '';
+				const bytes = image.bytes instanceof Uint8Array ? image.bytes : new Uint8Array(image.bytes);
+				const tooSmall = bytes.length < minBytes;
+				const tooBig = bytes.length > perImageBytes || bytes.length > budget;
+				const repeated = (repeats.get(imageByteHash(bytes)) ?? 0) >= 3;
+				if (tooSmall || repeated) return '';
+				if (tooBig) {
+					skipped += 1;
+					return '';
+				}
+				budget -= bytes.length;
+				return `![${alt}](${imageDataUri(image)})`;
 			}
-			budget -= bytes.length;
-			return `![${alt}](${imageDataUri(image)})`;
-		})
+		)
 	);
 	const warnings = skipped
 		? [
@@ -343,9 +343,7 @@ export function assignPageAnchors(blocks: DocumentBlock[], spans: PageSpan[]): D
 			return candidate;
 		}
 		const page = pageForOffset(spans, candidate.anchor.start);
-		return page === undefined
-			? candidate
-			: { ...candidate, anchor: { ...candidate.anchor, page } };
+		return page === undefined ? candidate : { ...candidate, anchor: { ...candidate.anchor, page } };
 	});
 }
 
@@ -395,8 +393,7 @@ export function outlineFromBookmarks(
 				) ??
 					headings.find((heading) => bookmarkTitleKey(heading.text) === key))) ||
 			blocks.find(
-				(candidate) =>
-					candidate.anchor.page !== undefined && candidate.anchor.page >= bookmark.page
+				(candidate) => candidate.anchor.page !== undefined && candidate.anchor.page >= bookmark.page
 			);
 		if (!target) continue;
 		entries.push({

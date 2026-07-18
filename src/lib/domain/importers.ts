@@ -17,7 +17,6 @@ import {
 	pagesNeedingOcr,
 	pdfLooksScanned,
 	resolveImageRefs,
-	stripBlanketBold,
 	stripBlanketBoldPage,
 	stripRepeatedPageChrome,
 	unwrapTextFences,
