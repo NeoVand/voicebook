@@ -628,12 +628,25 @@
 	.library-search input {
 		width: 148px;
 		height: 28px;
-		padding: 0;
-		border: 0;
-		background: transparent;
+		/* The pill is the only visible container: strip the browser's boxed
+		 * search field and @tailwindcss/forms' base input chrome, which both
+		 * paint their own background, border, and padding here. */
+		padding: 0 !important;
+		border: 0 !important;
+		appearance: none;
+		-webkit-appearance: none;
+		border-radius: 0;
+		background: transparent !important;
+		box-shadow: none !important;
 		color: var(--text);
 		font-size: 11px;
 		outline: none;
+	}
+
+	.library-search input::-webkit-search-decoration,
+	.library-search input::-webkit-search-cancel-button,
+	.library-search input::-webkit-search-results-button {
+		display: none;
 	}
 
 	.library-search input::placeholder {

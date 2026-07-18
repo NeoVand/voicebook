@@ -331,13 +331,18 @@ export async function setSetting<T>(key: string, value: T): Promise<void> {
 
 /**
  * Factory reset: drop Voicebook's entire local footprint — the database
- * (documents, audio, settings including API keys), OPFS files, and every
- * CacheStorage bucket (model weights, app shell). Local preferences such as
- * the theme go too. The caller reloads the app afterwards.
+ * (documents, audio, settings including API keys), OPFS files, every
+ * CacheStorage bucket (model weights, app shell), AND every registered
+ * service worker. Unregistering matters most for recovery: a stale worker
+ * from a broken deploy would otherwise survive the reset and keep serving
+ * dead responses after the reload. Local preferences such as the theme go
+ * too. The caller reloads the app afterwards.
  */
 export async function eraseAllData(): Promise<void> {
 	try {
-		(await database()).close();
+		// Only close a connection that actually exists — opening a fresh one
+		// just to close it can hang forever on a wedged database.
+		if (databasePromise) (await databasePromise).close();
 	} catch {
 		// The database may never have been opened in this session.
 	}
@@ -348,6 +353,14 @@ export async function eraseAllData(): Promise<void> {
 		request.onerror = () => resolve();
 		request.onblocked = () => resolve();
 	});
+	try {
+		if ('serviceWorker' in navigator) {
+			const registrations = await navigator.serviceWorker.getRegistrations();
+			await Promise.all(registrations.map((registration) => registration.unregister()));
+		}
+	} catch {
+		// Service workers may be unavailable (insecure context).
+	}
 	try {
 		const root = await opfsRoot();
 		await root?.removeEntry('voicebook', { recursive: true });
@@ -363,6 +376,7 @@ export async function eraseAllData(): Promise<void> {
 	}
 	try {
 		localStorage.clear();
+		sessionStorage.clear();
 	} catch {
 		// Storage access can be denied in some embedded contexts.
 	}

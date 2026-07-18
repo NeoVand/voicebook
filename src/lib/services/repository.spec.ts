@@ -1,9 +1,10 @@
 import 'fake-indexeddb/auto';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { documentFromText } from '$lib/domain/importers';
 import type { AudioVariantMeta } from '$lib/domain/types';
 import {
 	clearGeneratedAudio,
+	eraseAllData,
 	deleteAudioForSegments,
 	deleteDocument,
 	getAudio,
@@ -250,5 +251,30 @@ describe('local repository', () => {
 		expect(await getAudio(stored.key)).toBeNull();
 		expect(await getSource({ ...document, sourcePath: 'voicebook/missing/source.txt' })).toBeNull();
 		await deleteDocument(document.id);
+	});
+
+	it('factory reset unregisters service workers and settles without hanging', async () => {
+		const unregister = vi.fn().mockResolvedValue(true);
+		Object.defineProperty(globalThis.navigator, 'serviceWorker', {
+			value: { getRegistrations: async () => [{ unregister }, { unregister }] },
+			configurable: true
+		});
+		const localClear = vi.fn();
+		const sessionClear = vi.fn();
+		vi.stubGlobal('localStorage', { clear: localClear });
+		vi.stubGlobal('sessionStorage', { clear: sessionClear });
+		try {
+			await eraseAllData();
+			// A stale worker must not survive the reset — it would keep serving
+			// a broken shell after the reload.
+			expect(unregister).toHaveBeenCalledTimes(2);
+			expect(localClear).toHaveBeenCalledOnce();
+			expect(sessionClear).toHaveBeenCalledOnce();
+			// The store comes back clean on a fresh connection.
+			expect(await getSetting('post-reset', 'fresh')).toBe('fresh');
+			expect(await listDocuments()).toEqual([]);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 });
