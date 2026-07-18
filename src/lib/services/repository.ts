@@ -47,23 +47,91 @@ interface VoicebookDb extends DBSchema {
 
 let databasePromise: Promise<IDBPDatabase<VoicebookDb>> | undefined;
 
+export const DATABASE_LOCKED_MESSAGE =
+	'Voicebook’s local storage is locked by another window. Close every other ' +
+	'Voicebook tab and window (including the installed app, if any), then reload ' +
+	'this page.';
+
+/** How long a database open may sit in the browser's "blocked" state before
+ * the app stops spinning and tells the user what to do. */
+let openTimeoutMs = 8_000;
+
+/** Test hook only: fake timers cannot drive fake-indexeddb's blocked-event
+ * delivery, so the lock test shortens the real-time watchdog instead. */
+export function setDatabaseOpenTimeout(ms: number): void {
+	openTimeoutMs = ms;
+}
+
+function openDatabase(): Promise<IDBPDatabase<VoicebookDb>> {
+	let blocked = false;
+	const open = openDB<VoicebookDb>('voicebook-v1', 2, {
+		upgrade(db, oldVersion) {
+			if (oldVersion < 1) {
+				const documents = db.createObjectStore('documents', { keyPath: 'id' });
+				documents.createIndex('fingerprint', 'fingerprint');
+				documents.createIndex('updatedAt', 'updatedAt');
+				const audio = db.createObjectStore('audio', { keyPath: 'key' });
+				audio.createIndex('documentId', 'documentId');
+				audio.createIndex('segmentId', 'segmentId');
+				db.createObjectStore('settings', { keyPath: 'key' });
+			}
+			if (oldVersion < 2) {
+				db.createObjectStore('playback', { keyPath: 'documentId' });
+			}
+		},
+		blocked() {
+			// An older Voicebook window still holds a previous schema open; the
+			// upgrade cannot proceed until it closes. The timeout below turns
+			// this from an eternal spinner into an actionable message.
+			blocked = true;
+		},
+		blocking() {
+			// A NEWER Voicebook window wants to upgrade the schema. Yield the
+			// connection so that window never deadlocks the way old versions
+			// could; our next database call reopens at the current version.
+			void databasePromise?.then((db) => db.close()).catch(() => undefined);
+			databasePromise = undefined;
+		},
+		terminated() {
+			// The browser force-closed the connection (storage pressure, crash
+			// recovery); reopen lazily on the next call.
+			databasePromise = undefined;
+		}
+	});
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const timer = setTimeout(() => {
+			if (!blocked || settled) return;
+			settled = true;
+			// If the other window closes later, the stale connection this open
+			// eventually yields must not linger unowned.
+			void open.then((db) => db.close()).catch(() => undefined);
+			reject(new Error(DATABASE_LOCKED_MESSAGE));
+		}, openTimeoutMs);
+		open.then(
+			(db) => {
+				clearTimeout(timer);
+				if (settled) return;
+				settled = true;
+				resolve(db);
+			},
+			(error) => {
+				clearTimeout(timer);
+				if (settled) return;
+				settled = true;
+				reject(error instanceof Error ? error : new Error(String(error)));
+			}
+		);
+	});
+}
+
 function database(): Promise<IDBPDatabase<VoicebookDb>> {
 	if (!databasePromise) {
-		databasePromise = openDB<VoicebookDb>('voicebook-v1', 2, {
-			upgrade(db, oldVersion) {
-				if (oldVersion < 1) {
-					const documents = db.createObjectStore('documents', { keyPath: 'id' });
-					documents.createIndex('fingerprint', 'fingerprint');
-					documents.createIndex('updatedAt', 'updatedAt');
-					const audio = db.createObjectStore('audio', { keyPath: 'key' });
-					audio.createIndex('documentId', 'documentId');
-					audio.createIndex('segmentId', 'segmentId');
-					db.createObjectStore('settings', { keyPath: 'key' });
-				}
-				if (oldVersion < 2) {
-					db.createObjectStore('playback', { keyPath: 'documentId' });
-				}
-			}
+		databasePromise = openDatabase();
+		// A failed open (locked or corrupt) must not poison every later call —
+		// the next attempt after the user closes the other window should work.
+		databasePromise.catch(() => {
+			databasePromise = undefined;
 		});
 	}
 	return databasePromise;
