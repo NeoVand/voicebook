@@ -27,7 +27,8 @@ import {
 	pageLines,
 	pdfFailureError,
 	renumberBlocks,
-	repeatedEdgeLines
+	repeatedEdgeLines,
+	stripCitationArtifacts
 } from './importers';
 
 beforeAll(() => {
@@ -798,5 +799,76 @@ describe('document importers', () => {
 			expect.arrayContaining(['heading', 'list', 'list-item', 'code'])
 		);
 		expect(pasted.blocks.some((block) => block.text.includes('```'))).toBe(false);
+	});
+});
+
+describe('stripCitationArtifacts', () => {
+	// The exact byte shape ChatGPT exports: U+E200 <type> U+E202 <pointer> U+E201.
+	const span = (type: string, pointer: string) => `\ue200${type}\ue202${pointer}\ue201`;
+
+	it('removes complete delimited citation spans with their payload', () => {
+		expect(
+			stripCitationArtifacts(`An AI-assisted commissioning brief.${span('filecite', 'turn0file0')}`)
+		).toBe('An AI-assisted commissioning brief.');
+		expect(stripCitationArtifacts(`Claim one. ${span('cite', 'turn0search3')} Claim two.`)).toBe(
+			'Claim one. Claim two.'
+		);
+	});
+
+	it('removes naked leftover tokens whose delimiters were already lost', () => {
+		expect(stripCitationArtifacts('A glued leftover citeturn0search1 mid-sentence.')).toBe(
+			'A glued leftover mid-sentence.'
+		);
+		expect(stripCitationArtifacts('Language: English. fileciteturn0file0')).toBe(
+			'Language: English.'
+		);
+		expect(stripCitationArtifacts('Bare pointer turn0news2 too.')).toBe('Bare pointer too.');
+	});
+
+	it('never lets a stray opener swallow text up to a later span\u2019s closer', () => {
+		// Regression: caught live — an unpaired U+E203 reached 108 characters
+		// across a table to the U+E201 closing a legitimate citation span.
+		const input =
+			'A stray unpaired \ue203 marker.\n\n| Language | English. \ue200filecite\ue202turn0file0\ue201 |';
+		expect(stripCitationArtifacts(input)).toBe(
+			'A stray unpaired  marker.\n\n| Language | English. |'
+		);
+	});
+
+	it('drops stray private-use characters from any plane', () => {
+		expect(stripCitationArtifacts('A stray \ue203marker and\u{f0001} more.')).toBe(
+			'A stray marker and more.'
+		);
+	});
+
+	it('leaves ordinary prose, code, and real unicode untouched', () => {
+		const clean = 'Turn 3 of the game cites Smith (2021). Émojis 🎉 and 中文 stay. `x  =  1`';
+		expect(stripCitationArtifacts(clean)).toBe(clean);
+		const indented = '```python\n    x = 1\n```';
+		expect(stripCitationArtifacts(indented)).toBe(indented);
+	});
+
+	it('cleans markdown at import so tables and prose read plainly', async () => {
+		const markdown = [
+			'# Assessment',
+			'',
+			`The document type is a brief.${span('filecite', 'turn0file0')}`,
+			'',
+			'| Attribute | Assessment |',
+			'| --- | --- |',
+			`| Language | English.${span('filecite', 'turn0file0')} |`
+		].join('\n');
+		const document = await importFile(
+			new File([markdown], 'assessment.md', { type: 'text/markdown' })
+		);
+		const allText = document.blocks
+			.map((block) => block.text)
+			.concat(
+				document.blocks.flatMap((block) => block.table?.rows.flat().map((cell) => cell.text) ?? [])
+			)
+			.join(' ');
+		expect(allText).not.toMatch(/filecite|turn0file|[\ue200-\ue204]/);
+		expect(allText).toContain('The document type is a brief.');
+		expect(allText).toContain('English.');
 	});
 });

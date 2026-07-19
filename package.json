@@ -84,5 +84,9 @@
 		"remark-parse": "11.0.0",
 		"tesseract.js": "^7.0.0",
 		"unified": "11.0.5"
+	},
+	"overrides": {
+		"adm-zip": ">=0.6.0",
+		"cookie": "^0.7.0"
 	}
 }
