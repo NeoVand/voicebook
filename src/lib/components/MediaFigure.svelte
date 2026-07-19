@@ -108,6 +108,16 @@
 		margin: 0 auto;
 	}
 
+	/* Raster media can't adapt to the theme the way redrawn diagrams do —
+	 * a transparent PNG with dark strokes vanishes on a dark page. A quiet
+	 * paper backing keeps figures legible everywhere; on light themes it
+	 * disappears into the page. */
+	.media-output :global(img) {
+		padding: 8px;
+		border-radius: 6px;
+		background: color-mix(in srgb, #fff 96%, var(--reader) 4%);
+	}
+
 	/* Full size grows the media to at least the column width (small media
 	 * scales up, oversized media stays natural and the strip scrolls),
 	 * exactly like the Mermaid figure. */

@@ -6,12 +6,34 @@ import remarkMath from 'remark-math';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { segmentBlocks } from './segmenter';
+import {
+	assemblePages,
+	assignPageAnchors,
+	blanketBoldShare,
+	collapseSpacedHeadings,
+	liteparsePageMarkdown,
+	normalizeHeadingLevels,
+	ocrOutcomeWarnings,
+	outlineFromBookmarks,
+	pagesNeedingOcr,
+	pdfLooksScanned,
+	resolveImageRefs,
+	stripBlanketBoldPage,
+	stripRepeatedPageChrome,
+	unwrapTextFences,
+	withRecognizedPages,
+	type LiteparseImage,
+	type LiteparsePage,
+	type PageComplexity,
+	type PdfBookmark
+} from './pdf-markdown';
 import type {
 	BlockKind,
 	AlertKind,
 	DocumentTable,
 	DocumentBlock,
 	DocumentKind,
+	DocumentPageInfo,
 	InlineMark,
 	InlineRun,
 	InlineImage,
@@ -24,7 +46,11 @@ import type {
 	TableCell
 } from './types';
 
-export const DOCUMENT_NORMALIZATION_VERSION = 13;
+export { liteparsePageMarkdown, pdfLooksScanned, stripBlanketBold } from './pdf-markdown';
+
+// v13 stripped AI-assistant citation artifacts; v14 re-parses PDFs for
+// pages, embedded images, and bookmarks.
+export const DOCUMENT_NORMALIZATION_VERSION = 14;
 
 interface AstNode {
 	type: string;
@@ -52,16 +78,33 @@ interface ParsedSource {
 	title?: string;
 	blocks: DocumentBlock[];
 	warnings?: string[];
+	/** PDF only: per-page dimensions and OCR provenance. */
+	pages?: DocumentPageInfo[];
+	/** PDF only: embedded bookmarks, resolved to an outline after renumbering. */
+	bookmarks?: PdfBookmark[];
 }
 
 export class ImportError extends Error {
 	constructor(
 		message: string,
-		readonly code: 'unsupported' | 'scanned-pdf' | 'malformed'
+		readonly code: 'unsupported' | 'scanned-pdf' | 'password-protected' | 'malformed'
 	) {
 		super(message);
 		this.name = 'ImportError';
 	}
+}
+
+export interface PdfImportProgress {
+	stage: 'parsing' | 'ocr';
+	page?: number;
+	pageCount?: number;
+}
+
+export interface ImportOptions {
+	/** Allow on-device OCR for scanned pages. Off during startup migrations so
+	 * re-normalizing a library never triggers surprise model downloads. */
+	enableOcr?: boolean;
+	onProgress?: (progress: PdfImportProgress) => void;
 }
 
 function extensionOf(name: string): string {
@@ -1228,84 +1271,247 @@ export function repeatedEdgeLines(pages: string[][]): Set<string> {
 	);
 }
 
-/** Join per-page LiteParse output into one markdown document, preferring the
- * structured markdown and falling back to each page's plain text. */
-export function liteparsePageMarkdown(pages: Array<{ markdown?: string; text?: string }>): string {
-	return pages
-		.map((page) => page.markdown?.trim() || page.text?.trim() || '')
-		.filter(Boolean)
-		.join('\n\n');
+/** Maps a raw PDF-open failure to the user-facing import error. Exported for
+ * tests — password detection must survive pdf.js error-shape changes. */
+export function pdfFailureError(error: unknown): ImportError {
+	if (error instanceof ImportError) return error;
+	if ((error as { name?: string } | null)?.name === 'PasswordException') {
+		return new ImportError(
+			'This PDF is password-protected. Remove the password (for example, print it to a new PDF) and import it again.',
+			'password-protected'
+		);
+	}
+	return new ImportError(
+		`This PDF could not be read: ${error instanceof Error ? error.message : 'unknown error'}`,
+		'malformed'
+	);
+}
+
+const SCANNED_PDF_MESSAGE =
+	'This PDF appears to be scanned, and its pages could not be read with on-device text recognition. Check your connection and try again — the recognition engine downloads once on first use.';
+
+/** Below this many non-space characters a page's native extraction is
+ * considered empty enough for recognized text to stand in for it. Pages with
+ * real native text keep their structure (headings, tables, image refs)
+ * rather than being flattened to OCR prose. */
+const OCR_REPLACEMENT_MAX_NATIVE_CHARS = 40;
+
+/** The slice of LiteParse's ParseResult the assembly step consumes. */
+export interface LiteparseResultLike {
+	pages: LiteparsePage[];
+	images: LiteparseImage[];
 }
 
 /**
- * LiteParse's font-weight heuristics sometimes flag every body paragraph of a
- * PDF as bold. When emphasis stops being selective — most non-heading lines
- * are fully wrapped in ** ** — it carries no meaning, so unwrap those lines.
- * Documents where bold is used sparingly are left untouched.
+ * Everything between LiteParse's raw output and `parseMarkdown`, as a pure
+ * function so node tests can drive the whole LiteParse path with synthetic
+ * results (the wasm itself cannot initialize under vitest). Per-page text is
+ * cleaned (OCR replacements in, fences out, spaced headings collapsed, page
+ * chrome and blanket bold stripped, image refs inlined), joined with page
+ * spans, parsed, and page-anchored.
  */
-export function stripBlanketBold(markdown: string): string {
-	const lines = markdown.split('\n');
-	const isStructural = (line: string) => /^(#{1,6}\s|\||```|[-*+]\s|\d+[.)]\s|>)/.test(line);
-	const fullyBold = (line: string) =>
-		/^\*\*[^*]/.test(line) && /[^*]\*\*$/.test(line) && !line.slice(2, -2).includes('**');
-	const body = lines.map((line) => line.trim()).filter((line) => line && !isStructural(line));
-	if (!body.length) return markdown;
-	const boldShare = body.filter(fullyBold).length / body.length;
-	if (boldShare < 0.6) return markdown;
-	return lines
-		.map((line) => {
-			const trimmed = line.trim();
-			if (!isStructural(trimmed) && fullyBold(trimmed)) {
-				return line.replace(trimmed, trimmed.slice(2, -2));
-			}
-			return line;
-		})
-		.join('\n');
+export function parsedSourceFromLiteparse(
+	result: LiteparseResultLike,
+	ocrText: Map<number, string> = new Map()
+): ParsedSource | null {
+	const ocrUsed = new Set<number>();
+	let pageMarkdown = result.pages.map((page) => {
+		const native = collapseSpacedHeadings(
+			unwrapTextFences(page.markdown?.trim() || page.text?.trim() || '')
+		);
+		const recognized = ocrText.get(page.pageNum)?.trim();
+		// Recognized text only stands in when the page has no usable native
+		// extraction — a 'garbled' page that still extracted substance keeps
+		// its structure instead of flat OCR prose (and keeps its image refs).
+		if (recognized && native.replace(/\s+/g, '').length < OCR_REPLACEMENT_MAX_NATIVE_CHARS) {
+			ocrUsed.add(page.pageNum);
+			return collapseSpacedHeadings(unwrapTextFences(recognized));
+		}
+		return native;
+	});
+	pageMarkdown = stripRepeatedPageChrome(pageMarkdown);
+	if (blanketBoldShare(pageMarkdown) >= 0.6) {
+		pageMarkdown = pageMarkdown.map(stripBlanketBoldPage);
+	}
+	// A document-leading '---' would read as a YAML frontmatter fence in
+	// parseMarkdown and swallow prose up to the next rule. '***' is the same
+	// LENGTH (page spans must not shift) and stays a plain thematic break.
+	const firstIndex = pageMarkdown.findIndex((page) => page.trim());
+	if (firstIndex >= 0 && /^---(\n|$)/.test(pageMarkdown[firstIndex])) {
+		pageMarkdown[firstIndex] = `***${pageMarkdown[firstIndex].slice(3)}`;
+	}
+	const { pages: withImages, warnings: imageWarnings } = resolveImageRefs(
+		pageMarkdown,
+		result.images
+	);
+	const { markdown, spans } = assemblePages(
+		result.pages.map((page, index) => ({ page: page.pageNum, markdown: withImages[index] }))
+	);
+	if (!markdown.trim()) return null;
+	const parsed = parseMarkdown(markdown);
+	if (!parsed.blocks.length) return null;
+	const blocks = normalizeHeadingLevels(assignPageAnchors(parsed.blocks, spans));
+	return {
+		...parsed,
+		blocks,
+		warnings: [...(parsed.warnings ?? []), ...imageWarnings],
+		pages: result.pages.map((page) => ({
+			page: page.pageNum,
+			width: page.width ?? 612,
+			height: page.height ?? 792,
+			...(ocrUsed.has(page.pageNum) ? { ocr: true } : {})
+		}))
+	};
 }
 
-/** A text layer this thin means the pages are scans, not embedded text. */
-export function pdfLooksScanned(markdown: string, pageCount: number): boolean {
-	const letters = markdown.replace(/[^\p{L}\p{N}]/gu, '').length;
-	return letters < Math.max(24, pageCount * 8);
+/** Title metadata and embedded bookmarks via pdf.js; best-effort — any
+ * failure just means no bookmarks. CONSUMES `data` (pdf.js transfers the
+ * buffer to its worker): callers must pass it as the buffer's last use, or
+ * pass a copy. */
+async function pdfDocumentExtras(
+	data: Uint8Array
+): Promise<{ title?: string; bookmarks: PdfBookmark[] }> {
+	try {
+		const pdfjs =
+			typeof window === 'undefined'
+				? await import('pdfjs-dist/legacy/build/pdf.mjs')
+				: await import('pdfjs-dist');
+		if (typeof window !== 'undefined') {
+			const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+			pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+		}
+		const loadingTask = pdfjs.getDocument({ data });
+		try {
+			const pdf = await loadingTask.promise;
+			const metadata = await pdf.getMetadata().catch(() => null);
+			const info = metadata?.info as { Title?: string } | undefined;
+			return { title: info?.Title?.trim() || undefined, bookmarks: await pdfBookmarks(pdf) };
+		} finally {
+			await loadingTask.destroy();
+		}
+	} catch {
+		return { bookmarks: [] };
+	}
+}
+
+interface PdfOutlineSource {
+	getOutline(): Promise<Array<{ title?: string; dest?: unknown; items?: unknown[] }> | null>;
+	getDestination(id: string): Promise<unknown[] | null>;
+	getPageIndex(ref: unknown): Promise<number>;
+}
+
+/** Flattens a pdf.js outline tree into page-resolved bookmarks. Destinations
+ * come in two shapes (named string → getDestination; explicit array whose
+ * first element is a page ref); anything else — external links, broken
+ * refs — is skipped rather than emitted unresolvable. */
+async function pdfBookmarks(pdf: PdfOutlineSource): Promise<PdfBookmark[]> {
+	const bookmarks: PdfBookmark[] = [];
+	type OutlineItem = { title?: string; dest?: unknown; items?: OutlineItem[] };
+	const walk = async (items: OutlineItem[] | null | undefined, level: number) => {
+		for (const item of items ?? []) {
+			try {
+				let dest = item.dest;
+				if (typeof dest === 'string') dest = await pdf.getDestination(dest);
+				const ref = Array.isArray(dest) ? dest[0] : undefined;
+				const title = item.title?.trim();
+				if (ref && title) {
+					bookmarks.push({ title, page: (await pdf.getPageIndex(ref)) + 1, level });
+				}
+			} catch {
+				// External links and broken destinations are not outline entries.
+			}
+			if (item.items?.length && level < 6) await walk(item.items, level + 1);
+		}
+	};
+	await walk((await pdf.getOutline().catch(() => null)) as OutlineItem[] | null, 1);
+	return bookmarks;
 }
 
 /**
  * Preferred PDF path: LiteParse (run-llama's wasm extractor) converts the
- * whole document to markdown — headings, lists, and tables land in the same
- * pipeline as native markdown files, so equations-in-text, tables, and
- * structure all survive import. Returns null when the library cannot run
- * here (old browser, test environment) so the legacy extractor takes over;
- * a scanned-PDF verdict propagates as the user-facing ImportError.
+ * whole document to markdown — headings, lists, tables, and embedded images
+ * land in the same pipeline as native markdown files. Pages its complexity
+ * probe deems unreadable (scans) are recognized on-device via pdf.js +
+ * tesseract (LiteParse's own ocrEngine hook panics in 2.6.0 — see
+ * ocr-engine.ts). Returns null when the library cannot run here (old
+ * browser, test environment) so the legacy extractor takes over; a
+ * scanned-PDF verdict propagates as the user-facing ImportError.
  */
-async function parsePdfWithLiteparse(file: File): Promise<ParsedSource | null> {
+async function parsePdfWithLiteparse(
+	file: File,
+	options: ImportOptions = {}
+): Promise<ParsedSource | null> {
 	try {
 		const [glue, wasm] = await Promise.all([
 			import('@llamaindex/liteparse-wasm'),
 			import('@llamaindex/liteparse-wasm/liteparse_wasm_bg.wasm?url')
 		]);
 		await glue.default({ module_or_path: wasm.default });
+		const data = new Uint8Array(await file.arrayBuffer());
+		options.onProgress?.({ stage: 'parsing' });
+
+		let ocrPages: number[] = [];
+		try {
+			const probe = new glue.LiteParse({ ocrEnabled: false, quiet: true });
+			try {
+				ocrPages = pagesNeedingOcr((await probe.isComplex(data)) as PageComplexity[]);
+			} finally {
+				probe.free();
+			}
+		} catch {
+			// No verdicts: the thin-text check below still catches all-scan PDFs.
+		}
+
 		const parser = new glue.LiteParse({
 			ocrEnabled: false,
 			outputFormat: 'markdown',
 			extractLinks: true,
-			imageMode: 'off',
+			imageMode: 'embed',
+			skipDiagonalText: true,
 			quiet: true
 		});
 		let result: Awaited<ReturnType<typeof parser.parse>>;
 		try {
-			result = await parser.parse(new Uint8Array(await file.arrayBuffer()));
+			result = await parser.parse(data);
 		} finally {
 			parser.free();
 		}
-		const markdown = stripBlanketBold(liteparsePageMarkdown(result.pages));
-		if (pdfLooksScanned(markdown, result.pages.length)) {
-			throw new ImportError(
-				'This PDF appears to be scanned. OCR support is planned, but is not part of this release.',
-				'scanned-pdf'
-			);
+
+		const warnings: string[] = [];
+		let ocrText = new Map<number, string>();
+		if (ocrPages.length && options.enableOcr !== false && typeof window !== 'undefined') {
+			const { recognizePdfPages } = await import('../services/ocr-engine');
+			const recognized = await recognizePdfPages(data, ocrPages, (page) =>
+				options.onProgress?.({
+					stage: 'ocr',
+					page: ocrPages.indexOf(page) + 1,
+					pageCount: ocrPages.length
+				})
+			).catch(() => null);
+			if (recognized?.size) ocrText = recognized;
 		}
-		const parsed = parseMarkdown(markdown);
-		return parsed.blocks.length ? parsed : null;
+		warnings.push(...ocrOutcomeWarnings(ocrPages.length, ocrText.size));
+
+		// The one scanned-PDF authority: after recognition has had its say,
+		// a document whose usable text (native + recognized) is still this
+		// thin has nothing to read — regardless of why the probe, engine, or
+		// individual pages failed along the way.
+		const usableMarkdown = liteparsePageMarkdown(withRecognizedPages(result.pages, ocrText));
+		if (pdfLooksScanned(usableMarkdown, result.pages.length)) {
+			throw new ImportError(SCANNED_PDF_MESSAGE, 'scanned-pdf');
+		}
+
+		const parsed = parsedSourceFromLiteparse(result, ocrText);
+		if (!parsed) return null;
+
+		// Last use of `data` — pdfDocumentExtras transfers it to its worker.
+		const extras = await pdfDocumentExtras(data);
+		return {
+			...parsed,
+			title: parsed.title || extras.title,
+			bookmarks: extras.bookmarks,
+			warnings: [...(parsed.warnings ?? []), ...warnings]
+		};
 	} catch (error) {
 		if (error instanceof ImportError) throw error;
 		// Initialization or parse trouble: quietly fall back to the legacy
@@ -1314,8 +1520,8 @@ async function parsePdfWithLiteparse(file: File): Promise<ParsedSource | null> {
 	}
 }
 
-async function parsePdf(file: File): Promise<ParsedSource> {
-	const structured = await parsePdfWithLiteparse(file);
+async function parsePdf(file: File, options: ImportOptions = {}): Promise<ParsedSource> {
+	const structured = await parsePdfWithLiteparse(file, options);
 	if (structured) return structured;
 	try {
 		const pdfjs =
@@ -1329,6 +1535,7 @@ async function parsePdf(file: File): Promise<ParsedSource> {
 		const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
 		const pdf = await loadingTask.promise;
 		const pages: string[][] = [];
+		const pageInfo: DocumentPageInfo[] = [];
 
 		for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
 			const page = await pdf.getPage(pageNumber);
@@ -1336,13 +1543,15 @@ async function parsePdf(file: File): Promise<ParsedSource> {
 			pages.push(
 				pageLines(content.items as Array<{ str?: string; transform?: number[]; hasEOL?: boolean }>)
 			);
+			const viewport = page.getViewport({ scale: 1 });
+			pageInfo.push({ page: pageNumber, width: viewport.width, height: viewport.height });
 			page.cleanup();
 		}
 
 		const totalCharacters = pages.flat().join('').length;
 		if (totalCharacters < Math.max(24, pdf.numPages * 8)) {
 			throw new ImportError(
-				'This PDF appears to be scanned. OCR support is planned, but is not part of this release.',
+				'This PDF appears to be scanned, and no readable text could be extracted from it. Please try importing it again.',
 				'scanned-pdf'
 			);
 		}
@@ -1372,17 +1581,14 @@ async function parsePdf(file: File): Promise<ParsedSource> {
 		});
 
 		const metadata = await pdf.getMetadata().catch(() => null);
+		const bookmarks = await pdfBookmarks(pdf).catch(() => []);
 		// pdfjs v6 removed PDFDocumentProxy.destroy — teardown lives on the
 		// loading task.
 		await loadingTask.destroy();
 		const info = metadata?.info as { Title?: string } | undefined;
-		return { title: info?.Title?.trim(), blocks };
+		return { title: info?.Title?.trim(), blocks, pages: pageInfo, bookmarks };
 	} catch (error) {
-		if (error instanceof ImportError) throw error;
-		throw new ImportError(
-			`This PDF could not be read: ${error instanceof Error ? error.message : 'unknown error'}`,
-			'malformed'
-		);
+		throw pdfFailureError(error);
 	}
 }
 
@@ -1397,10 +1603,13 @@ function outlineFor(blocks: DocumentBlock[]): OutlineEntry[] {
 		}));
 }
 
-export async function importFile(file: File): Promise<NormalizedDocument> {
+export async function importFile(
+	file: File,
+	options: ImportOptions = {}
+): Promise<NormalizedDocument> {
 	const sourceKind = kindForFile(file);
 	let parsed: ParsedSource;
-	if (sourceKind === 'pdf') parsed = await parsePdf(file);
+	if (sourceKind === 'pdf') parsed = await parsePdf(file, options);
 	else if (sourceKind === 'docx') parsed = await parseDocx(file);
 	else {
 		const text = await file.text();
@@ -1412,6 +1621,10 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 	const now = Date.now();
 	const id = crypto.randomUUID();
 	const blocks = renumberBlocks(parsed.blocks);
+	// Bookmarks resolve against final block ids, so only after renumbering.
+	const bookmarkOutline = parsed.bookmarks?.length
+		? outlineFromBookmarks(parsed.bookmarks, blocks)
+		: null;
 	return {
 		normalizationVersion: DOCUMENT_NORMALIZATION_VERSION,
 		id,
@@ -1425,9 +1638,10 @@ export async function importFile(file: File): Promise<NormalizedDocument> {
 		updatedAt: now,
 		blocks,
 		segments: segmentBlocks(blocks),
-		outline: outlineFor(blocks),
+		outline: bookmarkOutline ?? outlineFor(blocks),
 		warnings: parsed.warnings ?? [],
-		includeCode: false
+		includeCode: false,
+		...(parsed.pages?.length ? { pages: parsed.pages } : {})
 	};
 }
 

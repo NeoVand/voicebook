@@ -87,17 +87,28 @@ async function migrateDocumentNormalization(
 	document: NormalizedDocument
 ): Promise<NormalizedDocument> {
 	if (document.normalizationVersion === DOCUMENT_NORMALIZATION_VERSION) return document;
-	// Markdown and DOCX re-parse from the stored original so normalization
-	// improvements (v9: Word tables, equations, diagrams) reach existing
-	// documents; other kinds only re-stamp.
-	if (document.sourceKind !== 'markdown' && document.sourceKind !== 'docx') {
+	// Markdown, DOCX, and PDF re-parse from the stored original so
+	// normalization improvements (v9: Word tables, equations, diagrams;
+	// v13: PDF pages, images, bookmarks) reach existing documents; other
+	// kinds only re-stamp.
+	const reparseKinds = ['markdown', 'docx', 'pdf'];
+	if (!reparseKinds.includes(document.sourceKind)) {
+		return { ...document, normalizationVersion: DOCUMENT_NORMALIZATION_VERSION };
+	}
+	// A PDF with recognized (OCR) pages must not re-parse: migrations run with
+	// OCR off, so re-parsing would silently erase the recognized text.
+	if (document.sourceKind === 'pdf' && document.pages?.some((page) => page.ocr)) {
 		return { ...document, normalizationVersion: DOCUMENT_NORMALIZATION_VERSION };
 	}
 	const source = await getSource(document);
 	if (!source) return document;
 	try {
+		// OCR stays off during startup migrations: a stored document already
+		// imported without it, and re-normalizing a library must never
+		// trigger surprise model downloads.
 		const reparsed = await importFile(
-			new File([source], document.sourceName, { type: document.mimeType })
+			new File([source], document.sourceName, { type: document.mimeType }),
+			{ enableOcr: false }
 		);
 		reparsed.includeCode = document.includeCode;
 		// The stored title is user-visible identity (duplicates get "— Copy",
@@ -189,7 +200,14 @@ export class VoicebookState {
 				ttsClient.capabilities(),
 				storageSnapshot()
 			]);
-			const normalizedDocuments = await Promise.all(documents.map(migrateDocumentNormalization));
+			// One document at a time: PDF migrations run a full wasm parse plus a
+			// pdf.js open each, and racing them multiplies wasm compilations
+			// (liteparse's init guard only dedupes after the first init finishes)
+			// and peak memory across the whole library at startup.
+			const normalizedDocuments: NormalizedDocument[] = [];
+			for (const document of documents) {
+				normalizedDocuments.push(await migrateDocumentNormalization(document));
+			}
 			const refreshedDocuments = normalizedDocuments.map(refreshDocumentSegments);
 			this.documents = refreshedDocuments;
 			await Promise.all(
@@ -263,7 +281,14 @@ export class VoicebookState {
 					this.duplicate = { file, existing };
 					continue;
 				}
-				const document = await importFile(file);
+				const document = await importFile(file, {
+					onProgress: (progress) => {
+						this.statusMessage =
+							progress.stage === 'ocr'
+								? `Reading scanned pages in ${file.name}… (${progress.page ?? '…'} of ${progress.pageCount ?? '…'})`
+								: `Reading ${file.name}…`;
+					}
+				});
 				imported.push(await this.addImportedDocument(document, file));
 			}
 			this.statusMessage = imported.length
@@ -283,15 +308,30 @@ export class VoicebookState {
 		if (!this.duplicate) return null;
 		const { file } = this.duplicate;
 		this.duplicate = null;
+		// Same feedback as importFiles: a duplicated scanned PDF re-runs the
+		// whole recognition pipeline and must not look like a frozen app.
+		this.importing = true;
+		this.statusMessage = `Reading ${file.name}…`;
 		try {
-			const document = await importFile(file);
+			const document = await importFile(file, {
+				onProgress: (progress) => {
+					this.statusMessage =
+						progress.stage === 'ocr'
+							? `Reading scanned pages in ${file.name}… (${progress.page ?? '…'} of ${progress.pageCount ?? '…'})`
+							: `Reading ${file.name}…`;
+				}
+			});
 			document.title = `${document.title} — Copy`;
 			document.fingerprint = `${document.fingerprint}:${document.id}`;
-			return await this.addImportedDocument(document, file);
+			const saved = await this.addImportedDocument(document, file);
+			this.statusMessage = '';
+			return saved;
 		} catch (error) {
 			this.errorMessage =
 				error instanceof Error ? error.message : 'The duplicate could not be imported.';
 			return null;
+		} finally {
+			this.importing = false;
 		}
 	}
 
