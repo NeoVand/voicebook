@@ -124,6 +124,9 @@ export class VoicebookPlayer {
 	private source?: AudioBufferSourceNode;
 	private sourceStartedAt = 0;
 	private sourceOffset = 0;
+	/** Structural silence to leave before the next segment's audio, set only
+	 * when advancing by natural playback (never on a manual jump or resume). */
+	private pendingLeadSilence = 0;
 	private manualStop = false;
 	private frame = 0;
 	private lastUiFrameAt = 0;
@@ -939,9 +942,16 @@ export class VoicebookPlayer {
 				if (this.source === source && !this.manualStop) void this.advanceAfterEnd();
 			};
 			this.source = source;
-			this.sourceStartedAt = context.currentTime;
+			// A structural pause is silence scheduled BEFORE the audio: start the
+			// buffer in the future and anchor the clock there, so the gap plays as
+			// real quiet. Only when starting a passage from its beginning — a
+			// resume mid-passage (position > 0) must not re-insert the pause.
+			const leadSilence = this.position === 0 ? this.pendingLeadSilence : 0;
+			this.pendingLeadSilence = 0;
+			const startAt = context.currentTime + leadSilence;
+			this.sourceStartedAt = startAt;
 			this.sourceOffset = this.position;
-			source.start(0, this.position);
+			source.start(startAt, this.position);
 			this.isPlaying = true;
 			this.lastUiFrameAt = 0;
 			void this.acquireWakeLock();
@@ -999,6 +1009,9 @@ export class VoicebookPlayer {
 		this.position = 0;
 		this.currentSegmentIndex += 1;
 		this.currentWordIndex = 0;
+		// Leave a human beat before this passage — only reached here by natural
+		// playback, so manual jumps and clicks stay instant.
+		this.pendingLeadSilence = this.currentSegment?.pauseBefore ?? 0;
 		this.notifySegmentChange();
 		await this.play();
 	}
@@ -1177,9 +1190,15 @@ export class VoicebookPlayer {
 			return;
 		}
 		const previousPosition = this.position;
-		const nextPosition = Math.min(
-			this.currentDuration,
-			this.sourceOffset + (this.context.currentTime - this.sourceStartedAt) * this.rate
+		// Clamp to >= 0: during a scheduled lead silence the source has not
+		// begun (currentTime < sourceStartedAt), which would otherwise compute a
+		// negative position and persist a bogus offset.
+		const nextPosition = Math.max(
+			0,
+			Math.min(
+				this.currentDuration,
+				this.sourceOffset + (this.context.currentTime - this.sourceStartedAt) * this.rate
+			)
 		);
 		this.markListened(this.currentSegmentIndex, previousPosition, nextPosition);
 		this.position = nextPosition;

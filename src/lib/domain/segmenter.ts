@@ -1,4 +1,5 @@
 import type {
+	BlockKind,
 	DocumentBlock,
 	NarrationConstructKind,
 	NarrationEntry,
@@ -8,6 +9,7 @@ import type {
 } from './types';
 import {
 	codeBlockFallback,
+	imageFallback,
 	inlineConstructSpans,
 	inlineMathFallback,
 	mathBlockFallback,
@@ -158,7 +160,8 @@ function inlineReplacement(
 	if (entry?.status === 'ready' && entry.text?.trim()) {
 		return { text: entry.text.trim(), pending: false, hasEntry: true };
 	}
-	const fallback = span.kind === 'math-inline' ? inlineMathFallback(span.run.text) : span.run.text;
+	const fallback =
+		span.kind === 'math-inline' ? inlineMathFallback(span.run.text) : imageFallback(span.run);
 	return { text: fallback, pending: entry?.status === 'pending', hasEntry: Boolean(entry) };
 }
 
@@ -329,7 +332,45 @@ export function segmentBlocks(
 		}
 	}
 
+	assignStructuralPauses(segments, blocks);
 	return segments;
+}
+
+/** A paragraph that is nothing but a single image — the standalone figure the
+ * reader draws as a MediaFigure. It earns a beat before it, like a heading. */
+function isFigureBlock(block: DocumentBlock): boolean {
+	if (block.kind !== 'paragraph' || !block.inlines?.length) return false;
+	return block.inlines.length === 1 && Boolean(block.inlines[0].image);
+}
+
+/** Seconds of silence before the first segment of a block, given the block
+ * that spoke before it. Tuned to how a person paces a document aloud: a real
+ * pause at a heading, a breath after it, a beat before a figure or table, and
+ * a shorter rest between ordinary paragraphs and list items. */
+function pauseBeforeBlock(block: DocumentBlock, previousKind: BlockKind | undefined): number {
+	if (previousKind === undefined) return 0;
+	if (block.kind === 'heading') return 0.55;
+	if (previousKind === 'heading') return 0.3;
+	if (isFigureBlock(block) || block.kind === 'table' || block.kind === 'math') return 0.3;
+	if (block.kind === 'list-item') return previousKind === 'list-item' ? 0.12 : 0.2;
+	return 0.22;
+}
+
+/** Stamp `pauseBefore` onto the first segment of each block. A post-pass keeps
+ * the main segmentation loop (with its several construct branches) untouched:
+ * a segment starts a new block whenever its blockId differs from the one
+ * before it, and only blocks that actually spoke advance "previous". */
+function assignStructuralPauses(segments: SpeechSegment[], blocks: DocumentBlock[]): void {
+	const blockById = new Map(blocks.map((block) => [block.id, block]));
+	let previousKind: BlockKind | undefined;
+	for (let index = 0; index < segments.length; index += 1) {
+		if (index > 0 && segments[index].blockId === segments[index - 1].blockId) continue;
+		const block = blockById.get(segments[index].blockId);
+		if (!block) continue;
+		const pause = pauseBeforeBlock(block, previousKind);
+		if (pause > 0) segments[index].pauseBefore = pause;
+		previousKind = block.kind;
+	}
 }
 
 export function segmentsEqual(a: SpeechSegment[], b: SpeechSegment[]): boolean {

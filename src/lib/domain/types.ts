@@ -224,6 +224,11 @@ export interface SpeechSegment {
 	estimatedDuration: number;
 	anchor: SourceAnchor;
 	narration?: SegmentNarration;
+	/** Seconds of silence a human narrator would leave before this passage —
+	 * a beat between paragraphs, a longer breath around a heading or figure.
+	 * Applied only when arriving here by natural playback, never on a manual
+	 * jump or resume. Set on the first segment of each block. */
+	pauseBefore?: number;
 }
 
 export interface OutlineEntry {
