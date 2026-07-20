@@ -23,13 +23,7 @@ import {
 
 import { backMatterBlockIds } from './back-matter';
 import { DEFAULT_LISTENING_MODE, spokenRulesFor } from './listening-modes';
-import { wordsFor } from './speech-words';
-import {
-	applySpokenStyle,
-	DEFAULT_SPOKEN_RULES,
-	normalizeForSpeech,
-	type SpokenRule
-} from './spoken-style';
+import { applySpokenStyle, DEFAULT_SPOKEN_RULES, type SpokenRule } from './spoken-style';
 
 export { wordsFor } from './speech-words';
 export { normalizeForSpeech } from './spoken-style';
@@ -76,8 +70,11 @@ function splitLongSentence(
 	return output;
 }
 
-export function estimateDuration(text: string): number {
-	const wordCount = Math.max(wordsFor(normalizeForSpeech(text)).length, 1);
+export function estimateDuration(text: string, rules: SpokenRule[] = DEFAULT_SPOKEN_RULES): number {
+	// Count the words actually spoken under the active mode, so a Verbatim
+	// segment (citations kept) and a Focused segment (asides dropped) get
+	// proportional timeline widths.
+	const wordCount = Math.max(applySpokenStyle(text, rules).spans.length, 1);
 	const punctuationPause =
 		(text.match(/[,;:]/g)?.length ?? 0) * 0.12 + (text.match(/[.!?]/g)?.length ?? 0) * 0.24;
 	return Math.max(0.7, wordCount / 2.65 + punctuationPause);
@@ -149,7 +146,7 @@ function pushConstructSegments(
 			start,
 			end,
 			words: styled.spans,
-			estimatedDuration: estimateDuration(chunk),
+			estimatedDuration: estimateDuration(chunk, rules),
 			anchor: {
 				...block.anchor,
 				start: (block.anchor.start ?? 0) + start,
@@ -339,7 +336,7 @@ export function segmentBlocks(
 					start,
 					end,
 					words: substituted ? speechWords : applySpokenStyle(text, rules).spans,
-					estimatedDuration: estimateDuration(speech),
+					estimatedDuration: estimateDuration(speech, rules),
 					anchor: {
 						...block.anchor,
 						start: (block.anchor.start ?? 0) + start,
@@ -408,7 +405,12 @@ export function segmentsEqual(a: SpeechSegment[], b: SpeechSegment[]): boolean {
 			// spoken-word→display-span mapping introduced for substituted
 			// sentences); persisted segments refresh when they do.
 			segment.words.length === b[index].words.length &&
-			(segment.narration?.pending ?? false) === (b[index].narration?.pending ?? false)
+			(segment.narration?.pending ?? false) === (b[index].narration?.pending ?? false) &&
+			// Structural narration fields: a plain-prose document whose spoken
+			// text is unchanged still needs to pick up pauses and back-matter
+			// roles when it is first re-segmented on this version.
+			segment.pauseBefore === b[index].pauseBefore &&
+			segment.role === b[index].role
 	);
 }
 

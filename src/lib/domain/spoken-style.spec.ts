@@ -28,8 +28,15 @@ describe('citation elision', () => {
 		);
 	});
 
-	it('drops superscript footnote markers attached to a word', () => {
-		expect(normalizeForSpeech('This result² holds.')).toBe('This result holds.');
+	it('keeps superscripts (an exponent is not reliably a footnote marker)', () => {
+		expect(normalizeForSpeech('This result² holds.')).toBe('This result² holds.');
+	});
+
+	it('preserves decimals when pulling punctuation (highlight invariant)', () => {
+		// The punctuation-pull must not fuse "10 .5" into one number token, or
+		// the spoken word count would diverge from the display spans.
+		const { spoken, spans } = applySpokenStyle('See Fig. 3, the value 10 .5 held.');
+		expect(spans.length).toBe(wordsFor(spoken).length);
 	});
 
 	it('drops conservative author–year parentheticals but keeps prose', () => {
@@ -41,10 +48,20 @@ describe('citation elision', () => {
 		);
 		// A year mentioned in running prose is not a citation.
 		expect(normalizeForSpeech('In 2020 we ran the study.')).toBe('In 2020 we ran the study.');
-		// Non-citation parentheticals survive.
+		// Non-citation parentheticals survive (declined by the citation rule).
 		expect(normalizeForSpeech('The sample (n = 30) was small.')).toBe(
 			'The sample (n = 30) was small.'
 		);
+		expect(normalizeForSpeech('A caution (a key aside) remains.')).toBe(
+			'A caution (a key aside) remains.'
+		);
+	});
+
+	it('stays linear on adversarial parentheticals (no catastrophic backtracking)', () => {
+		const unclosed = '(A' + ', 2020;'.repeat(6000);
+		const start = performance.now();
+		normalizeForSpeech(unclosed);
+		expect(performance.now() - start).toBeLessThan(500);
 	});
 
 	it('keeps every citation display range unhighlighted while neighbors map to themselves', () => {

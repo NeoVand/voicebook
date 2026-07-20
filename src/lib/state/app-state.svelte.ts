@@ -5,7 +5,7 @@ import {
 	fingerprint,
 	importFile
 } from '$lib/domain/importers';
-import { DEFAULT_LISTENING_MODE } from '$lib/domain/listening-modes';
+import { DEFAULT_LISTENING_MODE, spokenRulesFor } from '$lib/domain/listening-modes';
 import { refreshDocumentSegments, segmentBlocks } from '$lib/domain/segmenter';
 import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
 import { readerChrome } from '$lib/state/reader-chrome.svelte';
@@ -119,7 +119,16 @@ async function migrateDocumentNormalization(
 		// Narrations survive re-parsing; block-id shifts are healed by the
 		// content-hash rescue in reconcileNarrations on the next document open.
 		reparsed.narrations = document.narrations;
-		reparsed.segments = segmentBlocks(reparsed.blocks, reparsed.includeCode, reparsed.narrations);
+		// A re-parse must preserve the reader's per-document listening mode, and
+		// segment with that mode's rules — otherwise a future normalization bump
+		// would silently revert a Verbatim/Focused document to Natural.
+		reparsed.listeningMode = document.listeningMode;
+		reparsed.segments = segmentBlocks(
+			reparsed.blocks,
+			reparsed.includeCode,
+			reparsed.narrations,
+			spokenRulesFor(reparsed.listeningMode ?? DEFAULT_LISTENING_MODE)
+		);
 		reparsed.id = document.id;
 		reparsed.fingerprint = document.fingerprint;
 		reparsed.createdAt = document.createdAt;

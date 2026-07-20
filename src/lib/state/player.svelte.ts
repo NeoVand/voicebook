@@ -17,7 +17,7 @@ import {
 	skipsBackMatter,
 	spokenRulesFor
 } from '$lib/domain/listening-modes';
-import { normalizeForSpeech } from '$lib/domain/spoken-style';
+import { applySpokenStyle, VERBATIM_SPOKEN_RULES } from '$lib/domain/spoken-style';
 import {
 	deleteAudioForSegments,
 	getAudio,
@@ -136,6 +136,10 @@ export class VoicebookPlayer {
 	/** Structural silence to leave before the next segment's audio, set only
 	 * when advancing by natural playback (never on a manual jump or resume). */
 	private pendingLeadSilence = 0;
+	/** Bumped by any playback transition so an in-flight back-matter skip
+	 * announcement knows the user (or a media-key) took over and must not
+	 * resume on top of it. */
+	private skipToken = 0;
 	/** When true, natural playback announces and skips back-matter sections
 	 * (references, notes). Manual navigation always plays them regardless. */
 	skipBackMatter = true;
@@ -437,13 +441,18 @@ export class VoicebookPlayer {
 	}
 
 	/**
-	 * Switch how the open document is spoken. Re-segments with the mode's
-	 * rules, swaps them in by id (the current passage keeps playing), updates
-	 * back-matter skipping, and persists the choice on the document.
+	 * Switch how the open document is spoken. A mode change rewrites the spoken
+	 * text of essentially every passage, so — like a voice or rate change — it
+	 * stops playback, re-segments with the mode's rules, and restarts the
+	 * current passage in the new voice-text if it was playing. Restarting (vs a
+	 * live rebindSegments) avoids a frozen highlight and a mid-passage
+	 * re-buffer, and keeps the current segment's word timing correct.
 	 */
 	async setListeningMode(mode: ListeningMode): Promise<void> {
 		const book = this.book;
 		if (!book || book.listeningMode === mode) return;
+		const wasPlaying = this.isPlaying;
+		if (wasPlaying) this.pause();
 		book.listeningMode = mode;
 		this.skipBackMatter = skipsBackMatter(mode);
 		const next = segmentBlocks(
@@ -454,6 +463,7 @@ export class VoicebookPlayer {
 		);
 		this.rebindSegments(next);
 		await appState.saveDocument(book).catch(() => undefined);
+		if (wasPlaying) await this.play();
 	}
 
 	private reprioritize(preserveDocumentPreparation = false): void {
@@ -929,6 +939,12 @@ export class VoicebookPlayer {
 		if (!this.book || !this.currentSegment) return;
 		if (this.isPlaying) return;
 		this.stopAside();
+		this.skipToken += 1;
+		// Consume the structural pause up front so it can't leak onto a later
+		// manual start if synthesis throws before playback begins. Only a fresh
+		// passage start (position 0) gets the beat — never a mid-passage resume.
+		const leadSilence = this.position === 0 ? this.pendingLeadSilence : 0;
+		this.pendingLeadSilence = 0;
 		this.errorMessage = '';
 		this.isBuffering = true;
 		this.bufferingStage = 'Preparing this passage…';
@@ -983,10 +999,7 @@ export class VoicebookPlayer {
 			this.source = source;
 			// A structural pause is silence scheduled BEFORE the audio: start the
 			// buffer in the future and anchor the clock there, so the gap plays as
-			// real quiet. Only when starting a passage from its beginning — a
-			// resume mid-passage (position > 0) must not re-insert the pause.
-			const leadSilence = this.position === 0 ? this.pendingLeadSilence : 0;
-			this.pendingLeadSilence = 0;
+			// real quiet. (leadSilence was captured at the top of play().)
 			const startAt = context.currentTime + leadSilence;
 			this.sourceStartedAt = startAt;
 			this.sourceOffset = this.position;
@@ -1084,10 +1097,20 @@ export class VoicebookPlayer {
 		const block = this.book?.blocks.find((b) => b.id === this.currentSegment?.blockId);
 		const heading =
 			block?.kind === 'heading' ? block.text : (this.currentSegment?.text ?? 'references');
+		const bookId = this.book?.id;
 		const resumeIndex = this.firstNonBackMatter(startIndex);
+		// Any playback transition during the announcement (Play — including a
+		// media key — pause, stop, or a document switch) bumps skipToken; if it
+		// changed, the user took over and we must not resume on top of them.
+		const token = ++this.skipToken;
 		await this.speakAside(backMatterAnnouncement(heading));
-		// Bail if the user stopped, paused, or navigated during the notice.
-		if (this.manualStop || this.currentSegmentIndex !== startIndex) return;
+		if (
+			token !== this.skipToken ||
+			this.book?.id !== bookId ||
+			this.currentSegmentIndex !== startIndex
+		) {
+			return;
+		}
 		if (resumeIndex === undefined) {
 			// Nothing but back matter remains: stop at its heading so the reader
 			// can still see and scroll it.
@@ -1110,6 +1133,11 @@ export class VoicebookPlayer {
 		if (this.isPlaying && persistPosition) this.updateClock();
 		this.playThrough = undefined;
 		this.manualStop = true;
+		// A stop/pause/switch also silences any skip announcement in flight and
+		// invalidates its pending resume; a queued structural pause is dropped.
+		this.stopAside();
+		this.skipToken += 1;
+		this.pendingLeadSilence = 0;
 		try {
 			this.source?.stop();
 		} catch {
@@ -1185,7 +1213,11 @@ export class VoicebookPlayer {
 	 * Resolves when the answer has finished playing.
 	 */
 	async speakAside(text: string): Promise<void> {
-		const spoken = normalizeForSpeech(text.trim());
+		// Asides (spoken Explain answers, skip announcements) are read as
+		// written — only URLs collapse to a spoken pointer. The document's
+		// listening mode must NOT elide citations or expand abbreviations here:
+		// the model already phrased the answer for a listener.
+		const spoken = applySpokenStyle(text.trim(), VERBATIM_SPOKEN_RULES).spoken;
 		if (!spoken) return;
 		this.stopAside();
 		if (this.isPlaying) this.pause();

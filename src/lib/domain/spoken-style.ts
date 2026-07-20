@@ -20,8 +20,11 @@ export interface SpokenRule {
 	readonly name: string;
 	/** Must be a global (`g`) regex. */
 	readonly pattern: RegExp;
-	/** Spoken form for a match; an empty string elides it from speech. */
-	readonly replace: (match: RegExpExecArray) => string;
+	/** Spoken form for a match: a string (empty elides it from speech), or
+	 * null to decline the match entirely. Declining lets a rule match a broad,
+	 * linear-time pattern and then reject non-targets in code — the safe way to
+	 * recognize citations without a backtracking-prone regex. */
+	readonly replace: (match: RegExpExecArray) => string | null;
 }
 
 export interface SpokenStyle {
@@ -49,25 +52,23 @@ const bracketCitationRule: SpokenRule = {
 	replace: () => ''
 };
 
-/** Superscript footnote markers attached to a word ("word²"). */
-const superscriptFootnoteRule: SpokenRule = {
-	name: 'superscript-footnote',
-	pattern: /(?<=\p{L})[¹²³⁰-⁹]+/gu,
-	replace: () => ''
-};
-
 /**
  * Author–year citations, conservatively. The tell that separates a citation
  * from prose that merely mentions a year is the "Author, Year" comma (or an
  * "et al." right before the year): "(Vaswani et al., 2017)" and "(Smith,
  * 2019)" match, while "(In 2020 we found)" and "(n = 30)" do not. Must open
  * with a capitalized token so a lone "(2020)" measurement is left alone.
+ *
+ * The pattern matches any parenthetical (linear time — no nested quantifiers,
+ * and a closing paren is required so unbalanced input can't backtrack), then
+ * the citation shape is tested with a single non-nested regex. Doing the test
+ * in code, not in one combined pattern, avoids catastrophic backtracking.
  */
+const AUTHOR_YEAR = /^\((?:see\s+)?\p{Lu}[^()]*(?:,\s*|\bet al\.?\s+)(?:19|20)\d{2}[a-z]?/u;
 const parentheticalCitationRule: SpokenRule = {
 	name: 'parenthetical-citation',
-	pattern:
-		/\((?:see\s+)?\p{Lu}[^()]*?(?:,\s*|\bet al\.?\s+)(?:19|20)\d{2}[a-z]?(?:\s*[;,]\s*[^()]*?(?:,\s*|\bet al\.?\s+)?(?:19|20)\d{2}[a-z]?)*\)/gu,
-	replace: () => ''
+	pattern: /\([^()]*\)/gu,
+	replace: (match) => (AUTHOR_YEAR.test(match[0]) ? '' : null)
 };
 
 const ABBREVIATIONS: ReadonlyArray<readonly [RegExp, string]> = [
@@ -113,14 +114,16 @@ const symbolRules: SpokenRule[] = [
 ];
 
 /**
- * Navigational asides a focused listener does not need: cross-references
- * ("(see Section 3)", "(cf. Smith)") and pointer parentheticals ("(Fig. 3)",
- * "(Table 2)", "(Appendix A)"). Focused mode only — Natural keeps them.
+ * Navigational asides a focused listener does not need: cross-references that
+ * point at a numbered location ("(see Section 3)", "(cf. Table 2)") and
+ * pointer parentheticals ("(Fig. 3)", "(Appendix A)"). Focused mode only.
+ * The see/cf branch requires a digit so a real "(see, this matters)" aside is
+ * kept; Natural keeps all of these.
  */
 const crossReferenceRule: SpokenRule = {
 	name: 'cross-reference',
 	pattern:
-		/\((?:see|cf\.?|e\.g\.,?|i\.e\.,?)[^()]*\)|\((?:fig(?:ure|s)?|tables?|tab|eqs?|equations?|sec(?:tion|s)?|appendix|appendices|chapters?|ch)\.?\s*[\dA-Za-z]+(?:\s*[–-]\s*[\dA-Za-z]+)?\)/gi,
+		/\((?:see|cf\.?)\s+[^()]*\d[^()]*\)|\((?:fig(?:ure|s)?|tables?|tab|eqs?|equations?|sec(?:tion|s)?|appendix|appendices|chapters?|ch)\.?\s*[\dA-Za-z]+(?:\s*[–-]\s*[\dA-Za-z]+)?\)/gi,
 	replace: () => ''
 };
 
@@ -135,7 +138,6 @@ export const VERBATIM_SPOKEN_RULES: SpokenRule[] = [urlRule];
 export const NATURAL_SPOKEN_RULES: SpokenRule[] = [
 	urlRule,
 	bracketCitationRule,
-	superscriptFootnoteRule,
 	parentheticalCitationRule,
 	...abbreviationRules,
 	numberRangeRule,
@@ -160,8 +162,10 @@ function collectHits(text: string, rules: SpokenRule[]): Hit[] {
 	rules.forEach((rule, priority) => {
 		rule.pattern.lastIndex = 0;
 		for (const match of text.matchAll(rule.pattern)) {
+			const spoken = rule.replace(match);
+			if (spoken === null) continue; // the rule declined this candidate
 			const start = match.index ?? 0;
-			hits.push({ start, end: start + match[0].length, priority, spoken: rule.replace(match) });
+			hits.push({ start, end: start + match[0].length, priority, spoken });
 		}
 	});
 	// Earliest match wins; ties break by rule priority. Then drop any hit that
@@ -216,11 +220,13 @@ export function applySpokenStyle(
 	}
 	spoken += tail;
 	// Collapse the padding whitespace and pull sentence punctuation back
-	// against its word ("work ." → "work."). Punctuation is not word-like, so
-	// the token count — and thus the span alignment — is unchanged.
+	// against its word ("work ." → "work."). The `(?!\d)` guard is load-bearing:
+	// pulling a '.' or ',' onto a digit that is followed by a digit ("10 .5")
+	// would fuse them into one number token, changing wordsFor(spoken)'s count
+	// and breaking its index-for-index alignment with `spans`.
 	const cleaned = spoken
 		.replace(/\s+/g, ' ')
-		.replace(/\s+([.,;:!?])/g, '$1')
+		.replace(/\s+([.,;:!?])(?!\d)/g, '$1')
 		.trim();
 	return { spoken: cleaned, spans };
 }
