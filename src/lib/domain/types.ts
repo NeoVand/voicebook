@@ -229,6 +229,9 @@ export interface SpeechSegment {
 	 * Applied only when arriving here by natural playback, never on a manual
 	 * jump or resume. Set on the first segment of each block. */
 	pauseBefore?: number;
+	/** Set on citation apparatus (references, notes, acknowledgements). Natural
+	 * playback announces and skips it; manual navigation still plays it. */
+	role?: 'back-matter';
 }
 
 export interface OutlineEntry {

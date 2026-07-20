@@ -207,6 +207,18 @@ describe('structural pauses', () => {
 		expect(firstOfBlock(segments, 'fig')?.normalizedText).toBe('A figure is shown here.');
 	});
 
+	it('tags back-matter segments so the player can skip them', () => {
+		const segments = segmentBlocks([
+			block({ id: 'h', kind: 'heading', text: 'Conclusion', level: 2, anchor: {} }),
+			block({ id: 'p', text: 'Final thoughts here.', anchor: {} }),
+			block({ id: 'refh', kind: 'heading', text: 'References', level: 2, anchor: {} }),
+			block({ id: 'r0', text: 'Smith, J. A study of studies.', anchor: {} })
+		]);
+		expect(segments.find((s) => s.blockId === 'p')?.role).toBeUndefined();
+		expect(segments.find((s) => s.blockId === 'refh')?.role).toBe('back-matter');
+		expect(segments.find((s) => s.blockId === 'r0')?.role).toBe('back-matter');
+	});
+
 	it('only marks the first segment of a multi-sentence block', () => {
 		const segments = segmentBlocks([
 			block({ id: 'a', text: 'One.', anchor: {} }),

@@ -1699,6 +1699,13 @@
 						</div>
 						<div class="timeline-rail" aria-hidden="true">
 							{#each player.timelineSegments as segment (segment.id)}
+								{#if segment.backMatter}
+									<i
+										class="timeline-band back-matter"
+										style:left={`${segment.left * 100}%`}
+										style:width={`${segment.width * 100}%`}
+									></i>
+								{/if}
 								{#if segment.narrationPending}
 									<i
 										class="timeline-band narration-pending"
@@ -3139,6 +3146,17 @@
 			90deg,
 			color-mix(in srgb, var(--timeline-generating, #e4b86a) 40%, transparent) 0 3px,
 			transparent 3px 6px
+		);
+	}
+
+	/* Back matter that natural playback skips: a muted hatch so listeners can
+	   see the stretch on the rail and scrub into it deliberately. */
+	.timeline-band.back-matter {
+		z-index: 0;
+		background: repeating-linear-gradient(
+			45deg,
+			color-mix(in srgb, var(--muted) 30%, transparent) 0 2px,
+			transparent 2px 6px
 		);
 	}
 

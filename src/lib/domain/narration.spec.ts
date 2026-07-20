@@ -124,9 +124,9 @@ describe('tableRowRanges', () => {
 describe('imageFallback', () => {
 	it('frames a caption-less image instead of saying the bare word "Image"', () => {
 		expect(imageFallback({ text: 'Image', image: { alt: '' } })).toBe('A figure is shown here.');
-		expect(imageFallback({ text: 'Image', image: { src: 'data:image/png;base64,AA' } })).toBe(
-			'A figure is shown here.'
-		);
+		expect(
+			imageFallback({ text: 'Image', image: { alt: '', src: 'data:image/png;base64,AA' } })
+		).toBe('A figure is shown here.');
 	});
 
 	it('reads a caption as-is (it already frames itself)', () => {

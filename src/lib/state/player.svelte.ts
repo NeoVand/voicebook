@@ -10,6 +10,7 @@ import type {
 } from '$lib/domain/types';
 import { audioVariantKey, decodeAudio, encodeAudio } from '$lib/services/audio-codec';
 import { segmentsEqual } from '$lib/domain/segmenter';
+import { backMatterAnnouncement } from '$lib/domain/back-matter';
 import { normalizeForSpeech } from '$lib/domain/spoken-style';
 import {
 	deleteAudioForSegments,
@@ -79,6 +80,8 @@ export interface TimelineSegmentVisual {
 	generating: number;
 	/** An LLM narration rewrite is still expected for this segment. */
 	narrationPending: boolean;
+	/** Citation apparatus that natural playback skips — shown muted on the rail. */
+	backMatter: boolean;
 	listened: Array<{ left: number; width: number }>;
 }
 
@@ -127,6 +130,9 @@ export class VoicebookPlayer {
 	/** Structural silence to leave before the next segment's audio, set only
 	 * when advancing by natural playback (never on a manual jump or resume). */
 	private pendingLeadSilence = 0;
+	/** When true, natural playback announces and skips back-matter sections
+	 * (references, notes). Manual navigation always plays them regardless. */
+	skipBackMatter = true;
 	private manualStop = false;
 	private frame = 0;
 	private lastUiFrameAt = 0;
@@ -210,6 +216,7 @@ export class VoicebookPlayer {
 				cached: this.cachedSegments.has(index),
 				generating: this.generationBySegment.get(index) ?? 0,
 				narrationPending: segment.narration?.pending ?? false,
+				backMatter: this.skipBackMatter && segment.role === 'back-matter',
 				listened: mergeListenedRange(this.book?.listened?.[segment.id] ?? [], 0, 0).map(
 					(range) => ({
 						left: duration ? Math.min(1, range.start / duration) : 0,
@@ -1009,8 +1016,59 @@ export class VoicebookPlayer {
 		this.position = 0;
 		this.currentSegmentIndex += 1;
 		this.currentWordIndex = 0;
+		// Crossing into a references/notes section during natural playback:
+		// announce it once and skip past, the way a narrator would.
+		if (this.skipBackMatter && this.enteringBackMatter(this.currentSegmentIndex)) {
+			await this.announceAndSkipBackMatter();
+			return;
+		}
 		// Leave a human beat before this passage — only reached here by natural
 		// playback, so manual jumps and clicks stay instant.
+		this.pendingLeadSilence = this.currentSegment?.pauseBefore ?? 0;
+		this.notifySegmentChange();
+		await this.play();
+	}
+
+	/** True when `index` is the first segment of a back-matter section — its
+	 * predecessor is ordinary text. Manual jumps never route through here. */
+	private enteringBackMatter(index: number): boolean {
+		const segments = this.book?.segments;
+		if (!segments || segments[index]?.role !== 'back-matter') return false;
+		return segments[index - 1]?.role !== 'back-matter';
+	}
+
+	/** First segment at or after `index` that is not back matter, or undefined
+	 * when the rest of the document is back matter. */
+	private firstNonBackMatter(index: number): number | undefined {
+		const segments = this.book?.segments ?? [];
+		for (let cursor = index; cursor < segments.length; cursor += 1) {
+			if (segments[cursor].role !== 'back-matter') return cursor;
+		}
+		return undefined;
+	}
+
+	private async announceAndSkipBackMatter(): Promise<void> {
+		const startIndex = this.currentSegmentIndex;
+		const block = this.book?.blocks.find((b) => b.id === this.currentSegment?.blockId);
+		const heading =
+			block?.kind === 'heading' ? block.text : (this.currentSegment?.text ?? 'references');
+		const resumeIndex = this.firstNonBackMatter(startIndex);
+		await this.speakAside(backMatterAnnouncement(heading));
+		// Bail if the user stopped, paused, or navigated during the notice.
+		if (this.manualStop || this.currentSegmentIndex !== startIndex) return;
+		if (resumeIndex === undefined) {
+			// Nothing but back matter remains: stop at its heading so the reader
+			// can still see and scroll it.
+			this.isPlaying = false;
+			this.notifySegmentChange();
+			this.releaseWakeLock();
+			await this.persistPosition(true);
+			if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+			return;
+		}
+		this.currentSegmentIndex = resumeIndex;
+		this.position = 0;
+		this.currentWordIndex = 0;
 		this.pendingLeadSilence = this.currentSegment?.pauseBefore ?? 0;
 		this.notifySegmentChange();
 		await this.play();

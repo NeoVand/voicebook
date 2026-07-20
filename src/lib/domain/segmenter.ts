@@ -21,6 +21,7 @@ import {
 	type TextRange
 } from './narration';
 
+import { backMatterBlockIds } from './back-matter';
 import { wordsFor } from './speech-words';
 import { normalizeForSpeech, spokenWordSpans } from './spoken-style';
 
@@ -333,6 +334,12 @@ export function segmentBlocks(
 	}
 
 	assignStructuralPauses(segments, blocks);
+	const backMatter = backMatterBlockIds(blocks);
+	if (backMatter.size) {
+		for (const segment of segments) {
+			if (backMatter.has(segment.blockId)) segment.role = 'back-matter';
+		}
+	}
 	return segments;
 }
 
