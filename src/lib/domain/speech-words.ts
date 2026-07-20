@@ -7,19 +7,7 @@ import type { WordSpan } from './types';
 export const LINK_PATTERN =
 	/(?:https?:\/\/|www\.)[^\s<>()]+|\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+\/[^\s<>()]*/gi;
 
-const LINK_TRAILER_PATTERN = /[.,;:!?'"\]]+$/;
-
 export const LINK_SPOKEN_TEXT = 'a link in the document';
-
-export function normalizeForSpeech(text: string): string {
-	return text
-		.replace(LINK_PATTERN, (url) => {
-			const trailer = LINK_TRAILER_PATTERN.exec(url)?.[0] ?? '';
-			return `${LINK_SPOKEN_TEXT}${trailer}`;
-		})
-		.replace(/\s+/g, ' ')
-		.trim();
-}
 
 /** The one word tokenizer. Word highlighting couples display words to
  * synthesized timing entries BY INDEX, so every producer of a word list —
@@ -42,32 +30,4 @@ export function wordsFor(text: string): WordSpan[] {
 		start: match.index ?? 0,
 		end: (match.index ?? 0) + match[0].length
 	}));
-}
-
-/** One span per SPOKEN word of `normalizeForSpeech(text)`, each carrying the
- * display range it should light up. Plain words map to themselves; every word
- * of a link's spoken replacement maps to the whole link, mirroring how inline
- * construct substitution keeps an equation highlighted while its reading is
- * spoken. Invariant: the result aligns index-for-index with
- * `wordsFor(normalizeForSpeech(text))`. */
-export function spokenWordSpans(text: string): WordSpan[] {
-	const spans: WordSpan[] = [];
-	let cursor = 0;
-	for (const match of text.matchAll(LINK_PATTERN)) {
-		const start = match.index ?? 0;
-		const url = match[0];
-		const trailer = LINK_TRAILER_PATTERN.exec(url)?.[0] ?? '';
-		const linkEnd = start + url.length - trailer.length;
-		for (const word of wordsFor(text.slice(cursor, start))) {
-			spans.push({ text: word.text, start: cursor + word.start, end: cursor + word.end });
-		}
-		for (const word of wordsFor(LINK_SPOKEN_TEXT)) {
-			spans.push({ text: word.text, start, end: linkEnd });
-		}
-		cursor = start + url.length;
-	}
-	for (const word of wordsFor(text.slice(cursor))) {
-		spans.push({ text: word.text, start: cursor + word.start, end: cursor + word.end });
-	}
-	return spans;
 }

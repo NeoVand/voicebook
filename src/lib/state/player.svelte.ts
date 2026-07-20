@@ -10,7 +10,7 @@ import type {
 } from '$lib/domain/types';
 import { audioVariantKey, decodeAudio, encodeAudio } from '$lib/services/audio-codec';
 import { segmentsEqual } from '$lib/domain/segmenter';
-import { normalizeForSpeech } from '$lib/domain/speech-words';
+import { normalizeForSpeech } from '$lib/domain/spoken-style';
 import {
 	deleteAudioForSegments,
 	getAudio,

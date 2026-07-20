@@ -19,9 +19,11 @@ import {
 	type TextRange
 } from './narration';
 
-import { normalizeForSpeech, spokenWordSpans, wordsFor } from './speech-words';
+import { wordsFor } from './speech-words';
+import { normalizeForSpeech, spokenWordSpans } from './spoken-style';
 
-export { normalizeForSpeech, wordsFor } from './speech-words';
+export { wordsFor } from './speech-words';
+export { normalizeForSpeech } from './spoken-style';
 
 export const MAX_SEGMENT_CHARS = 280;
 
