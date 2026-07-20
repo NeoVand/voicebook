@@ -16,6 +16,8 @@
 		triggerWidth?: string;
 		menuWidth?: string;
 		align?: 'start' | 'end';
+		/** 'up' opens above the trigger (player bar); 'down' below (header). */
+		placement?: 'up' | 'down';
 	}
 
 	let {
@@ -25,7 +27,8 @@
 		onChange,
 		triggerWidth = '112px',
 		menuWidth = triggerWidth,
-		align = 'start'
+		align = 'start',
+		placement = 'up'
 	}: Props = $props();
 
 	const uid = $props.id();
@@ -120,6 +123,7 @@
 <div
 	class="compact-select"
 	class:align-end={align === 'end'}
+	class:placement-down={placement === 'down'}
 	style:--trigger-width={triggerWidth}
 	style:--menu-width={menuWidth}
 	{@attach trackRoot}
@@ -231,6 +235,11 @@
 	.align-end .select-menu {
 		right: 0;
 		left: auto;
+	}
+
+	.placement-down .select-menu {
+		top: calc(100% + 7px);
+		bottom: auto;
 	}
 
 	.select-option {

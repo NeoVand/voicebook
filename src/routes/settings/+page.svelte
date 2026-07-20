@@ -47,6 +47,8 @@
 	} from '$lib/domain/narration-prompts';
 	import { DEFAULT_EXPLAIN_PROMPT } from '$lib/domain/explain-prompts';
 	import { NARRATION_PRESETS, type NarrationPresetId } from '$lib/domain/narration-presets';
+	import { LISTENING_MODES } from '$lib/domain/listening-modes';
+	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 	import { READER_FONTS, THEMES, appearanceState } from '$lib/state/appearance.svelte';
 	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
 	import ProviderLogo from '$lib/components/ProviderLogo.svelte';
@@ -1184,6 +1186,31 @@
 				{/if}
 			</section>
 		{/if}
+
+		<section class="settings-section" aria-labelledby="listening-mode-title">
+			<header class="section-title">
+				<div>
+					<h2 id="listening-mode-title">Listening mode</h2>
+					<p>How new documents are read aloud. Change it per document from the reader.</p>
+				</div>
+			</header>
+
+			<div class="preset-grid" role="radiogroup" aria-label="Default listening mode">
+				{#each LISTENING_MODES as mode (mode.id)}
+					<button
+						class="preset-card"
+						class:selected={readerChrome.defaultListeningMode === mode.id}
+						type="button"
+						role="radio"
+						aria-checked={readerChrome.defaultListeningMode === mode.id}
+						onclick={() => readerChrome.setDefaultListeningMode(mode.id)}
+					>
+						<strong>{mode.label}</strong>
+						<small>{mode.description}</small>
+					</button>
+				{/each}
+			</div>
+		</section>
 
 		<section class="settings-section" aria-labelledby="llm-behavior-title">
 			<header class="section-title">

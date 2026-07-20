@@ -113,11 +113,26 @@ const symbolRules: SpokenRule[] = [
 ];
 
 /**
- * The default "Natural" rule set, in priority order — earlier rules win when
- * two matches overlap. Later phases will let modes select a subset (Verbatim
- * runs none; Focused adds more).
+ * Navigational asides a focused listener does not need: cross-references
+ * ("(see Section 3)", "(cf. Smith)") and pointer parentheticals ("(Fig. 3)",
+ * "(Table 2)", "(Appendix A)"). Focused mode only — Natural keeps them.
  */
-export const DEFAULT_SPOKEN_RULES: SpokenRule[] = [
+const crossReferenceRule: SpokenRule = {
+	name: 'cross-reference',
+	pattern:
+		/\((?:see|cf\.?|e\.g\.,?|i\.e\.,?)[^()]*\)|\((?:fig(?:ure|s)?|tables?|tab|eqs?|equations?|sec(?:tion|s)?|appendix|appendices|chapters?|ch)\.?\s*[\dA-Za-z]+(?:\s*[–-]\s*[\dA-Za-z]+)?\)/gi,
+	replace: () => ''
+};
+
+/** Verbatim mode reads the page literally — only URLs still collapse to a
+ * spoken pointer, exactly as they did before the spoken layer existed. */
+export const VERBATIM_SPOKEN_RULES: SpokenRule[] = [urlRule];
+
+/**
+ * Natural mode, in priority order — earlier rules win when two matches
+ * overlap. Citations drop, abbreviations and symbols read as words.
+ */
+export const NATURAL_SPOKEN_RULES: SpokenRule[] = [
 	urlRule,
 	bracketCitationRule,
 	superscriptFootnoteRule,
@@ -126,6 +141,12 @@ export const DEFAULT_SPOKEN_RULES: SpokenRule[] = [
 	numberRangeRule,
 	...symbolRules
 ];
+
+/** Focused mode: Natural plus cross-reference/pointer elision. */
+export const FOCUSED_SPOKEN_RULES: SpokenRule[] = [crossReferenceRule, ...NATURAL_SPOKEN_RULES];
+
+/** The default rule set applied when a caller does not choose one. */
+export const DEFAULT_SPOKEN_RULES = NATURAL_SPOKEN_RULES;
 
 interface Hit {
 	start: number;

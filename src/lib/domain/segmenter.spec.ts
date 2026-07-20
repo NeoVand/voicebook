@@ -207,6 +207,18 @@ describe('structural pauses', () => {
 		expect(firstOfBlock(segments, 'fig')?.normalizedText).toBe('A figure is shown here.');
 	});
 
+	it('applies the given spoken-style rules to the spoken text', () => {
+		const text = 'See Fig. 2 [3] for the result.';
+		const natural = segmentBlocks([block({ id: 'b', text, anchor: {} })]);
+		expect(natural[0].normalizedText).toBe('See Figure 2 for the result.');
+		const verbatim = segmentBlocks([block({ id: 'b', text, anchor: {} })], false, {}, [
+			// empty rules → literal reading
+		]);
+		expect(verbatim[0].normalizedText).toBe(text);
+		// The highlight invariant still holds under either rule set.
+		expect(verbatim[0].words.length).toBe(wordsFor(verbatim[0].normalizedText).length);
+	});
+
 	it('tags back-matter segments so the player can skip them', () => {
 		const segments = segmentBlocks([
 			block({ id: 'h', kind: 'heading', text: 'Conclusion', level: 2, anchor: {} }),

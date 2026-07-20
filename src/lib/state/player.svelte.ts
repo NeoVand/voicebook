@@ -4,13 +4,19 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getModel } from '$lib/domain/model-catalog';
 import type {
 	AudioVariantMeta,
+	ListeningMode,
 	NormalizedDocument,
 	SpeechSegment,
 	TimingMap
 } from '$lib/domain/types';
 import { audioVariantKey, decodeAudio, encodeAudio } from '$lib/services/audio-codec';
-import { segmentsEqual } from '$lib/domain/segmenter';
+import { segmentBlocks, segmentsEqual } from '$lib/domain/segmenter';
 import { backMatterAnnouncement } from '$lib/domain/back-matter';
+import {
+	DEFAULT_LISTENING_MODE,
+	skipsBackMatter,
+	spokenRulesFor
+} from '$lib/domain/listening-modes';
 import { normalizeForSpeech } from '$lib/domain/spoken-style';
 import {
 	deleteAudioForSegments,
@@ -323,6 +329,7 @@ export class VoicebookPlayer {
 		this.generationProgress = 0;
 		this.requestedWordIndex = undefined;
 		this.book = document;
+		this.skipBackMatter = skipsBackMatter(document.listeningMode ?? DEFAULT_LISTENING_MODE);
 		const savedIndex = document.playback
 			? document.segments.findIndex((segment) => segment.id === document.playback?.segmentId)
 			: -1;
@@ -422,6 +429,31 @@ export class VoicebookPlayer {
 			.catch(() => undefined);
 
 		if (this.isPlaying) this.prefetch();
+	}
+
+	/** The open document's effective listening mode. */
+	get listeningMode(): ListeningMode {
+		return this.book?.listeningMode ?? DEFAULT_LISTENING_MODE;
+	}
+
+	/**
+	 * Switch how the open document is spoken. Re-segments with the mode's
+	 * rules, swaps them in by id (the current passage keeps playing), updates
+	 * back-matter skipping, and persists the choice on the document.
+	 */
+	async setListeningMode(mode: ListeningMode): Promise<void> {
+		const book = this.book;
+		if (!book || book.listeningMode === mode) return;
+		book.listeningMode = mode;
+		this.skipBackMatter = skipsBackMatter(mode);
+		const next = segmentBlocks(
+			book.blocks,
+			book.includeCode,
+			book.narrations ?? {},
+			spokenRulesFor(mode)
+		);
+		this.rebindSegments(next);
+		await appState.saveDocument(book).catch(() => undefined);
 	}
 
 	private reprioritize(preserveDocumentPreparation = false): void {

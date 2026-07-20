@@ -5,8 +5,10 @@ import {
 	fingerprint,
 	importFile
 } from '$lib/domain/importers';
+import { DEFAULT_LISTENING_MODE } from '$lib/domain/listening-modes';
 import { refreshDocumentSegments, segmentBlocks } from '$lib/domain/segmenter';
 import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
+import { readerChrome } from '$lib/state/reader-chrome.svelte';
 import type {
 	DeviceCapabilities,
 	ListenedRange,
@@ -253,11 +255,21 @@ export class VoicebookState {
 		}
 	}
 
+	/** New documents open in the reader's default listening mode; re-segment
+	 * only when that differs from how import spoke them (Natural). */
+	private withDefaultListeningMode(document: NormalizedDocument): NormalizedDocument {
+		const mode = readerChrome.defaultListeningMode;
+		if (mode === (document.listeningMode ?? DEFAULT_LISTENING_MODE)) {
+			return { ...document, listeningMode: mode };
+		}
+		return refreshDocumentSegments({ ...document, listeningMode: mode });
+	}
+
 	private async addImportedDocument(
 		document: NormalizedDocument,
 		source?: Blob
 	): Promise<NormalizedDocument> {
-		const saved = await putDocument(document, source);
+		const saved = await putDocument(this.withDefaultListeningMode(document), source);
 		this.documents = [saved, ...this.documents.filter((candidate) => candidate.id !== saved.id)];
 		this.storage = await storageSnapshot();
 		if (!this.storage.persisted && this.documents.length === 1) {

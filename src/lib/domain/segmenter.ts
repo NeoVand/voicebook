@@ -22,8 +22,14 @@ import {
 } from './narration';
 
 import { backMatterBlockIds } from './back-matter';
+import { DEFAULT_LISTENING_MODE, spokenRulesFor } from './listening-modes';
 import { wordsFor } from './speech-words';
-import { normalizeForSpeech, spokenWordSpans } from './spoken-style';
+import {
+	applySpokenStyle,
+	DEFAULT_SPOKEN_RULES,
+	normalizeForSpeech,
+	type SpokenRule
+} from './spoken-style';
 
 export { wordsFor } from './speech-words';
 export { normalizeForSpeech } from './spoken-style';
@@ -122,7 +128,8 @@ function pushConstructSegments(
 	constructKind: NarrationConstructKind,
 	spoken: string,
 	pending: boolean,
-	range: TextRange
+	range: TextRange,
+	rules: SpokenRule[]
 ): void {
 	const chunks = narrationChunks(spoken);
 	if (!chunks.length) return;
@@ -133,14 +140,15 @@ function pushConstructSegments(
 			index === chunks.length - 1
 				? range.end
 				: range.start + Math.floor((span * (index + 1)) / chunks.length);
+		const styled = applySpokenStyle(chunk, rules);
 		segments.push({
 			id: `${constructId}:n${index}`,
 			blockId: block.id,
 			text: chunk,
-			normalizedText: normalizeForSpeech(chunk),
+			normalizedText: styled.spoken,
 			start,
 			end,
-			words: spokenWordSpans(chunk),
+			words: styled.spans,
 			estimatedDuration: estimateDuration(chunk),
 			anchor: {
 				...block.anchor,
@@ -169,7 +177,8 @@ function inlineReplacement(
 export function segmentBlocks(
 	blocks: DocumentBlock[],
 	includeCode = false,
-	narrations: Record<string, NarrationEntry> = {}
+	narrations: Record<string, NarrationEntry> = {},
+	rules: SpokenRule[] = DEFAULT_SPOKEN_RULES
 ): SpeechSegment[] {
 	const segments: SpeechSegment[] = [];
 
@@ -187,7 +196,8 @@ export function segmentBlocks(
 				block.kind === 'math' ? 'math-block' : 'mermaid',
 				text,
 				pending,
-				{ start: 0, end: block.text.length }
+				{ start: 0, end: block.text.length },
+				rules
 			);
 			continue;
 		}
@@ -207,7 +217,8 @@ export function segmentBlocks(
 				'table-header',
 				headerSpoken.text,
 				false,
-				ranges.header ?? { start: 0, end: 0 }
+				ranges.header ?? { start: 0, end: 0 },
+				rules
 			);
 			block.table.rows.forEach((row, rowIndex) => {
 				const cells = row.map((cell) => cell.text);
@@ -221,7 +232,8 @@ export function segmentBlocks(
 					'table-row',
 					text,
 					pending,
-					ranges.rows[rowIndex] ?? { start: block.text.length, end: block.text.length }
+					ranges.rows[rowIndex] ?? { start: block.text.length, end: block.text.length },
+					rules
 				);
 			});
 			continue;
@@ -235,10 +247,16 @@ export function segmentBlocks(
 			const fallback = codeBlockFallback(block.text, block.codeLanguage);
 			const { text, pending } = spokenFor(narrations[block.id], fallback);
 			if (text) {
-				pushConstructSegments(segments, block, block.id, 'code-block', text, pending, {
-					start: 0,
-					end: block.text.length
-				});
+				pushConstructSegments(
+					segments,
+					block,
+					block.id,
+					'code-block',
+					text,
+					pending,
+					{ start: 0, end: block.text.length },
+					rules
+				);
 			}
 			continue;
 		}
@@ -277,7 +295,7 @@ export function segmentBlocks(
 					let rendered = '';
 					let cursor = start;
 					const pushPlainWords = (chunk: string, displayOffset: number) => {
-						for (const word of spokenWordSpans(chunk)) {
+						for (const word of applySpokenStyle(chunk, rules).spans) {
 							speechWords.push({
 								text: word.text,
 								start: displayOffset + word.start,
@@ -292,7 +310,7 @@ export function segmentBlocks(
 						rendered += block.text.slice(cursor, from);
 						if (span.start >= start) {
 							const replacement = inlineReplacement(span, narrations);
-							for (const word of wordsFor(normalizeForSpeech(replacement.text))) {
+							for (const word of applySpokenStyle(replacement.text, rules).spans) {
 								speechWords.push({ text: word.text, start: from - start, end: to - start });
 							}
 							rendered += replacement.text;
@@ -317,10 +335,10 @@ export function segmentBlocks(
 					id,
 					blockId: block.id,
 					text,
-					normalizedText: normalizeForSpeech(speech),
+					normalizedText: applySpokenStyle(speech, rules).spoken,
 					start,
 					end,
-					words: substituted ? speechWords : spokenWordSpans(text),
+					words: substituted ? speechWords : applySpokenStyle(text, rules).spans,
 					estimatedDuration: estimateDuration(speech),
 					anchor: {
 						...block.anchor,
@@ -426,7 +444,12 @@ function remapPosition(
 
 export function refreshDocumentSegments(document: NormalizedDocument): NormalizedDocument {
 	const previousSegments = document.segments;
-	const segments = segmentBlocks(document.blocks, document.includeCode, document.narrations ?? {});
+	const segments = segmentBlocks(
+		document.blocks,
+		document.includeCode,
+		document.narrations ?? {},
+		spokenRulesFor(document.listeningMode ?? DEFAULT_LISTENING_MODE)
+	);
 	if (segmentsEqual(previousSegments, segments)) return document;
 	const playbackPosition = document.playback
 		? semanticPosition(previousSegments, document.playback.segmentId, document.playback.wordIndex)

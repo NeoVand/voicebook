@@ -1,4 +1,6 @@
 export type DocumentKind = 'pdf' | 'docx' | 'markdown' | 'text';
+/** How the spoken layer adapts a document for listening. */
+export type ListeningMode = 'verbatim' | 'natural' | 'focused';
 export type BlockKind =
 	| 'heading'
 	| 'paragraph'
@@ -291,6 +293,9 @@ export interface NormalizedDocument {
 	narrations?: Record<string, NarrationEntry>;
 	warnings: string[];
 	includeCode: boolean;
+	/** How the spoken layer adapts this document; absent means the app default
+	 * (Natural). Set explicitly by the reader's mode control. */
+	listeningMode?: ListeningMode;
 	sourcePath?: string;
 	sourceBlob?: Blob;
 	/** Present for PDF sources parsed since normalization v13. */
