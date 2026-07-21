@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { wordsFor } from './speech-words';
-import { applySpokenStyle, normalizeForSpeech, spokenWordSpans } from './spoken-style';
+import {
+	applySpokenStyle,
+	FOCUSED_SPOKEN_RULES,
+	NATURAL_SPOKEN_RULES,
+	normalizeForSpeech,
+	spokenWordSpans,
+	VERBATIM_SPOKEN_RULES,
+	type SpokenRule
+} from './spoken-style';
 
 /** The contract the whole highlight pipeline depends on: one span per spoken
  * word, in the same order, pointing at monotonic display ranges inside the
  * source. Asserted for every example so no rule can quietly desync. */
-function expectInvariant(text: string) {
-	const { spoken, spans } = applySpokenStyle(text);
+function expectInvariant(text: string, rules?: SpokenRule[]) {
+	const { spoken, spans } = applySpokenStyle(text, rules);
 	const tokens = wordsFor(spoken);
 	expect(spans.map((s) => s.text)).toEqual(tokens.map((t) => t.text));
 	for (let i = 1; i < spans.length; i += 1) {
@@ -146,5 +154,130 @@ describe('rules compose without breaking the invariant', () => {
 		expect(normalizeForSpeech('')).toBe('');
 		expect(normalizeForSpeech('   ')).toBe('');
 		expectInvariant('!!! ??? ...');
+	});
+});
+
+describe('punctuation pull never fuses word-joining characters', () => {
+	// The old pull was guarded only against ASCII-digit fusion ((?!\d)). But a
+	// '.'/':' with letters (or non-ASCII digits) on both sides is a word-joining
+	// character for Intl.Segmenter, so pulling the space in "X .Y" produced one
+	// fewer token than spans and desynced highlighting for the rest of a segment.
+	const cases = [
+		'The method [2].Then it converges.',
+		'Trust it (Smith, 2020).Next we show more.',
+		'See Fig. 1 and the key .value here.',
+		'x [2] :y done.',
+		'Value ١ .٥ with Fig. 2.', // Arabic-Indic digits are Numeric to Segmenter
+		'A ratio 10 .5 held after Eq. 3.'
+	];
+	it('holds under natural rules', () => {
+		for (const sample of cases) expectInvariant(sample, NATURAL_SPOKEN_RULES);
+	});
+	it('holds under focused rules', () => {
+		for (const sample of [...cases, 'Shown in (see Fig. 3).The next step.'])
+			expectInvariant(sample, FOCUSED_SPOKEN_RULES);
+	});
+
+	// Deterministic fuzz over the rules' own trigger alphabet, joined with and
+	// without spaces so elisions land directly against following punctuation.
+	it('holds for fuzzed inputs built from trigger tokens', () => {
+		const tokens = [
+			'The',
+			'method',
+			'Then',
+			'value',
+			'done',
+			'[2]',
+			'[3, 5]',
+			'[12-15]',
+			'(Smith, 2020)',
+			'(see Fig. 3)',
+			'(cf. Table 2)',
+			'(Fig. 4)',
+			'(n = 30)',
+			'Fig.',
+			'Eq.',
+			'No.',
+			'et al.',
+			'vs.',
+			'etc.',
+			'e.g.,',
+			'§',
+			'12-15',
+			'10 - 4',
+			'95%',
+			'~50',
+			'https://a.io/x',
+			'.Then',
+			'.value',
+			':y',
+			'.',
+			':',
+			',',
+			'!',
+			'?',
+			'1',
+			'5',
+			'١',
+			'٥',
+			'x',
+			'Y'
+		];
+		const seps = ['', ' ', '  '];
+		// mulberry32 — a seeded PRNG keeps failures reproducible.
+		let seed = 0x9e3779b9;
+		const rand = () => {
+			seed |= 0;
+			seed = (seed + 0x6d2b79f5) | 0;
+			let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+			t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+			return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+		};
+		const pick = <T>(list: T[]): T => list[Math.floor(rand() * list.length)];
+		const ruleSets: SpokenRule[][] = [
+			VERBATIM_SPOKEN_RULES,
+			NATURAL_SPOKEN_RULES,
+			FOCUSED_SPOKEN_RULES
+		];
+		for (let i = 0; i < 2000; i += 1) {
+			const count = 2 + Math.floor(rand() * 6);
+			let text = pick(tokens);
+			for (let j = 1; j < count; j += 1) text += pick(seps) + pick(tokens);
+			for (const rules of ruleSets) expectInvariant(text, rules);
+		}
+	});
+});
+
+describe('lower-severity spoken-style refinements', () => {
+	it('does not fire vs./et al. inside a larger word', () => {
+		expect(normalizeForSpeech('Use VSCode for this.')).toBe('Use VSCode for this.');
+		expect(normalizeForSpeech('vsync is enabled.')).toBe('vsync is enabled.');
+		expect(normalizeForSpeech('The word et alone appears.')).toBe('The word et alone appears.');
+		// …but real abbreviations still expand.
+		expect(normalizeForSpeech('Model A vs. Model B.')).toBe('Model A versus Model B.');
+		expect(normalizeForSpeech('Following Vaswani et al. we continue.')).toBe(
+			'Following Vaswani and colleagues we continue.'
+		);
+	});
+
+	it('reads a spaced dash as subtraction, not a range', () => {
+		expect(normalizeForSpeech('Compute 10 - 4 = 6.')).toBe('Compute 10 - 4 = 6.');
+		expect(normalizeForSpeech('We had 3 - 1 wins.')).toBe('We had 3 - 1 wins.');
+		// Tight hyphens and spaced en dashes are still ranges.
+		expect(normalizeForSpeech('Pages 12-15 cover it.')).toBe('Pages 12 to 15 cover it.');
+		expect(normalizeForSpeech('See 3 – 7 for more.')).toBe('See 3 to 7 for more.');
+	});
+
+	it('leaves "No." alone when it closes a sentence', () => {
+		expect(normalizeForSpeech('Answer: No. 5 is better.')).toBe('Answer: No. 5 is better.');
+		// A genuine number reference still expands.
+		expect(normalizeForSpeech('See No. 7 below.')).toBe('See number 7 below.');
+	});
+
+	it('keeps the terminal period after etc. and pluralizes Figs./Eqs./Refs.', () => {
+		expect(normalizeForSpeech('We use A, B, etc.')).toBe('We use A, B, and so on.');
+		expect(normalizeForSpeech('See Figs. 1 and 2 and Eqs. 3-4.')).toBe(
+			'See Figures 1 and 2 and Equations 3 to 4.'
+		);
 	});
 });

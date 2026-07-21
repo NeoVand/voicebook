@@ -133,7 +133,7 @@
 		class:open
 		type="button"
 		role="combobox"
-		aria-label={label}
+		aria-label={`${label}: ${selectedLabel}`}
 		aria-controls={`${uid}-listbox`}
 		aria-expanded={open}
 		aria-haspopup="listbox"

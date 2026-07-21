@@ -72,21 +72,29 @@ const parentheticalCitationRule: SpokenRule = {
 };
 
 const ABBREVIATIONS: ReadonlyArray<readonly [RegExp, string]> = [
-	[/\bet al\.?/gi, 'and colleagues'],
+	// The trailing (?![\p{L}\p{N}]) stops "vs"/"et al" from firing inside a larger
+	// word ("VSCode", "vsync", "et alone") — a bare \b before them is not enough.
+	[/\bet al\.?(?![\p{L}\p{N}])/giu, 'and colleagues'],
 	[/\be\.g\.,?/gi, 'for example,'],
 	[/\bi\.e\.,?/gi, 'that is,'],
-	[/\betc\./gi, 'and so on'],
+	// Match "etc" but not its period, so a sentence-final "etc." keeps the period
+	// (and its TTS pause) instead of being swallowed into "and so on".
+	[/\betc(?=\.)/gi, 'and so on'],
 	[/\bcf\./gi, 'compare'],
-	[/\bvs\.?/gi, 'versus'],
+	[/\bvs\.?(?![\p{L}\p{N}])/giu, 'versus'],
 	[/\bapprox\./gi, 'approximately'],
-	[/\bFigs?\./g, 'Figure'],
-	[/\bEqs?\./g, 'Equation'],
-	[/\bRefs?\./g, 'Reference'],
+	[/\bFig\./g, 'Figure'],
+	[/\bFigs\./g, 'Figures'],
+	[/\bEq\./g, 'Equation'],
+	[/\bEqs\./g, 'Equations'],
+	[/\bRef\./g, 'Reference'],
+	[/\bRefs\./g, 'References'],
 	[/\bSec\./g, 'Section'],
 	[/\bCh\./g, 'Chapter'],
 	[/§\s*/g, 'Section '],
 	[/\bpp?\.\s*(?=\d)/gi, 'page '],
-	[/\bNo\.\s*(?=\d)/g, 'number '],
+	// Not "number" when "No." ends a sentence ("Answer: No. 5 is better.").
+	[/(?<![.:!?]\s)\bNo\.\s*(?=\d)/g, 'number '],
 	[/\bChap\./g, 'Chapter']
 ];
 
@@ -99,11 +107,13 @@ const abbreviationRules: SpokenRule[] = ABBREVIATIONS.map(([pattern, replacement
 /**
  * "12–15" or "12-15" → "12 to 15", for short numbers only. The negative
  * look-behind and bounded digit counts keep it away from years ("2020-2021"),
- * phone numbers ("555-1234"), and identifiers ("ISO 8601-2").
+ * phone numbers ("555-1234"), and identifiers ("ISO 8601-2"). A hyphen-minus
+ * must be tight ("12-15") — a spaced one is subtraction ("10 - 4"), left alone
+ * — while an en/em dash reads as a range whether spaced or not ("12 – 15").
  */
 const numberRangeRule: SpokenRule = {
 	name: 'number-range',
-	pattern: /(?<![\d.])(\d{1,3})\s*[-–—]\s*(?=\d{1,3}(?![\d])(?!\.\d))/g,
+	pattern: /(?<![\d.])(\d{1,3})(?:-|\s*[–—]\s*)(?=\d{1,3}(?![\d])(?!\.\d))/g,
 	replace: (match) => `${match[1]} to `
 };
 
@@ -119,12 +129,21 @@ const symbolRules: SpokenRule[] = [
  * pointer parentheticals ("(Fig. 3)", "(Appendix A)"). Focused mode only.
  * The see/cf branch requires a digit so a real "(see, this matters)" aside is
  * kept; Natural keeps all of these.
+ *
+ * Like the citation rule, the pattern matches any parenthetical linearly (one
+ * `[^()]*`, a required closing paren) and classifies the bounded match in code.
+ * Combining the branches into one pattern reintroduced the quadratic backtrack
+ * the phase-6 fix removed: two `[^()]*` around `\d` with a trailing `\)` blows
+ * up on unbalanced input.
  */
+const CROSS_REFERENCE_SEE = /^\((?:see|cf\.?)\s+[^()]*\d/i;
+const CROSS_REFERENCE_POINTER =
+	/^\((?:fig(?:ure|s)?|tables?|tab|eqs?|equations?|sec(?:tion|s)?|appendix|appendices|chapters?|ch)\.?\s*[\dA-Za-z]+(?:\s*[–-]\s*[\dA-Za-z]+)?\)$/i;
 const crossReferenceRule: SpokenRule = {
 	name: 'cross-reference',
-	pattern:
-		/\((?:see|cf\.?)\s+[^()]*\d[^()]*\)|\((?:fig(?:ure|s)?|tables?|tab|eqs?|equations?|sec(?:tion|s)?|appendix|appendices|chapters?|ch)\.?\s*[\dA-Za-z]+(?:\s*[–-]\s*[\dA-Za-z]+)?\)/gi,
-	replace: () => ''
+	pattern: /\([^()]*\)/g,
+	replace: (match) =>
+		CROSS_REFERENCE_SEE.test(match[0]) || CROSS_REFERENCE_POINTER.test(match[0]) ? '' : null
 };
 
 /** Verbatim mode reads the page literally — only URLs still collapse to a
@@ -220,13 +239,14 @@ export function applySpokenStyle(
 	}
 	spoken += tail;
 	// Collapse the padding whitespace and pull sentence punctuation back
-	// against its word ("work ." → "work."). The `(?!\d)` guard is load-bearing:
-	// pulling a '.' or ',' onto a digit that is followed by a digit ("10 .5")
-	// would fuse them into one number token, changing wordsFor(spoken)'s count
-	// and breaking its index-for-index alignment with `spans`.
+	// against its word ("work ." → "work."). Only pull when whitespace or the
+	// end follows: a '.' or ':' with a word character on both sides is a
+	// word-joining character for Intl.Segmenter ("method.Then", "10 .5"), so
+	// fusing there would drop a token from wordsFor(spoken) and break its
+	// index-for-index alignment with `spans`.
 	const cleaned = spoken
 		.replace(/\s+/g, ' ')
-		.replace(/\s+([.,;:!?])(?!\d)/g, '$1')
+		.replace(/\s+([.,;:!?])(?=\s|$)/g, '$1')
 		.trim();
 	return { spoken: cleaned, spans };
 }

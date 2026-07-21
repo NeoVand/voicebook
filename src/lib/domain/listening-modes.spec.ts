@@ -51,4 +51,19 @@ describe('listening modes', () => {
 			'The trend holds (see Section 3) across runs.'
 		);
 	});
+
+	it('keeps see/cf asides without a numeric target', () => {
+		expect(spoken('focused', 'A caution (see, this matters) remains.')).toBe(
+			'A caution (see, this matters) remains.'
+		);
+	});
+
+	it('stays linear on adversarial cross-reference input (focused mode)', () => {
+		// The combined-branch pattern this replaced was quadratic: two [^()]*
+		// around \d with a required \) blew up when the paren never closed.
+		const unclosed = '(see 1' + '1'.repeat(20_000);
+		const start = performance.now();
+		spoken('focused', unclosed);
+		expect(performance.now() - start).toBeLessThan(500);
+	});
 });

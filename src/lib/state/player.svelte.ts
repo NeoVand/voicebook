@@ -14,6 +14,7 @@ import { segmentBlocks, segmentsEqual } from '$lib/domain/segmenter';
 import { backMatterAnnouncement } from '$lib/domain/back-matter';
 import {
 	DEFAULT_LISTENING_MODE,
+	isListeningMode,
 	skipsBackMatter,
 	spokenRulesFor
 } from '$lib/domain/listening-modes';
@@ -141,8 +142,10 @@ export class VoicebookPlayer {
 	 * resume on top of it. */
 	private skipToken = 0;
 	/** When true, natural playback announces and skips back-matter sections
-	 * (references, notes). Manual navigation always plays them regardless. */
-	skipBackMatter = true;
+	 * (references, notes). Manual navigation always plays them regardless.
+	 * Reactive: the transport rail's muted band reads it through a getter, and a
+	 * segmentsEqual short-circuit can change it without reassigning segments. */
+	skipBackMatter = $state(true);
 	private manualStop = false;
 	private frame = 0;
 	private lastUiFrameAt = 0;
@@ -435,9 +438,11 @@ export class VoicebookPlayer {
 		if (this.isPlaying) this.prefetch();
 	}
 
-	/** The open document's effective listening mode. */
+	/** The open document's effective listening mode. Validated on read: the
+	 * persisted field is untrusted, and the command bar renders it directly. */
 	get listeningMode(): ListeningMode {
-		return this.book?.listeningMode ?? DEFAULT_LISTENING_MODE;
+		const mode = this.book?.listeningMode;
+		return isListeningMode(mode) ? mode : DEFAULT_LISTENING_MODE;
 	}
 
 	/**
@@ -451,8 +456,12 @@ export class VoicebookPlayer {
 	async setListeningMode(mode: ListeningMode): Promise<void> {
 		const book = this.book;
 		if (!book || book.listeningMode === mode) return;
-		const wasPlaying = this.isPlaying;
-		if (wasPlaying) this.pause();
+		// isPlaying only flips true after synthesis and the audio-output unlock —
+		// a multi-second window on cold start. Treat that buffering window as
+		// active too, so a second mode change (the picker's onChange isn't
+		// awaited) pauses and restarts rather than rebinding underneath the first.
+		const wasActive = this.isPlaying || this.isBuffering;
+		if (wasActive) this.pause();
 		book.listeningMode = mode;
 		this.skipBackMatter = skipsBackMatter(mode);
 		const next = segmentBlocks(
@@ -463,7 +472,9 @@ export class VoicebookPlayer {
 		);
 		this.rebindSegments(next);
 		await appState.saveDocument(book).catch(() => undefined);
-		if (wasPlaying) await this.play();
+		// The save is an IndexedDB round-trip; the user may have opened another
+		// document in the meantime. Never resume playback on top of it.
+		if (wasActive && this.book === book) await this.play();
 	}
 
 	private reprioritize(preserveDocumentPreparation = false): void {
@@ -938,8 +949,9 @@ export class VoicebookPlayer {
 	async play(): Promise<void> {
 		if (!this.book || !this.currentSegment) return;
 		if (this.isPlaying) return;
+		// stopAside bumps skipToken, so an in-flight back-matter announcement sees
+		// this Play (including a media key) as the user taking over.
 		this.stopAside();
-		this.skipToken += 1;
 		// Consume the structural pause up front so it can't leak onto a later
 		// manual start if synthesis throws before playback begins. Only a fresh
 		// passage start (position 0) gets the beat — never a mid-passage resume.
@@ -1093,25 +1105,29 @@ export class VoicebookPlayer {
 	}
 
 	private async announceAndSkipBackMatter(): Promise<void> {
-		const startIndex = this.currentSegmentIndex;
-		const block = this.book?.blocks.find((b) => b.id === this.currentSegment?.blockId);
-		const heading =
-			block?.kind === 'heading' ? block.text : (this.currentSegment?.text ?? 'references');
+		const startId = this.currentSegment?.id;
+		const heading = this.backMatterHeadingLabel();
 		const bookId = this.book?.id;
-		const resumeIndex = this.firstNonBackMatter(startIndex);
+		// Capture the resume target by id, not index: an aside is not "playing",
+		// so a narration rebind is free to replace segments while the announcement
+		// speaks, and rebindSegments neither bumps skipToken nor changes the book
+		// id — only a captured index would silently point at the wrong segment.
+		const resumeStart = this.firstNonBackMatter(this.currentSegmentIndex);
+		const resumeId = resumeStart === undefined ? undefined : this.book?.segments[resumeStart]?.id;
 		// Any playback transition during the announcement (Play — including a
-		// media key — pause, stop, or a document switch) bumps skipToken; if it
-		// changed, the user took over and we must not resume on top of them.
+		// media key — pause, stop, Escape, an Explain request, or a document
+		// switch) bumps skipToken; if it changed, the user took over and we must
+		// not resume on top of them.
 		const token = ++this.skipToken;
 		await this.speakAside(backMatterAnnouncement(heading));
 		if (
 			token !== this.skipToken ||
 			this.book?.id !== bookId ||
-			this.currentSegmentIndex !== startIndex
+			this.currentSegment?.id !== startId
 		) {
 			return;
 		}
-		if (resumeIndex === undefined) {
+		if (resumeId === undefined) {
 			// Nothing but back matter remains: stop at its heading so the reader
 			// can still see and scroll it.
 			this.isPlaying = false;
@@ -1121,6 +1137,8 @@ export class VoicebookPlayer {
 			if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
 			return;
 		}
+		const resumeIndex = this.book?.segments.findIndex((segment) => segment.id === resumeId) ?? -1;
+		if (resumeIndex < 0) return; // the resume target was dropped by a rebind
 		this.currentSegmentIndex = resumeIndex;
 		this.position = 0;
 		this.currentWordIndex = 0;
@@ -1129,14 +1147,29 @@ export class VoicebookPlayer {
 		await this.play();
 	}
 
+	/** The label for the skip notice: the current back-matter heading, or — when
+	 * the heading block produced no speech segment — the nearest heading above
+	 * the playhead. Never the first bibliography entry (the old fallback, which
+	 * read a citation aloud as the section name). */
+	private backMatterHeadingLabel(): string {
+		const blocks = this.book?.blocks ?? [];
+		const index = blocks.findIndex((block) => block.id === this.currentSegment?.blockId);
+		const current = index >= 0 ? blocks[index] : undefined;
+		if (current?.kind === 'heading') return current.text;
+		for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+			if (blocks[cursor].kind === 'heading') return blocks[cursor].text;
+		}
+		return 'references';
+	}
+
 	private stopPlayback(persistPosition: boolean): void {
 		if (this.isPlaying && persistPosition) this.updateClock();
 		this.playThrough = undefined;
 		this.manualStop = true;
 		// A stop/pause/switch also silences any skip announcement in flight and
-		// invalidates its pending resume; a queued structural pause is dropped.
+		// invalidates its pending resume (stopAside bumps skipToken); a queued
+		// structural pause is dropped.
 		this.stopAside();
-		this.skipToken += 1;
 		this.pendingLeadSilence = 0;
 		try {
 			this.source?.stop();
@@ -1219,7 +1252,9 @@ export class VoicebookPlayer {
 		// the model already phrased the answer for a listener.
 		const spoken = applySpokenStyle(text.trim(), VERBATIM_SPOKEN_RULES).spoken;
 		if (!spoken) return;
-		this.stopAside();
+		// clearAside, not stopAside: this pre-clear must not bump skipToken, or a
+		// back-matter announcement would invalidate its own pending resume.
+		this.clearAside();
 		if (this.isPlaying) this.pause();
 		const controller = new AbortController();
 		this.asideAbort = controller;
@@ -1288,8 +1323,20 @@ export class VoicebookPlayer {
 		}
 	}
 
-	/** Cut short an in-flight or speaking aside. Safe to call when idle. */
+	/** Cut short an in-flight or speaking aside. Safe to call when idle.
+	 *
+	 * Bumps skipToken so a back-matter skip that is awaiting its announcement
+	 * treats this as the user taking over: Escape, an Explain request, or closing
+	 * the explain box must not let document playback resume on top of them.
+	 * speakAside's own pre-clear uses clearAside() instead, so setting up the
+	 * announcement never invalidates the token it just captured. */
 	stopAside(): void {
+		this.skipToken += 1;
+		this.clearAside();
+	}
+
+	/** Tear down the aside audio graph without touching skipToken. */
+	private clearAside(): void {
 		this.asideAbort?.abort();
 		this.asideAbort = undefined;
 		try {

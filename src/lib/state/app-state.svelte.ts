@@ -19,6 +19,7 @@ import type {
 } from '$lib/domain/types';
 import {
 	clearGeneratedAudio,
+	deleteAudioForSegments,
 	deleteDocument as deleteStoredDocument,
 	getDocumentByFingerprint,
 	getSource,
@@ -83,6 +84,22 @@ function findMigratedSegment(
 				segment.normalizedText.toLocaleLowerCase().includes(normalizedExcerpt)
 			)
 		: undefined;
+}
+
+/**
+ * Purge generated audio orphaned by a startup re-segmentation. The audio cache
+ * key embeds a segment's spoken text, so when refreshDocumentSegments rewrites
+ * that text (e.g. the spoken layer landing on a pre-existing document) the old
+ * variants can never be hit again. Nothing else prunes them — rebindSegments is
+ * not on this path — so without this they accumulate in IndexedDB/OPFS forever.
+ */
+function pruneStaleAudioFor(previous: NormalizedDocument, refreshed: NormalizedDocument): void {
+	if (refreshed === previous) return; // segments unchanged: every cache key still valid
+	const nextTextById = new Map(refreshed.segments.map((s) => [s.id, s.normalizedText]));
+	const staleIds = previous.segments
+		.filter((segment) => nextTextById.get(segment.id) !== segment.normalizedText)
+		.map((segment) => segment.id);
+	if (staleIds.length) void deleteAudioForSegments(previous.id, staleIds).catch(() => undefined);
 }
 
 async function migrateDocumentNormalization(
@@ -219,7 +236,11 @@ export class VoicebookState {
 			for (const document of documents) {
 				normalizedDocuments.push(await migrateDocumentNormalization(document));
 			}
-			const refreshedDocuments = normalizedDocuments.map(refreshDocumentSegments);
+			const refreshedDocuments = normalizedDocuments.map((document) => {
+				const refreshed = refreshDocumentSegments(document);
+				pruneStaleAudioFor(document, refreshed);
+				return refreshed;
+			});
 			this.documents = refreshedDocuments;
 			await Promise.all(
 				refreshedDocuments.map((document, index) =>

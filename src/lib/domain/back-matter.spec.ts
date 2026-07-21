@@ -32,6 +32,13 @@ describe('isBackMatterHeading', () => {
 	it('normalizes headings for comparison', () => {
 		expect(normalizeHeadingTitle('  3.  References. ')).toBe('references');
 	});
+
+	it('detects multi-level numbered headings', () => {
+		expect(isBackMatterHeading('7.1 References')).toBe(true);
+		expect(isBackMatterHeading('7.1. References')).toBe(true);
+		expect(isBackMatterHeading('2.3.1 Notes')).toBe(true);
+		expect(normalizeHeadingTitle('7.1 Bibliography')).toBe('bibliography');
+	});
 });
 
 describe('backMatterBlockIds', () => {
@@ -58,14 +65,36 @@ describe('backMatterBlockIds', () => {
 		expect(ids.has('a0')).toBe(false);
 	});
 
-	it('keeps subheadings inside the references section', () => {
+	it('closes at a following non-back-matter heading even when it is deeper', () => {
+		// A deeper "Appendix" after "References" is real content, not a subsection
+		// of it — PDF/DOCX font-size heuristics can't be trusted to rank them, and
+		// swallowing it would hide the rest of the document from playback.
+		const ids = backMatterBlockIds([
+			heading('h0', 'Conclusion', 1),
+			para('p0'),
+			heading('h1', 'References', 1),
+			para('r0'),
+			heading('h2', 'Appendix A', 2),
+			para('a0'),
+			para('a1')
+		]);
+		expect([...ids]).toEqual(['h1', 'r0']);
+		expect(ids.has('h2')).toBe(false);
+		expect(ids.has('a0')).toBe(false);
+	});
+
+	it('ends the section at a non-back-matter subheading (level-agnostic close)', () => {
+		// The deliberate trade-off: a references section that carries its own
+		// subheadings ends at the first one. Skipping a few fewer entries is far
+		// cheaper than swallowing a following section and stalling playback.
 		const ids = backMatterBlockIds([
 			heading('h1', 'References', 1),
 			heading('h2', 'Primary Sources', 2),
 			para('r0')
 		]);
-		expect(ids.has('h2')).toBe(true);
-		expect(ids.has('r0')).toBe(true);
+		expect(ids.has('h1')).toBe(true);
+		expect(ids.has('h2')).toBe(false);
+		expect(ids.has('r0')).toBe(false);
 	});
 
 	it('merges adjacent back-matter sections (references then acknowledgements)', () => {
