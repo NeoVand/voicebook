@@ -72,6 +72,15 @@ describe('citation elision', () => {
 		expect(performance.now() - start).toBeLessThan(500);
 	});
 
+	it('stays linear on a long unpunctuated digit run (percent rule)', () => {
+		// A "%"-less run of thousands of digits must not make the percent rule's
+		// "\d+ ... %" tail backtrack quadratically.
+		const digits = '9'.repeat(40_000);
+		const start = performance.now();
+		normalizeForSpeech(digits);
+		expect(performance.now() - start).toBeLessThan(500);
+	});
+
 	it('keeps every citation display range unhighlighted while neighbors map to themselves', () => {
 		const text = 'Method [2] wins.';
 		const spans = spokenWordSpans(text);

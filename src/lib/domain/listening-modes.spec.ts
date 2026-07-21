@@ -59,9 +59,11 @@ describe('listening modes', () => {
 	});
 
 	it('stays linear on adversarial cross-reference input (focused mode)', () => {
-		// The combined-branch pattern this replaced was quadratic: two [^()]*
-		// around \d with a required \) blew up when the paren never closed.
-		const unclosed = '(see 1' + '1'.repeat(20_000);
+		// Many digit tokens after "(see " with no closing paren is the shape that
+		// made the old combined branch (two [^()]* around \d, required \)) blow up
+		// quadratically. Spaced single digits keep this isolated to the
+		// cross-reference rule (a pure digit run would exercise other rules).
+		const unclosed = '(see ' + '1 '.repeat(40_000);
 		const start = performance.now();
 		spoken('focused', unclosed);
 		expect(performance.now() - start).toBeLessThan(500);

@@ -118,7 +118,14 @@ const numberRangeRule: SpokenRule = {
 };
 
 const symbolRules: SpokenRule[] = [
-	{ name: 'percent', pattern: /(\d+(?:\.\d+)?)\s*%/g, replace: (m) => `${m[1]} percent` },
+	// Digit runs are bounded so an unpunctuated run of thousands of digits (OCR
+	// of a numeric table) can't make the "%" tail backtrack quadratically. No
+	// real percentage approaches 15 integer or fractional digits.
+	{
+		name: 'percent',
+		pattern: /(\d{1,15}(?:\.\d{1,15})?)\s*%/g,
+		replace: (m) => `${m[1]} percent`
+	},
 	{ name: 'plus-minus', pattern: /±\s*/g, replace: () => 'plus or minus ' },
 	{ name: 'approx-tilde', pattern: /~\s*(?=\d)/g, replace: () => 'approximately ' }
 ];
