@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeForSpeech, spokenWordSpans, wordsFor } from './speech-words';
+import { wordsFor } from './speech-words';
+import { normalizeForSpeech, spokenWordSpans } from './spoken-style';
 import { segmentBlocks } from './segmenter';
 import type { DocumentBlock } from './types';
 

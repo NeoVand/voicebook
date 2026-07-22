@@ -3,6 +3,7 @@ import {
 	codeBlockFallback,
 	NARRATION_PROMPT_VERSION,
 	hashNarrationSource,
+	imageFallback,
 	inlineConstructSpans,
 	inlineMathFallback,
 	mathBlockFallback,
@@ -117,6 +118,24 @@ describe('tableRowRanges', () => {
 		const ranges = tableRowRanges('Name. Bob', table);
 		expect(ranges.rows[0]).toBeNull();
 		expect(ranges.rows[1]).not.toBeNull();
+	});
+});
+
+describe('imageFallback', () => {
+	it('frames a caption-less image instead of saying the bare word "Image"', () => {
+		expect(imageFallback({ text: 'Image', image: { alt: '' } })).toBe('A figure is shown here.');
+		expect(
+			imageFallback({ text: 'Image', image: { alt: '', src: 'data:image/png;base64,AA' } })
+		).toBe('A figure is shown here.');
+	});
+
+	it('reads a caption as-is (it already frames itself)', () => {
+		expect(imageFallback({ text: 'x', image: { alt: 'Figure 1: loss over epochs.' } })).toBe(
+			'Figure 1: loss over epochs.'
+		);
+		expect(imageFallback({ text: 'x', image: { alt: '', title: 'Architecture diagram' } })).toBe(
+			'Architecture diagram'
+		);
 	});
 });
 

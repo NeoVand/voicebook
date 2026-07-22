@@ -5,8 +5,10 @@ import {
 	fingerprint,
 	importFile
 } from '$lib/domain/importers';
+import { DEFAULT_LISTENING_MODE, spokenRulesFor } from '$lib/domain/listening-modes';
 import { refreshDocumentSegments, segmentBlocks } from '$lib/domain/segmenter';
 import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
+import { readerChrome } from '$lib/state/reader-chrome.svelte';
 import type {
 	DeviceCapabilities,
 	ListenedRange,
@@ -17,6 +19,7 @@ import type {
 } from '$lib/domain/types';
 import {
 	clearGeneratedAudio,
+	deleteAudioForSegments,
 	deleteDocument as deleteStoredDocument,
 	getDocumentByFingerprint,
 	getSource,
@@ -83,6 +86,22 @@ function findMigratedSegment(
 		: undefined;
 }
 
+/**
+ * Purge generated audio orphaned by a startup re-segmentation. The audio cache
+ * key embeds a segment's spoken text, so when refreshDocumentSegments rewrites
+ * that text (e.g. the spoken layer landing on a pre-existing document) the old
+ * variants can never be hit again. Nothing else prunes them — rebindSegments is
+ * not on this path — so without this they accumulate in IndexedDB/OPFS forever.
+ */
+function pruneStaleAudioFor(previous: NormalizedDocument, refreshed: NormalizedDocument): void {
+	if (refreshed === previous) return; // segments unchanged: every cache key still valid
+	const nextTextById = new Map(refreshed.segments.map((s) => [s.id, s.normalizedText]));
+	const staleIds = previous.segments
+		.filter((segment) => nextTextById.get(segment.id) !== segment.normalizedText)
+		.map((segment) => segment.id);
+	if (staleIds.length) void deleteAudioForSegments(previous.id, staleIds).catch(() => undefined);
+}
+
 async function migrateDocumentNormalization(
 	document: NormalizedDocument
 ): Promise<NormalizedDocument> {
@@ -117,7 +136,16 @@ async function migrateDocumentNormalization(
 		// Narrations survive re-parsing; block-id shifts are healed by the
 		// content-hash rescue in reconcileNarrations on the next document open.
 		reparsed.narrations = document.narrations;
-		reparsed.segments = segmentBlocks(reparsed.blocks, reparsed.includeCode, reparsed.narrations);
+		// A re-parse must preserve the reader's per-document listening mode, and
+		// segment with that mode's rules — otherwise a future normalization bump
+		// would silently revert a Verbatim/Focused document to Natural.
+		reparsed.listeningMode = document.listeningMode;
+		reparsed.segments = segmentBlocks(
+			reparsed.blocks,
+			reparsed.includeCode,
+			reparsed.narrations,
+			spokenRulesFor(reparsed.listeningMode ?? DEFAULT_LISTENING_MODE)
+		);
 		reparsed.id = document.id;
 		reparsed.fingerprint = document.fingerprint;
 		reparsed.createdAt = document.createdAt;
@@ -208,7 +236,11 @@ export class VoicebookState {
 			for (const document of documents) {
 				normalizedDocuments.push(await migrateDocumentNormalization(document));
 			}
-			const refreshedDocuments = normalizedDocuments.map(refreshDocumentSegments);
+			const refreshedDocuments = normalizedDocuments.map((document) => {
+				const refreshed = refreshDocumentSegments(document);
+				pruneStaleAudioFor(document, refreshed);
+				return refreshed;
+			});
 			this.documents = refreshedDocuments;
 			await Promise.all(
 				refreshedDocuments.map((document, index) =>
@@ -253,11 +285,21 @@ export class VoicebookState {
 		}
 	}
 
+	/** New documents open in the reader's default listening mode; re-segment
+	 * only when that differs from how import spoke them (Natural). */
+	private withDefaultListeningMode(document: NormalizedDocument): NormalizedDocument {
+		const mode = readerChrome.defaultListeningMode;
+		if (mode === (document.listeningMode ?? DEFAULT_LISTENING_MODE)) {
+			return { ...document, listeningMode: mode };
+		}
+		return refreshDocumentSegments({ ...document, listeningMode: mode });
+	}
+
 	private async addImportedDocument(
 		document: NormalizedDocument,
 		source?: Blob
 	): Promise<NormalizedDocument> {
-		const saved = await putDocument(document, source);
+		const saved = await putDocument(this.withDefaultListeningMode(document), source);
 		this.documents = [saved, ...this.documents.filter((candidate) => candidate.id !== saved.id)];
 		this.storage = await storageSnapshot();
 		if (!this.storage.persisted && this.documents.length === 1) {

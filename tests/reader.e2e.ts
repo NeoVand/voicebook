@@ -1522,3 +1522,40 @@ test('recognizes a scanned PDF with on-device text recognition', async ({ page }
 	});
 	await expect(page.locator('.import-warning')).toContainText('text recognition');
 });
+
+test('listening modes change how a document is spoken and skip back matter', async ({ page }) => {
+	await openReadyLibrary(page);
+	await page.locator('#document-upload').setInputFiles({
+		name: 'modes.md',
+		mimeType: 'text/markdown',
+		buffer: Buffer.from(
+			[
+				'# Study',
+				'',
+				'We saw gains of approx. 5% in Fig. 3 [4].',
+				'',
+				'## References',
+				'',
+				'Vaswani, A. Attention is all you need. 2017.'
+			].join('\n') + '\n'
+		)
+	});
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+
+	const modeSelect = page.getByRole('combobox', { name: 'Listening mode' });
+	// New documents open in Natural, which skips the references (a muted band
+	// shows on the transport rail).
+	await expect(modeSelect).toContainText('Natural');
+	await expect(page.locator('.timeline-band.back-matter').first()).toBeVisible();
+
+	// Verbatim turns the spoken layer off — references are read, so their band
+	// disappears from the rail.
+	await modeSelect.click();
+	await page.getByRole('option', { name: 'Verbatim', exact: true }).click();
+	await expect(modeSelect).toContainText('Verbatim');
+	await expect(page.locator('.timeline-band.back-matter')).toHaveCount(0);
+
+	// The choice persists with the document across a reload.
+	await page.reload();
+	await expect(page.getByRole('combobox', { name: 'Listening mode' })).toContainText('Verbatim');
+});

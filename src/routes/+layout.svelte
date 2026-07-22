@@ -33,9 +33,17 @@
 	import { appearanceState } from '$lib/state/appearance.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
+	import CompactSelect from '$lib/components/CompactSelect.svelte';
+	import { LISTENING_MODES } from '$lib/domain/listening-modes';
+	import type { ListeningMode } from '$lib/domain/types';
 	import './layout.css';
 
 	let { children } = $props();
+
+	const listeningModeOptions = LISTENING_MODES.map((mode) => ({
+		value: mode.id,
+		label: mode.label
+	}));
 
 	const homeHref = resolve('/');
 	const settingsHref = resolve('/settings');
@@ -247,6 +255,17 @@
 				>
 					<List size={16} strokeWidth={1.6} />
 				</button>
+				<div class="listening-mode" title="How this document is read aloud">
+					<CompactSelect
+						label="Listening mode"
+						value={player.listeningMode}
+						options={listeningModeOptions}
+						onChange={(value) => player.setListeningMode(value as ListeningMode)}
+						triggerWidth="92px"
+						menuWidth="116px"
+						placement="down"
+					/>
+				</div>
 				<div class="document-zoom" role="group" aria-label="Document zoom">
 					<div class="zoom-control" bind:this={zoomRoot}>
 						<button
