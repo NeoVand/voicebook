@@ -172,6 +172,77 @@ describe('speech segmentation', () => {
 	});
 });
 
+describe('structural pauses', () => {
+	function firstOfBlock(segments: ReturnType<typeof segmentBlocks>, blockId: string) {
+		return segments.find((segment) => segment.blockId === blockId);
+	}
+
+	it('leaves a human beat before headings, after them, and between paragraphs', () => {
+		const segments = segmentBlocks([
+			block({ id: 'h', kind: 'heading', text: 'Introduction', level: 2, anchor: {} }),
+			block({ id: 'p1', text: 'First paragraph here.', anchor: {} }),
+			block({ id: 'p2', text: 'Second paragraph here.', anchor: {} }),
+			block({ id: 'h2', kind: 'heading', text: 'Methods', level: 2, anchor: {} })
+		]);
+		// The document's opening segment has no pause before it.
+		expect(firstOfBlock(segments, 'h')?.pauseBefore).toBeUndefined();
+		expect(firstOfBlock(segments, 'p1')?.pauseBefore).toBe(0.3); // breath after heading
+		expect(firstOfBlock(segments, 'p2')?.pauseBefore).toBe(0.22); // between paragraphs
+		expect(firstOfBlock(segments, 'h2')?.pauseBefore).toBe(0.55); // section break
+	});
+
+	it('gives a standalone figure its own beat', () => {
+		const segments = segmentBlocks([
+			block({ id: 'p', text: 'Body text before the figure.', anchor: {} }),
+			block({
+				id: 'fig',
+				kind: 'paragraph',
+				text: 'Image',
+				anchor: {},
+				inlines: [{ text: 'Image', image: { alt: '' } }]
+			})
+		]);
+		expect(firstOfBlock(segments, 'fig')?.pauseBefore).toBe(0.3);
+		// …and it now says a framed sentence rather than the bare word "Image".
+		expect(firstOfBlock(segments, 'fig')?.normalizedText).toBe('A figure is shown here.');
+	});
+
+	it('applies the given spoken-style rules to the spoken text', () => {
+		const text = 'See Fig. 2 [3] for the result.';
+		const natural = segmentBlocks([block({ id: 'b', text, anchor: {} })]);
+		expect(natural[0].normalizedText).toBe('See Figure 2 for the result.');
+		const verbatim = segmentBlocks([block({ id: 'b', text, anchor: {} })], false, {}, [
+			// empty rules → literal reading
+		]);
+		expect(verbatim[0].normalizedText).toBe(text);
+		// The highlight invariant still holds under either rule set.
+		expect(verbatim[0].words.length).toBe(wordsFor(verbatim[0].normalizedText).length);
+	});
+
+	it('tags back-matter segments so the player can skip them', () => {
+		const segments = segmentBlocks([
+			block({ id: 'h', kind: 'heading', text: 'Conclusion', level: 2, anchor: {} }),
+			block({ id: 'p', text: 'Final thoughts here.', anchor: {} }),
+			block({ id: 'refh', kind: 'heading', text: 'References', level: 2, anchor: {} }),
+			block({ id: 'r0', text: 'Smith, J. A study of studies.', anchor: {} })
+		]);
+		expect(segments.find((s) => s.blockId === 'p')?.role).toBeUndefined();
+		expect(segments.find((s) => s.blockId === 'refh')?.role).toBe('back-matter');
+		expect(segments.find((s) => s.blockId === 'r0')?.role).toBe('back-matter');
+	});
+
+	it('only marks the first segment of a multi-sentence block', () => {
+		const segments = segmentBlocks([
+			block({ id: 'a', text: 'One.', anchor: {} }),
+			block({ id: 'b', text: 'Two. Three. Four.', anchor: {} })
+		]);
+		const blockB = segments.filter((segment) => segment.blockId === 'b');
+		expect(blockB[0].pauseBefore).toBe(0.22);
+		expect(blockB[1].pauseBefore).toBeUndefined();
+		expect(blockB[2].pauseBefore).toBeUndefined();
+	});
+});
+
 describe('narrated construct segmentation', () => {
 	const mathBlock = block({ id: 'b1', kind: 'math', text: '\\int_0^1 x^2 dx', speak: false });
 

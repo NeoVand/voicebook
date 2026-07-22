@@ -1,4 +1,5 @@
 import type {
+	BlockKind,
 	DocumentBlock,
 	NarrationConstructKind,
 	NarrationEntry,
@@ -8,6 +9,7 @@ import type {
 } from './types';
 import {
 	codeBlockFallback,
+	imageFallback,
 	inlineConstructSpans,
 	inlineMathFallback,
 	mathBlockFallback,
@@ -19,9 +21,12 @@ import {
 	type TextRange
 } from './narration';
 
-import { normalizeForSpeech, spokenWordSpans, wordsFor } from './speech-words';
+import { backMatterBlockIds } from './back-matter';
+import { DEFAULT_LISTENING_MODE, spokenRulesFor } from './listening-modes';
+import { applySpokenStyle, DEFAULT_SPOKEN_RULES, type SpokenRule } from './spoken-style';
 
-export { normalizeForSpeech, wordsFor } from './speech-words';
+export { wordsFor } from './speech-words';
+export { normalizeForSpeech } from './spoken-style';
 
 export const MAX_SEGMENT_CHARS = 280;
 
@@ -65,8 +70,11 @@ function splitLongSentence(
 	return output;
 }
 
-export function estimateDuration(text: string): number {
-	const wordCount = Math.max(wordsFor(normalizeForSpeech(text)).length, 1);
+export function estimateDuration(text: string, rules: SpokenRule[] = DEFAULT_SPOKEN_RULES): number {
+	// Count the words actually spoken under the active mode, so a Verbatim
+	// segment (citations kept) and a Focused segment (asides dropped) get
+	// proportional timeline widths.
+	const wordCount = Math.max(applySpokenStyle(text, rules).spans.length, 1);
 	const punctuationPause =
 		(text.match(/[,;:]/g)?.length ?? 0) * 0.12 + (text.match(/[.!?]/g)?.length ?? 0) * 0.24;
 	return Math.max(0.7, wordCount / 2.65 + punctuationPause);
@@ -117,7 +125,8 @@ function pushConstructSegments(
 	constructKind: NarrationConstructKind,
 	spoken: string,
 	pending: boolean,
-	range: TextRange
+	range: TextRange,
+	rules: SpokenRule[]
 ): void {
 	const chunks = narrationChunks(spoken);
 	if (!chunks.length) return;
@@ -128,15 +137,16 @@ function pushConstructSegments(
 			index === chunks.length - 1
 				? range.end
 				: range.start + Math.floor((span * (index + 1)) / chunks.length);
+		const styled = applySpokenStyle(chunk, rules);
 		segments.push({
 			id: `${constructId}:n${index}`,
 			blockId: block.id,
 			text: chunk,
-			normalizedText: normalizeForSpeech(chunk),
+			normalizedText: styled.spoken,
 			start,
 			end,
-			words: spokenWordSpans(chunk),
-			estimatedDuration: estimateDuration(chunk),
+			words: styled.spans,
+			estimatedDuration: estimateDuration(chunk, rules),
 			anchor: {
 				...block.anchor,
 				start: (block.anchor.start ?? 0) + start,
@@ -156,14 +166,16 @@ function inlineReplacement(
 	if (entry?.status === 'ready' && entry.text?.trim()) {
 		return { text: entry.text.trim(), pending: false, hasEntry: true };
 	}
-	const fallback = span.kind === 'math-inline' ? inlineMathFallback(span.run.text) : span.run.text;
+	const fallback =
+		span.kind === 'math-inline' ? inlineMathFallback(span.run.text) : imageFallback(span.run);
 	return { text: fallback, pending: entry?.status === 'pending', hasEntry: Boolean(entry) };
 }
 
 export function segmentBlocks(
 	blocks: DocumentBlock[],
 	includeCode = false,
-	narrations: Record<string, NarrationEntry> = {}
+	narrations: Record<string, NarrationEntry> = {},
+	rules: SpokenRule[] = DEFAULT_SPOKEN_RULES
 ): SpeechSegment[] {
 	const segments: SpeechSegment[] = [];
 
@@ -181,7 +193,8 @@ export function segmentBlocks(
 				block.kind === 'math' ? 'math-block' : 'mermaid',
 				text,
 				pending,
-				{ start: 0, end: block.text.length }
+				{ start: 0, end: block.text.length },
+				rules
 			);
 			continue;
 		}
@@ -201,7 +214,8 @@ export function segmentBlocks(
 				'table-header',
 				headerSpoken.text,
 				false,
-				ranges.header ?? { start: 0, end: 0 }
+				ranges.header ?? { start: 0, end: 0 },
+				rules
 			);
 			block.table.rows.forEach((row, rowIndex) => {
 				const cells = row.map((cell) => cell.text);
@@ -215,7 +229,8 @@ export function segmentBlocks(
 					'table-row',
 					text,
 					pending,
-					ranges.rows[rowIndex] ?? { start: block.text.length, end: block.text.length }
+					ranges.rows[rowIndex] ?? { start: block.text.length, end: block.text.length },
+					rules
 				);
 			});
 			continue;
@@ -229,10 +244,16 @@ export function segmentBlocks(
 			const fallback = codeBlockFallback(block.text, block.codeLanguage);
 			const { text, pending } = spokenFor(narrations[block.id], fallback);
 			if (text) {
-				pushConstructSegments(segments, block, block.id, 'code-block', text, pending, {
-					start: 0,
-					end: block.text.length
-				});
+				pushConstructSegments(
+					segments,
+					block,
+					block.id,
+					'code-block',
+					text,
+					pending,
+					{ start: 0, end: block.text.length },
+					rules
+				);
 			}
 			continue;
 		}
@@ -271,7 +292,7 @@ export function segmentBlocks(
 					let rendered = '';
 					let cursor = start;
 					const pushPlainWords = (chunk: string, displayOffset: number) => {
-						for (const word of spokenWordSpans(chunk)) {
+						for (const word of applySpokenStyle(chunk, rules).spans) {
 							speechWords.push({
 								text: word.text,
 								start: displayOffset + word.start,
@@ -286,7 +307,7 @@ export function segmentBlocks(
 						rendered += block.text.slice(cursor, from);
 						if (span.start >= start) {
 							const replacement = inlineReplacement(span, narrations);
-							for (const word of wordsFor(normalizeForSpeech(replacement.text))) {
+							for (const word of applySpokenStyle(replacement.text, rules).spans) {
 								speechWords.push({ text: word.text, start: from - start, end: to - start });
 							}
 							rendered += replacement.text;
@@ -311,11 +332,11 @@ export function segmentBlocks(
 					id,
 					blockId: block.id,
 					text,
-					normalizedText: normalizeForSpeech(speech),
+					normalizedText: applySpokenStyle(speech, rules).spoken,
 					start,
 					end,
-					words: substituted ? speechWords : spokenWordSpans(text),
-					estimatedDuration: estimateDuration(speech),
+					words: substituted ? speechWords : applySpokenStyle(text, rules).spans,
+					estimatedDuration: estimateDuration(speech, rules),
 					anchor: {
 						...block.anchor,
 						start: (block.anchor.start ?? 0) + start,
@@ -327,7 +348,51 @@ export function segmentBlocks(
 		}
 	}
 
+	assignStructuralPauses(segments, blocks);
+	const backMatter = backMatterBlockIds(blocks);
+	if (backMatter.size) {
+		for (const segment of segments) {
+			if (backMatter.has(segment.blockId)) segment.role = 'back-matter';
+		}
+	}
 	return segments;
+}
+
+/** A paragraph that is nothing but a single image — the standalone figure the
+ * reader draws as a MediaFigure. It earns a beat before it, like a heading. */
+function isFigureBlock(block: DocumentBlock): boolean {
+	if (block.kind !== 'paragraph' || !block.inlines?.length) return false;
+	return block.inlines.length === 1 && Boolean(block.inlines[0].image);
+}
+
+/** Seconds of silence before the first segment of a block, given the block
+ * that spoke before it. Tuned to how a person paces a document aloud: a real
+ * pause at a heading, a breath after it, a beat before a figure or table, and
+ * a shorter rest between ordinary paragraphs and list items. */
+function pauseBeforeBlock(block: DocumentBlock, previousKind: BlockKind | undefined): number {
+	if (previousKind === undefined) return 0;
+	if (block.kind === 'heading') return 0.55;
+	if (previousKind === 'heading') return 0.3;
+	if (isFigureBlock(block) || block.kind === 'table' || block.kind === 'math') return 0.3;
+	if (block.kind === 'list-item') return previousKind === 'list-item' ? 0.12 : 0.2;
+	return 0.22;
+}
+
+/** Stamp `pauseBefore` onto the first segment of each block. A post-pass keeps
+ * the main segmentation loop (with its several construct branches) untouched:
+ * a segment starts a new block whenever its blockId differs from the one
+ * before it, and only blocks that actually spoke advance "previous". */
+function assignStructuralPauses(segments: SpeechSegment[], blocks: DocumentBlock[]): void {
+	const blockById = new Map(blocks.map((block) => [block.id, block]));
+	let previousKind: BlockKind | undefined;
+	for (let index = 0; index < segments.length; index += 1) {
+		if (index > 0 && segments[index].blockId === segments[index - 1].blockId) continue;
+		const block = blockById.get(segments[index].blockId);
+		if (!block) continue;
+		const pause = pauseBeforeBlock(block, previousKind);
+		if (pause > 0) segments[index].pauseBefore = pause;
+		previousKind = block.kind;
+	}
 }
 
 export function segmentsEqual(a: SpeechSegment[], b: SpeechSegment[]): boolean {
@@ -340,7 +405,12 @@ export function segmentsEqual(a: SpeechSegment[], b: SpeechSegment[]): boolean {
 			// spoken-word→display-span mapping introduced for substituted
 			// sentences); persisted segments refresh when they do.
 			segment.words.length === b[index].words.length &&
-			(segment.narration?.pending ?? false) === (b[index].narration?.pending ?? false)
+			(segment.narration?.pending ?? false) === (b[index].narration?.pending ?? false) &&
+			// Structural narration fields: a plain-prose document whose spoken
+			// text is unchanged still needs to pick up pauses and back-matter
+			// roles when it is first re-segmented on this version.
+			segment.pauseBefore === b[index].pauseBefore &&
+			segment.role === b[index].role
 	);
 }
 
@@ -376,7 +446,12 @@ function remapPosition(
 
 export function refreshDocumentSegments(document: NormalizedDocument): NormalizedDocument {
 	const previousSegments = document.segments;
-	const segments = segmentBlocks(document.blocks, document.includeCode, document.narrations ?? {});
+	const segments = segmentBlocks(
+		document.blocks,
+		document.includeCode,
+		document.narrations ?? {},
+		spokenRulesFor(document.listeningMode ?? DEFAULT_LISTENING_MODE)
+	);
 	if (segmentsEqual(previousSegments, segments)) return document;
 	const playbackPosition = document.playback
 		? semanticPosition(previousSegments, document.playback.segmentId, document.playback.wordIndex)

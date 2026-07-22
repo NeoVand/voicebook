@@ -1,5 +1,6 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { segmentBlocks, segmentsEqual } from '$lib/domain/segmenter';
+import { DEFAULT_LISTENING_MODE, spokenRulesFor } from '$lib/domain/listening-modes';
 import {
 	NARRATION_PROMPT_VERSION,
 	narrationConstructs,
@@ -564,7 +565,12 @@ export class NarrationState {
 			this.dirty = false;
 			return;
 		}
-		const next = segmentBlocks(book.blocks, book.includeCode, book.narrations ?? {});
+		const next = segmentBlocks(
+			book.blocks,
+			book.includeCode,
+			book.narrations ?? {},
+			spokenRulesFor(book.listeningMode ?? DEFAULT_LISTENING_MODE)
+		);
 		if (segmentsEqual(book.segments, next)) {
 			this.dirty = false;
 			return;
