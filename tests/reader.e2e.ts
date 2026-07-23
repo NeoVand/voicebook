@@ -1555,7 +1555,28 @@ test('listening modes change how a document is spoken and skip back matter', asy
 	await expect(modeSelect).toContainText('Verbatim');
 	await expect(page.locator('.timeline-band.back-matter')).toHaveCount(0);
 
-	// The choice persists with the document across a reload.
+	// The choice persists with the document across a reload. Both assertions
+	// above are satisfied synchronously (setListeningMode assigns the mode and
+	// rebinds segments before awaiting the save), so reloading here would race
+	// the in-flight IndexedDB write and intermittently restore Natural. Wait for
+	// the write to land first, the way the voice-selection test does.
+	await expect
+		.poll(() =>
+			page.evaluate(
+				() =>
+					new Promise<string | undefined>((resolve, reject) => {
+						const request = indexedDB.open('voicebook-v1');
+						request.onerror = () => reject(request.error);
+						request.onsuccess = () => {
+							const transaction = request.result.transaction('documents');
+							const documents = transaction.objectStore('documents').getAll();
+							documents.onerror = () => reject(documents.error);
+							documents.onsuccess = () => resolve(documents.result[0]?.listeningMode);
+						};
+					})
+			)
+		)
+		.toBe('verbatim');
 	await page.reload();
 	await expect(page.getByRole('combobox', { name: 'Listening mode' })).toContainText('Verbatim');
 });
