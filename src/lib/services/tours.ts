@@ -36,6 +36,16 @@ const TOURS: Record<TourContext, DriveStep[]> = {
 			}
 		},
 		{
+			element: '[data-tour="assistant"]',
+			popover: {
+				title: 'Voice assistant',
+				description:
+					'Hold it — or hold Space anywhere — to ask by voice; it answers aloud and highlights the passages it mentions. Click for voice, model, and hands-free options. Uses your OpenAI key.',
+				side: 'top',
+				align: 'start'
+			}
+		},
+		{
 			element: '[data-tour="play"]',
 			popover: {
 				title: 'Play',
@@ -183,6 +193,14 @@ const TOURS: Record<TourContext, DriveStep[]> = {
 				title: 'Descriptions engine',
 				description:
 					'Who rewrites equations, tables, diagrams, and images into speakable words: the on-device model, or Claude, GPT, or Gemini with your key.'
+			}
+		},
+		{
+			element: 'section[aria-labelledby="assistant-title"]',
+			popover: {
+				title: 'Voice assistant',
+				description:
+					'Pick its voice, model, and thinking depth. In the reader, hold the mic — or Space — and just talk about the document.'
 			}
 		},
 		{

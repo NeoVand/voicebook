@@ -11,14 +11,20 @@
  */
 import {
 	DEFAULT_ELEVENLABS_VOICE,
+	DEFAULT_REALTIME_EFFORT,
+	DEFAULT_REALTIME_VOICE,
 	ELEVENLABS_MODELS,
+	REALTIME_MODELS,
+	REALTIME_VOICES,
 	defaultCloudLlmModel,
 	getCloudLlmProvider,
 	isCloudLlmProvider,
+	isRealtimeEffort,
 	type ApiProvider,
 	type CloudLlmProvider,
 	type DescriptionEngine,
 	type ElevenLabsVoice,
+	type RealtimeEffort,
 	type SpeechEngine
 } from '$lib/domain/provider-catalog';
 import { listElevenLabsVoices } from '$lib/services/elevenlabs';
@@ -55,6 +61,10 @@ export class ProvidersState {
 	private cloudLlmModels = $state<Partial<Record<CloudLlmProvider, string>>>({});
 
 	speechEngine = $state<SpeechEngine>('local');
+	/** Voice-assistant model, voice, and thinking effort (OpenAI key). */
+	realtimeModelId = $state<string>(REALTIME_MODELS[0].id);
+	realtimeVoice = $state<string>(DEFAULT_REALTIME_VOICE);
+	realtimeEffort = $state<RealtimeEffort>(DEFAULT_REALTIME_EFFORT);
 	elevenLabsModelId = $state<string>(ELEVENLABS_MODELS[0].id);
 	elevenLabsVoiceId = $state<string>(DEFAULT_ELEVENLABS_VOICE);
 	/** Cached voice list (refreshed whenever settings opens with a key). */
@@ -70,14 +80,28 @@ export class ProvidersState {
 	private async load(): Promise<void> {
 		try {
 			this.devKeys = devKeyDefaults();
-			const [keys, engine, models, speech, elModel, elVoice, elVoices] = await Promise.all([
+			const [
+				keys,
+				engine,
+				models,
+				speech,
+				elModel,
+				elVoice,
+				elVoices,
+				realtimeModel,
+				rtVoice,
+				rtEffort
+			] = await Promise.all([
 				getSetting<KeyMap>('provider-api-keys', {}),
 				getSetting<string>('description-engine', 'local'),
 				getSetting<Partial<Record<CloudLlmProvider, string>>>('cloud-llm-models', {}),
 				getSetting<string>('speech-engine', 'local'),
 				getSetting<string>('elevenlabs-model', ELEVENLABS_MODELS[0].id),
 				getSetting<string>('elevenlabs-voice', DEFAULT_ELEVENLABS_VOICE),
-				getSetting<ElevenLabsVoice[]>('elevenlabs-voices-cache', [])
+				getSetting<ElevenLabsVoice[]>('elevenlabs-voices-cache', []),
+				getSetting<string>('realtime-model', REALTIME_MODELS[0].id),
+				getSetting<string>('realtime-voice', DEFAULT_REALTIME_VOICE),
+				getSetting<string>('realtime-effort', DEFAULT_REALTIME_EFFORT)
 			]);
 			this.userKeys = keys ?? {};
 			this.descriptionEngine = engine === 'local' || isCloudLlmProvider(engine) ? engine : 'local';
@@ -88,6 +112,13 @@ export class ProvidersState {
 				: ELEVENLABS_MODELS[0].id;
 			this.elevenLabsVoiceId = elVoice || DEFAULT_ELEVENLABS_VOICE;
 			this.elevenLabsVoices = elVoices ?? [];
+			this.realtimeModelId = REALTIME_MODELS.some((model) => model.id === realtimeModel)
+				? realtimeModel
+				: REALTIME_MODELS[0].id;
+			this.realtimeVoice = REALTIME_VOICES.some((voice) => voice.id === rtVoice)
+				? rtVoice
+				: DEFAULT_REALTIME_VOICE;
+			this.realtimeEffort = isRealtimeEffort(rtEffort) ? rtEffort : DEFAULT_REALTIME_EFFORT;
 		} finally {
 			this.initialized = true;
 		}
@@ -170,6 +201,21 @@ export class ProvidersState {
 	async setSpeechEngine(engine: SpeechEngine): Promise<void> {
 		this.speechEngine = engine;
 		await setSetting('speech-engine', engine);
+	}
+
+	async setRealtimeModel(modelId: string): Promise<void> {
+		this.realtimeModelId = modelId;
+		await setSetting('realtime-model', modelId);
+	}
+
+	async setRealtimeVoice(voiceId: string): Promise<void> {
+		this.realtimeVoice = voiceId;
+		await setSetting('realtime-voice', voiceId);
+	}
+
+	async setRealtimeEffort(effort: RealtimeEffort): Promise<void> {
+		this.realtimeEffort = effort;
+		await setSetting('realtime-effort', effort);
 	}
 
 	async setElevenLabsModel(modelId: string): Promise<void> {
