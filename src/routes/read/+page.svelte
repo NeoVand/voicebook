@@ -23,7 +23,7 @@
 	import type { Attachment } from 'svelte/attachments';
 	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { fly } from 'svelte/transition';
+	import AssistantChip from '$lib/components/AssistantChip.svelte';
 	import AudioActionsMenu from '$lib/components/AudioActionsMenu.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
 	import CompactSelect from '$lib/components/CompactSelect.svelte';
@@ -49,7 +49,7 @@
 	import { tableMarkdown } from '$lib/domain/narration';
 	import { assembleExplainContext } from '$lib/domain/explain-prompts';
 	import { generateExplanation } from '$lib/services/explain';
-	import { blockForPage, pageCount, pageForSegmentIndex, pageStartMap } from '$lib/domain/pages';
+	import { pageCount, pageStartMap } from '$lib/domain/pages';
 	import { releasePdfRenderer } from '$lib/services/pdf-pages';
 	import { readerTourSeen, startTour } from '$lib/services/tours';
 	import { appState } from '$lib/state/app-state.svelte';
@@ -58,6 +58,8 @@
 	import { player } from '$lib/state/player.svelte';
 	import { providersState } from '$lib/state/providers.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
+	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
+	import type { PassageRange } from '$lib/domain/assistant-context';
 
 	let book = $state<NormalizedDocument | null>(null);
 	let activeOutlineBlockId = $state<string>();
@@ -65,6 +67,8 @@
 	let readingCanvas = $state<HTMLElement>();
 	let scrollbarActive = $state(false);
 	let scrollbarTimer: ReturnType<typeof setTimeout> | undefined;
+	let spaceHoldTimer: ReturnType<typeof setTimeout> | undefined;
+	let spaceHolding = false;
 	let readerScrollFrame = 0;
 	let outlineNavigationBlockId: string | undefined;
 	const segmentElements = new SvelteMap<string, HTMLElement>();
@@ -97,6 +101,8 @@
 	/** While the spoken answer plays, the source blocks pulse instead of the
 	 * box staying open. */
 	let explainSpeaking = $state<{ startBlockId: string; endBlockId: string }>();
+	/** The passage the voice assistant is talking about; pulses like Explain. */
+	let assistantFocus = $state<PassageRange>();
 	let narrationAnnouncement = $state('');
 	let appReady = $state(false);
 	let openingTitle = $state<string>();
@@ -126,6 +132,24 @@
 		if (start === undefined || end === undefined) return new Set<string>();
 		return new Set(
 			book.blocks.slice(Math.min(start, end), Math.max(start, end) + 1).map((block) => block.id)
+		);
+	});
+	let assistantSegmentIds = $derived.by(() => {
+		if (!assistantFocus || !book) return new Set<string>();
+		return new Set(
+			book.segments
+				.slice(assistantFocus.startIndex, assistantFocus.endIndex + 1)
+				.map((segment) => segment.id)
+		);
+	});
+	/** Constructs (equations, tables, diagrams) highlight whole — their text
+	 * is not rendered through speech-segment spans. */
+	let assistantBlockIds = $derived.by(() => {
+		if (!assistantFocus || !book) return new Set<string>();
+		return new Set(
+			book.segments
+				.slice(assistantFocus.startIndex, assistantFocus.endIndex + 1)
+				.map((segment) => segment.blockId)
 		);
 	});
 	let narrationOutlineBlockId = $derived.by(() => {
@@ -174,17 +198,10 @@
 		return anchored === undefined ? declared : Math.max(declared, anchored);
 	});
 	let hasPageMarkers = $derived(pageStartsById.size > 0);
-	let currentPlayheadPage = $derived(
-		book ? pageForSegmentIndex(book.segments, player.currentSegmentIndex) : undefined
-	);
 	let peekAvailable = $derived(
 		book?.sourceKind === 'pdf' && Boolean(book.sourcePath || book.sourceBlob)
 	);
 	let pagePeek = $state<{ page: number }>();
-	let pageJumpOpen = $state(false);
-	let pageJumpRoot = $state<HTMLDivElement>();
-	// Svelte's number-input binding yields null for an empty field.
-	let pageJumpValue = $state<number | null>(null);
 
 	function childBlocks(block: DocumentBlock): DocumentBlock[] {
 		return (block.children ?? [])
@@ -205,6 +222,17 @@
 				if (element) scrollNarrationIntoView(element);
 			});
 		};
+		realtimeAssistant.onShowPassage = (range) => {
+			assistantFocus = range;
+			requestAnimationFrame(() => {
+				const segment = book?.segments[range.startIndex];
+				const element = segment ? segmentElements.get(segment.id) : undefined;
+				if (element) scrollNarrationIntoView(element);
+			});
+		};
+		realtimeAssistant.onClearHighlight = () => {
+			assistantFocus = undefined;
+		};
 		void providersState.initialize().then(() => {
 			if (providersState.speechEngine === 'elevenlabs')
 				void providersState.refreshElevenLabsVoices();
@@ -215,7 +243,11 @@
 		return () => {
 			cancelAnimationFrame(readerScrollFrame);
 			if (scrollbarTimer) clearTimeout(scrollbarTimer);
+			if (spaceHoldTimer) clearTimeout(spaceHoldTimer);
 			player.onSegmentChange = undefined;
+			realtimeAssistant.stop();
+			realtimeAssistant.onShowPassage = undefined;
+			realtimeAssistant.onClearHighlight = undefined;
 			narrationState.stop();
 			void releasePdfRenderer();
 		};
@@ -240,12 +272,12 @@
 
 	async function openBook(next: NormalizedDocument | null): Promise<void> {
 		narrationState.stop();
+		realtimeAssistant.stop();
 		narrationStartAction = undefined;
 		closeExplainBox();
 		outlineNavigationBlockId = undefined;
 		activeOutlineBlockId = undefined;
 		pagePeek = undefined;
-		pageJumpOpen = false;
 		void releasePdfRenderer();
 		if (!next) {
 			openingTitle = undefined;
@@ -561,29 +593,6 @@
 
 	function openPagePeek(peekPage: number): void {
 		pagePeek = { page: peekPage };
-	}
-
-	/** Mirrors outline-click semantics: scroll and move the playhead, keeping
-	 * the play/pause state, with the auto-follow guard held while both land. */
-	function navigateToPage(target: number): void {
-		if (!book || documentPageCount === undefined || !Number.isFinite(target)) return;
-		const destination = blockForPage(book.blocks, target);
-		if (!destination) return;
-		const clamped = Math.max(1, Math.min(documentPageCount, Math.round(target)));
-		const element = elementInReader(destination.id);
-		if (!element) return;
-		pageJumpOpen = false;
-		outlineNavigationBlockId = destination.id;
-		outlineAnnouncement = `Moved to page ${clamped}`;
-		scrollReaderTo(element);
-		const index = firstSegmentIndex(destination);
-		if (index === undefined) {
-			outlineNavigationBlockId = undefined;
-			return;
-		}
-		void player.goToSegment(index).finally(() => {
-			if (outlineNavigationBlockId === destination.id) outlineNavigationBlockId = undefined;
-		});
 	}
 
 	async function startNarrationFrom(
@@ -938,12 +947,6 @@
 		return minutes + ':' + remainder.toString().padStart(2, '0');
 	}
 
-	function handleGlobalPointer(event: PointerEvent): void {
-		if (pageJumpOpen && pageJumpRoot && !pageJumpRoot.contains(event.target as Node)) {
-			pageJumpOpen = false;
-		}
-	}
-
 	function handleKeydown(event: KeyboardEvent): void {
 		// The page peek owns the keyboard while open (its own Escape/arrows);
 		// reader shortcuts must not drive playback underneath the dialog.
@@ -951,10 +954,6 @@
 		// that just became disabled).
 		if (pagePeek) {
 			if (event.key === 'Escape') pagePeek = undefined;
-			return;
-		}
-		if (pageJumpOpen && event.key === 'Escape') {
-			pageJumpOpen = false;
 			return;
 		}
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -971,16 +970,42 @@
 		if (target?.matches('input,textarea,select,button,[data-segment-id]')) return;
 		if (event.code === 'Space') {
 			event.preventDefault();
-			if (player.isBuffering) player.cancelGeneration();
-			else void player.toggle();
+			if (event.repeat) return;
+			// Hold-to-talk from anywhere: a held Space opens the assistant's
+			// microphone; a quick tap still toggles playback (on keyup).
+			clearTimeout(spaceHoldTimer);
+			spaceHoldTimer = setTimeout(() => {
+				spaceHolding = true;
+				if (book) void realtimeAssistant.beginTalking(book);
+			}, 250);
 		} else if (event.key.toLowerCase() === 'j') void player.seekBy(-10);
 		else if (event.key.toLowerCase() === 'l') void player.seekBy(10);
 		else if (event.key === '[') void player.setRate(player.rate - 0.25);
 		else if (event.key === ']') void player.setRate(player.rate + 0.25);
 	}
+
+	function handleKeyup(event: KeyboardEvent): void {
+		if (event.code !== 'Space') return;
+		if (event.metaKey || event.ctrlKey || event.altKey) return;
+		const target = event.target as HTMLElement | null;
+		if (target?.matches('input,textarea,select,button,[data-segment-id]')) return;
+		if (!book) return;
+		event.preventDefault();
+		clearTimeout(spaceHoldTimer);
+		if (spaceHolding) {
+			spaceHolding = false;
+			realtimeAssistant.stopTalking();
+			return;
+		}
+		// While a voice conversation is on, Space belongs to it — starting
+		// narration underneath would put two voices on stage.
+		if (realtimeAssistant.active) return;
+		if (player.isBuffering) player.cancelGeneration();
+		else void player.toggle();
+	}
 </script>
 
-<svelte:window onkeydown={handleKeydown} onpointerdown={handleGlobalPointer} />
+<svelte:window onkeydown={handleKeydown} onkeyup={handleKeyup} />
 
 <svelte:head>
 	<title>{book ? book.title + ' — Voicebook' : 'Reader — Voicebook'}</title>
@@ -1000,7 +1025,7 @@
 	<span
 		class="speech-segment"
 		class:active={isActive}
-		class:explaining={explainingBlockIds.has(block.id)}
+		class:explaining={explainingBlockIds.has(block.id) || assistantSegmentIds.has(segment.id)}
 		role="button"
 		tabindex="0"
 		aria-label={segment.text}
@@ -1091,7 +1116,7 @@
 		{@const segs = segmentsByBlock.get(block.id) ?? []}
 		<div
 			class="construct-segment diagram-construct"
-			class:explaining={explainingBlockIds.has(block.id)}
+			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
 			class:narration-pending={segs[0]?.narration?.pending}
 			role="button"
@@ -1124,7 +1149,7 @@
 		{@const segs = segmentsByBlock.get(block.id) ?? []}
 		<div
 			class="construct-segment code-construct"
-			class:explaining={explainingBlockIds.has(block.id)}
+			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
 			class:narration-pending={segs[0]?.narration?.pending}
 			role="button"
@@ -1156,7 +1181,7 @@
 		{@const segs = segmentsByBlock.get(block.id) ?? []}
 		<div
 			class="construct-segment math-construct"
-			class:explaining={explainingBlockIds.has(block.id)}
+			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
 			class:narration-pending={segs[0]?.narration?.pending}
 			role="button"
@@ -1249,7 +1274,7 @@
 		{@const headerSegs = constructSegments(block.id, `${block.id}:rh`)}
 		<div
 			class="table-region"
-			class:explaining={explainingBlockIds.has(block.id)}
+			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			id={block.id}
 			role="region"
 			aria-label="Document table"
@@ -1321,7 +1346,7 @@
 		)}
 		<div
 			class="construct-segment media-construct"
-			class:explaining={explainingBlockIds.has(block.id)}
+			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			id={block.id}
 			class:active={activeConstructIds.includes(imageId)}
 			class:narration-pending={segs[0]?.narration?.pending}
@@ -1603,6 +1628,43 @@
 					<LocateFixed size={15} /> Follow narration
 				</button>
 			{/if}
+
+			{#if realtimeAssistant.status !== 'idle'}
+				<div
+					class="assistant-caption"
+					class:failed={realtimeAssistant.status === 'error'}
+					role="status"
+				>
+					<span
+						class="assistant-caption-dot"
+						class:speaking={realtimeAssistant.speaking || realtimeAssistant.listening}
+						aria-hidden="true"
+					></span>
+					<span class="assistant-caption-text">
+						{realtimeAssistant.status === 'connecting'
+							? 'Connecting…'
+							: realtimeAssistant.status === 'error'
+								? realtimeAssistant.errorMessage
+								: realtimeAssistant.caption ||
+									(realtimeAssistant.listening
+										? realtimeAssistant.mode === 'handsFree'
+											? 'Listening — click the mic for options'
+											: 'Listening — release to send'
+										: 'Hold the mic or Space to talk — click the mic for options')}
+					</span>
+					<button
+						class="assistant-caption-close"
+						type="button"
+						aria-label={realtimeAssistant.active ? 'End the voice conversation' : 'Dismiss'}
+						onclick={() =>
+							realtimeAssistant.active
+								? realtimeAssistant.stop()
+								: realtimeAssistant.dismissError()}
+					>
+						<X size={13} />
+					</button>
+				</div>
+			{/if}
 		</section>
 
 		<footer class="player-bar" aria-label="Playback controls">
@@ -1619,6 +1681,7 @@
 						onRegenerate={regenerateDocumentDescriptions}
 					/>
 				{/if}
+				<AssistantChip {book} />
 			</div>
 
 			<div class="transport">
@@ -1762,45 +1825,6 @@
 			</div>
 
 			<div class="player-options" role="group" aria-label="Playback settings">
-				{#if documentPageCount}
-					<div class="page-jump" bind:this={pageJumpRoot}>
-						<button
-							class="page-chip"
-							class:open={pageJumpOpen}
-							type="button"
-							aria-label={`Page ${currentPlayheadPage ?? 1} of ${documentPageCount}. Go to page`}
-							aria-expanded={pageJumpOpen}
-							aria-controls="page-jump-popover"
-							title="Go to page"
-							onclick={() => {
-								pageJumpValue = currentPlayheadPage ?? 1;
-								pageJumpOpen = !pageJumpOpen;
-							}}
-						>
-							p. {currentPlayheadPage ?? '–'}<span class="page-chip-total"
-								>/{documentPageCount}</span
-							>
-						</button>
-						{#if pageJumpOpen}
-							<form
-								id="page-jump-popover"
-								class="page-jump-popover"
-								transition:fly={{ y: 5, duration: 120 }}
-								onsubmit={(event) => {
-									event.preventDefault();
-									// An empty field is a no-op, not a jump to page one.
-									if (pageJumpValue !== null) navigateToPage(pageJumpValue);
-								}}
-							>
-								<label>
-									<span>Go to page</span>
-									<input type="number" min="1" max={documentPageCount} bind:value={pageJumpValue} />
-								</label>
-								<button class="button" type="submit">Go</button>
-							</form>
-						{/if}
-					</div>
-				{/if}
 				<div class="speed-control" data-tour="speed">
 					<CompactSelect
 						label="Playback speed"
@@ -2934,6 +2958,94 @@
 		backdrop-filter: blur(14px);
 	}
 
+	/* The assistant's status/caption pill floats where return-follow does,
+	   centered so the two never collide. */
+	.assistant-caption {
+		position: absolute;
+		bottom: calc(var(--player-height) + 16px);
+		left: 50%;
+		z-index: 15;
+		display: flex;
+		max-width: min(560px, calc(100% - 170px));
+		align-items: center;
+		gap: 8px;
+		padding: 7px 8px 7px 14px;
+		border: 1px solid color-mix(in srgb, var(--primary) 42%, transparent);
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--surface) 94%, transparent);
+		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38);
+		color: var(--text);
+		backdrop-filter: blur(14px);
+		transform: translateX(-50%);
+	}
+
+	.assistant-caption.failed {
+		border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+	}
+
+	.assistant-caption-dot {
+		width: 8px;
+		height: 8px;
+		flex: 0 0 8px;
+		border-radius: 999px;
+		background: var(--primary);
+		opacity: 0.55;
+	}
+
+	.assistant-caption-dot.speaking {
+		animation: assistant-dot 1.2s ease-in-out infinite;
+	}
+
+	.assistant-caption.failed .assistant-caption-dot {
+		background: var(--danger);
+		opacity: 0.8;
+	}
+
+	@keyframes assistant-dot {
+		0%,
+		100% {
+			opacity: 0.35;
+		}
+		50% {
+			opacity: 1;
+		}
+	}
+
+	.assistant-caption-text {
+		overflow: hidden;
+		font-size: 12px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.assistant-caption-close {
+		display: grid;
+		width: 24px;
+		height: 24px;
+		flex: 0 0 24px;
+		place-items: center;
+		padding: 0;
+		border: 0;
+		border-radius: 999px;
+		background: transparent;
+		color: var(--muted);
+		cursor: pointer;
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.assistant-caption-close:hover {
+		background: var(--control-hover);
+		color: var(--text);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.assistant-caption-dot.speaking {
+			animation: none;
+		}
+	}
+
 	.player-bar {
 		position: absolute;
 		right: 0;
@@ -2943,7 +3055,7 @@
 		display: grid;
 		height: var(--player-height);
 		min-width: 0;
-		grid-template-columns: 96px minmax(260px, 1fr) 132px;
+		grid-template-columns: 120px minmax(260px, 1fr) 132px;
 		align-items: center;
 		gap: 10px;
 		padding: 1px 16px 0;
@@ -3281,80 +3393,6 @@
 		gap: 4px;
 	}
 
-	.page-jump {
-		position: relative;
-	}
-
-	.page-chip {
-		display: inline-flex;
-		height: 30px;
-		align-items: baseline;
-		padding: 0 10px;
-		border: 1px solid var(--control-border);
-		border-radius: 8px;
-		background: var(--control);
-		color: var(--muted);
-		font-family: var(--font-ui);
-		font-size: 12px;
-		font-variant-numeric: tabular-nums;
-		white-space: nowrap;
-		transition:
-			background 150ms var(--ease),
-			color 150ms var(--ease);
-	}
-
-	.page-chip:hover,
-	.page-chip.open {
-		background: var(--control-hover);
-		color: var(--text);
-	}
-
-	.page-chip-total {
-		color: var(--faint);
-	}
-
-	.page-jump-popover {
-		position: absolute;
-		bottom: calc(100% + 10px);
-		left: 50%;
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 10px 12px;
-		border: 1px solid var(--control-border);
-		border-radius: 10px;
-		background: var(--surface-overlay);
-		box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
-		transform: translateX(-50%);
-	}
-
-	.page-jump-popover label {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		color: var(--muted);
-		font-family: var(--font-ui);
-		font-size: 12px;
-		white-space: nowrap;
-	}
-
-	.page-jump-popover input {
-		width: 64px;
-		padding: 6px 8px;
-		border: 1px solid var(--control-border);
-		border-radius: 7px;
-		background: var(--control);
-		color: var(--text);
-		font-family: var(--font-ui);
-		font-size: 13px;
-		font-variant-numeric: tabular-nums;
-	}
-
-	.page-jump-popover .button {
-		padding: 6px 12px;
-		font-size: 12px;
-	}
-
 	.sleep-timer {
 		position: relative;
 		display: grid;
@@ -3462,7 +3500,7 @@
 		}
 
 		.player-bar {
-			grid-template-columns: 96px minmax(230px, 1fr) 132px;
+			grid-template-columns: 120px minmax(230px, 1fr) 132px;
 			gap: 8px;
 			padding-right: 20px;
 			padding-left: 20px;
@@ -3475,7 +3513,7 @@
 		}
 
 		.player-bar {
-			grid-template-columns: 96px minmax(0, 1fr);
+			grid-template-columns: 120px minmax(0, 1fr);
 		}
 	}
 

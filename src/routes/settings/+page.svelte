@@ -30,10 +30,14 @@
 	import {
 		CLOUD_LLM_PROVIDERS,
 		ELEVENLABS_MODELS,
+		REALTIME_EFFORTS,
+		REALTIME_MODELS,
+		REALTIME_VOICES,
 		type ApiProvider,
 		type CloudLlmProvider,
 		type DescriptionEngine,
 		type ElevenLabsVoice,
+		type RealtimeEffort,
 		type SpeechEngine
 	} from '$lib/domain/provider-catalog';
 	import ApiKeyField from '$lib/components/ApiKeyField.svelte';
@@ -66,6 +70,14 @@
 
 	const model = getModel('supertonic-3');
 	const previewText = 'A calm voice can make every page feel closer.';
+
+	const ASSISTANT_EFFORT_NOTES: Record<RealtimeEffort, string> = {
+		minimal: 'fastest replies',
+		low: 'snappy · recommended',
+		medium: 'balanced',
+		high: 'more careful',
+		xhigh: 'deepest, slowest'
+	};
 	let busy = $state(false);
 	let storageBusy = $state(false);
 	let previewState = $state<PreviewState>('idle');
@@ -1038,6 +1050,75 @@
 			</div>
 		</section>
 
+		<section class="settings-section" aria-labelledby="assistant-title">
+			<header class="section-title">
+				<div>
+					<h2 id="assistant-title">Voice assistant</h2>
+					<p>
+						Talk with the open document — it answers aloud and highlights the passages it mentions.
+						Hold the mic in the reader (or hold Space) and speak; uses your OpenAI key.
+					</p>
+				</div>
+				<span class="runtime-state" class:ready={providersState.hasKey('openai')}>
+					<span></span>{providersState.hasKey('openai') ? 'Ready' : 'OpenAI key required'}
+				</span>
+			</header>
+
+			<div class="assistant-group" role="group" aria-label="Assistant voice">
+				<span class="assistant-group-label">Voice</span>
+				<div class="engine-models assistant-grid">
+					{#each REALTIME_VOICES as voice (voice.id)}
+						<button
+							type="button"
+							class="engine-model"
+							class:selected={providersState.realtimeVoice === voice.id}
+							aria-pressed={providersState.realtimeVoice === voice.id}
+							onclick={() => void providersState.setRealtimeVoice(voice.id)}
+						>
+							<strong>{voice.label}</strong>
+							{#if voice.tagline}<small>{voice.tagline}</small>{/if}
+						</button>
+					{/each}
+				</div>
+			</div>
+
+			<div class="assistant-group" role="group" aria-label="Assistant model">
+				<span class="assistant-group-label">Model</span>
+				<div class="engine-models">
+					{#each REALTIME_MODELS as model (model.id)}
+						<button
+							type="button"
+							class="engine-model"
+							class:selected={providersState.realtimeModelId === model.id}
+							aria-pressed={providersState.realtimeModelId === model.id}
+							onclick={() => void providersState.setRealtimeModel(model.id)}
+						>
+							<strong>{model.label}</strong>
+							<small>{model.tagline}</small>
+						</button>
+					{/each}
+				</div>
+			</div>
+
+			<div class="assistant-group" role="group" aria-label="Assistant thinking effort">
+				<span class="assistant-group-label">Thinking</span>
+				<div class="engine-models assistant-grid">
+					{#each REALTIME_EFFORTS as effort (effort.id)}
+						<button
+							type="button"
+							class="engine-model"
+							class:selected={providersState.realtimeEffort === effort.id}
+							aria-pressed={providersState.realtimeEffort === effort.id}
+							onclick={() => void providersState.setRealtimeEffort(effort.id as RealtimeEffort)}
+						>
+							<strong>{effort.label}</strong>
+							<small>{ASSISTANT_EFFORT_NOTES[effort.id]}</small>
+						</button>
+					{/each}
+				</div>
+			</div>
+		</section>
+
 		{#if providersState.descriptionEngine === 'local'}
 			<section class="settings-section" aria-labelledby="llm-models-title">
 				<header class="section-title">
@@ -1985,6 +2066,26 @@
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 		gap: 8px;
+	}
+
+	.assistant-group {
+		display: grid;
+		gap: 7px;
+		margin-top: 14px;
+	}
+
+	.assistant-group-label {
+		color: var(--muted);
+		font-size: 10px;
+		font-weight: 640;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+	}
+
+	/* Voice and effort options are single words — narrower cells keep the
+	   ten voices to two rows. */
+	.assistant-grid {
+		grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
 	}
 
 	.engine-model {

@@ -433,6 +433,12 @@
 							onSave={(value) => providersState.setKey(descProvider, value)}
 							onClear={() => providersState.setKey(descProvider, '')}
 						/>
+						{#if descProvider === 'openai'}
+							<p class="skip-note">
+								Bonus: a GPT key also unlocks the voice assistant — hold the mic in the reader and
+								talk with your document while it highlights what it mentions.
+							</p>
+						{/if}
 					</div>
 				{:else}
 					<div class="choice-panel">

@@ -52,7 +52,7 @@ export const CLOUD_LLM_PROVIDERS: CloudLlmProviderSpec[] = [
 		id: 'openai',
 		label: 'GPT',
 		vendor: 'OpenAI',
-		tagline: 'Strong general rewriting',
+		tagline: 'Strong general rewriting · unlocks the voice assistant',
 		keyPlaceholder: 'sk-proj-…',
 		keyUrl: 'https://platform.openai.com/api-keys',
 		models: [
@@ -120,6 +120,64 @@ export interface ElevenLabsVoice {
 	/** "male · american · middle aged" style summary from the voice labels. */
 	description: string;
 	previewUrl?: string;
+}
+
+/* ── OpenAI realtime voice assistant ─────────────────────────────────────── */
+
+export interface RealtimeModelSpec {
+	id: string;
+	label: string;
+	tagline: string;
+}
+
+/** Speech-to-speech models for the voice assistant (uses the OpenAI key).
+ * First entry is the default. */
+export const REALTIME_MODELS: RealtimeModelSpec[] = [
+	{ id: 'gpt-realtime-2.1', label: 'GPT Realtime 2.1', tagline: 'best quality · recommended' },
+	{ id: 'gpt-realtime-2.1-mini', label: 'GPT Realtime 2.1 mini', tagline: 'faster · cheaper' }
+];
+
+export interface RealtimeVoiceSpec {
+	id: string;
+	label: string;
+	tagline?: string;
+}
+
+/** Every voice the realtime endpoint accepts (probed from the API's own
+ * validation error). Marin and cedar are the newest, tuned for
+ * conversation. */
+export const REALTIME_VOICES: RealtimeVoiceSpec[] = [
+	{ id: 'marin', label: 'Marin', tagline: 'recommended' },
+	{ id: 'cedar', label: 'Cedar', tagline: 'recommended' },
+	{ id: 'alloy', label: 'Alloy' },
+	{ id: 'ash', label: 'Ash' },
+	{ id: 'ballad', label: 'Ballad' },
+	{ id: 'coral', label: 'Coral' },
+	{ id: 'echo', label: 'Echo' },
+	{ id: 'sage', label: 'Sage' },
+	{ id: 'shimmer', label: 'Shimmer' },
+	{ id: 'verse', label: 'Verse' }
+];
+
+/** Marin — the voice OpenAI recommends for natural conversation. */
+export const DEFAULT_REALTIME_VOICE = 'marin';
+
+export type RealtimeEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+/** session.reasoning.effort values, in effort order. */
+export const REALTIME_EFFORTS: Array<{ id: RealtimeEffort; label: string }> = [
+	{ id: 'minimal', label: 'Min' },
+	{ id: 'low', label: 'Low' },
+	{ id: 'medium', label: 'Med' },
+	{ id: 'high', label: 'High' },
+	{ id: 'xhigh', label: 'Max' }
+];
+
+/** Low keeps answers snappy — the docs' recommendation for voice agents. */
+export const DEFAULT_REALTIME_EFFORT: RealtimeEffort = 'low';
+
+export function isRealtimeEffort(value: string): value is RealtimeEffort {
+	return REALTIME_EFFORTS.some((effort) => effort.id === value);
 }
 
 export const PROVIDER_LABELS: Record<ApiProvider, { label: string; vendor: string }> = {

@@ -254,10 +254,13 @@ test('walks through contextual interface tours from the help button', async ({ p
 	const popover = page.locator('.driver-popover');
 	await expect(popover).toBeVisible();
 	// The tour sweeps the player bar left to right: the wave button leads,
-	// then the brain chip when it is on screen, then the transport.
+	// then the brain chip when it is on screen, the assistant mic, then the
+	// transport.
 	await expect(popover.locator('.driver-popover-title')).toHaveText('Audio menu');
 	await popover.getByRole('button', { name: 'Next' }).click();
-	await expect(popover.locator('.driver-popover-title')).toHaveText(/Spoken descriptions|Play/);
+	await expect(popover.locator('.driver-popover-title')).toHaveText(
+		/Spoken descriptions|Voice assistant|Play/
+	);
 	await page.keyboard.press('Escape');
 	await expect(popover).toHaveCount(0);
 
@@ -1466,16 +1469,6 @@ test('imports a PDF with page markers, page navigation, and the original-page vi
 	const markers = page.locator('.page-marker');
 	await expect(markers).toHaveCount(2);
 	await expect(markers.first()).toContainText('Page 2');
-
-	// The transport chip tracks the playhead's page and jumps on request.
-	const chip = page.locator('.page-chip');
-	await expect(chip).toContainText('p. 1');
-	await chip.click();
-	// Exact match reaches the popover input; the chip's label is longer.
-	await page.getByLabel('Go to page', { exact: true }).fill('3');
-	await page.getByRole('button', { name: 'Go', exact: true }).click();
-	await expect(chip).toContainText('p. 3');
-	await expect(page.getByRole('heading', { name: 'Findings and Echoes' })).toBeInViewport();
 
 	// The original-page view renders the stored PDF page and pages through it.
 	await page.getByRole('button', { name: 'View original page 2' }).click();
