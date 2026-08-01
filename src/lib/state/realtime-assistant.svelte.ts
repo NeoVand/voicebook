@@ -94,6 +94,7 @@ export class RealtimeAssistantState {
 	private seenCalls = new SvelteSet<string>();
 	private captionItemId = '';
 	private respondTimer: ReturnType<typeof setTimeout> | undefined;
+	private settingsTimer: ReturnType<typeof setTimeout> | undefined;
 	private holdActive = false;
 	private tour?: { stops: TourStop[]; index: number; paused: boolean };
 	/** A narrated tour stop finished generating; advance when audio drains. */
@@ -158,7 +159,25 @@ export class RealtimeAssistantState {
 		else this.mode = 'handsFree';
 	}
 
-	private async start(doc: NormalizedDocument): Promise<void> {
+	/** Voice, model, and effort are fixed at mint time — a live session picks
+	 * up a change through a quick silent reconnect (same document and mode,
+	 * no replayed greeting). Debounced so flipping through voices restarts
+	 * once. The conversation memory starts fresh; the settings do not. */
+	applyLiveSettings(): void {
+		if (!this.active) return;
+		if (this.settingsTimer) clearTimeout(this.settingsTimer);
+		this.settingsTimer = setTimeout(() => {
+			this.settingsTimer = undefined;
+			const doc = this.document;
+			if (!this.active || !doc) return;
+			const mode = this.mode;
+			this.stop();
+			this.mode = mode;
+			void this.start(doc, false);
+		}, 600);
+	}
+
+	private async start(doc: NormalizedDocument, greet = true): Promise<void> {
 		if (this.active) return;
 		this.errorMessage = '';
 		this.status = 'connecting';
@@ -228,8 +247,9 @@ export class RealtimeAssistantState {
 			});
 			this.applyTurnDetection();
 			// The greeting draws on the session instructions, which already
-			// carry the document and the opening line to say.
-			this.channel.send({ type: 'response.create' });
+			// carry the document and the opening line to say. Settings-change
+			// reconnects skip it — hearing "hello again" per voice switch grates.
+			if (greet) this.channel.send({ type: 'response.create' });
 			this.status = 'live';
 			if (this.mode === 'handsFree') {
 				this.setMicrophoneOpen(true);
@@ -254,6 +274,8 @@ export class RealtimeAssistantState {
 		this.abort = undefined;
 		if (this.respondTimer) clearTimeout(this.respondTimer);
 		this.respondTimer = undefined;
+		if (this.settingsTimer) clearTimeout(this.settingsTimer);
+		this.settingsTimer = undefined;
 		this.channel?.close();
 		this.channel = undefined;
 		for (const track of this.microphone?.getTracks() ?? []) track.stop();

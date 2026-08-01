@@ -253,7 +253,7 @@
 				<div class="menu-heading">
 					<strong>Voice</strong>
 					{#if realtimeAssistant.active}
-						<small>next conversation</small>
+						<small>applies now · restarts the chat</small>
 					{/if}
 				</div>
 				<div class="voice-options">
@@ -264,7 +264,10 @@
 							role="menuitemradio"
 							aria-checked={voice.id === providersState.realtimeVoice}
 							title={voice.tagline}
-							onclick={() => void providersState.setRealtimeVoice(voice.id)}
+							onclick={() => {
+								void providersState.setRealtimeVoice(voice.id);
+								realtimeAssistant.applyLiveSettings();
+							}}
 						>
 							{voice.label}
 						</button>
@@ -284,7 +287,10 @@
 							role="menuitemradio"
 							aria-checked={model.id === providersState.realtimeModelId}
 							title={model.tagline}
-							onclick={() => void providersState.setRealtimeModel(model.id)}
+							onclick={() => {
+								void providersState.setRealtimeModel(model.id);
+								realtimeAssistant.applyLiveSettings();
+							}}
 						>
 							{model.label.replace('GPT Realtime ', '')}
 						</button>
@@ -304,7 +310,10 @@
 							type="button"
 							role="menuitemradio"
 							aria-checked={effort.id === providersState.realtimeEffort}
-							onclick={() => void providersState.setRealtimeEffort(effort.id as RealtimeEffort)}
+							onclick={() => {
+								void providersState.setRealtimeEffort(effort.id as RealtimeEffort);
+								realtimeAssistant.applyLiveSettings();
+							}}
 						>
 							{effort.label}
 						</button>
