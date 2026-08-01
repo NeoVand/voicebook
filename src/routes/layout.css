@@ -1480,6 +1480,16 @@ select {
 	padding: 0 11px;
 }
 
+/* One thin, theme-aware focus treatment for every text field — replacing
+ * the browser's default double ring, which ignores the theme entirely. */
+input:not([type='range']):not([type='checkbox']):not([type='radio']):focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+	border-color: color-mix(in srgb, var(--primary) 60%, var(--line-strong));
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 16%, transparent);
+	outline: none;
+}
+
 /* Native <progress> ignores theme tokens in several engines — draw it. */
 progress {
 	appearance: none;

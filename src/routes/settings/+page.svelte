@@ -53,6 +53,7 @@
 	import { NARRATION_PRESETS, type NarrationPresetId } from '$lib/domain/narration-presets';
 	import { LISTENING_MODES } from '$lib/domain/listening-modes';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
+	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
 	import { READER_FONTS, THEMES, appearanceState } from '$lib/state/appearance.svelte';
 	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
 	import ProviderLogo from '$lib/components/ProviderLogo.svelte';
@@ -1073,7 +1074,10 @@
 							class="engine-model"
 							class:selected={providersState.realtimeVoice === voice.id}
 							aria-pressed={providersState.realtimeVoice === voice.id}
-							onclick={() => void providersState.setRealtimeVoice(voice.id)}
+							onclick={() => {
+								void providersState.setRealtimeVoice(voice.id);
+								realtimeAssistant.applyLiveSettings();
+							}}
 						>
 							<strong>{voice.label}</strong>
 							{#if voice.tagline}<small>{voice.tagline}</small>{/if}
@@ -1091,7 +1095,10 @@
 							class="engine-model"
 							class:selected={providersState.realtimeModelId === model.id}
 							aria-pressed={providersState.realtimeModelId === model.id}
-							onclick={() => void providersState.setRealtimeModel(model.id)}
+							onclick={() => {
+								void providersState.setRealtimeModel(model.id);
+								realtimeAssistant.applyLiveSettings();
+							}}
 						>
 							<strong>{model.label}</strong>
 							<small>{model.tagline}</small>
@@ -1109,7 +1116,10 @@
 							class="engine-model"
 							class:selected={providersState.realtimeEffort === effort.id}
 							aria-pressed={providersState.realtimeEffort === effort.id}
-							onclick={() => void providersState.setRealtimeEffort(effort.id as RealtimeEffort)}
+							onclick={() => {
+								void providersState.setRealtimeEffort(effort.id as RealtimeEffort);
+								realtimeAssistant.applyLiveSettings();
+							}}
 						>
 							<strong>{effort.label}</strong>
 							<small>{ASSISTANT_EFFORT_NOTES[effort.id]}</small>
