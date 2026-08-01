@@ -79,6 +79,8 @@ export class RealtimeAssistantState {
 	/** Assigned by the reader page (and cleared on unmount). */
 	onShowPassage?: (range: PassageRange) => void;
 	onClearHighlight?: () => void;
+	/** Start the app's narration voice over a passage (play_section). */
+	onPlayPassage?: (range: PassageRange) => void;
 
 	private channel?: RealtimeChannel;
 	private microphone?: MediaStream;
@@ -91,6 +93,8 @@ export class RealtimeAssistantState {
 	private respondTimer: ReturnType<typeof setTimeout> | undefined;
 	private holdActive = false;
 	private tour?: { stops: TourStop[]; index: number; paused: boolean };
+	/** A narrated tour stop finished generating; advance when audio drains. */
+	private advanceAfterAudio = false;
 	private analysisContext?: AudioContext;
 	private analysisClone?: MediaStream;
 	private analyser?: AnalyserNode;
@@ -256,6 +260,7 @@ export class RealtimeAssistantState {
 		this.autoListening = false;
 		this.tour = undefined;
 		this.tourProgress = undefined;
+		this.advanceAfterAudio = false;
 		this.document = undefined;
 		this.context = undefined;
 		this.seenCalls.clear();
@@ -287,6 +292,8 @@ export class RealtimeAssistantState {
 			return;
 		}
 		this.pauseTour();
+		// An open microphone must not hear the narration voice.
+		if (player.isPlaying) player.pause();
 		// Holding the chip is the barge-in: cut whatever is playing
 		// (cancelling an idle response is a benign, filtered error), then
 		// listen.
@@ -300,6 +307,7 @@ export class RealtimeAssistantState {
 	private setHandsFree(on: boolean): void {
 		this.mode = on ? 'handsFree' : 'ptt';
 		if (this.status !== 'live') return;
+		if (on && player.isPlaying) player.pause();
 		this.applyTurnDetection();
 		this.setMicrophoneOpen(on);
 		playChime(on ? 'handsFreeOn' : 'handsFreeOff');
@@ -347,8 +355,19 @@ export class RealtimeAssistantState {
 				this.speaking = true;
 				break;
 			case 'output_audio_buffer.stopped':
+				this.speaking = false;
+				// The walkthrough advances when the SPEAKER drains, not when
+				// generation ends — audio plays out far behind response.done,
+				// and advancing early drags the highlight a stop ahead of the
+				// voice.
+				if (this.advanceAfterAudio) {
+					this.advanceAfterAudio = false;
+					this.advanceTour();
+				}
+				break;
 			case 'output_audio_buffer.cleared':
 				this.speaking = false;
+				this.advanceAfterAudio = false;
 				break;
 			case 'input_audio_buffer.speech_started':
 				// Hands-free barge-in; the server cuts the response itself.
@@ -362,13 +381,17 @@ export class RealtimeAssistantState {
 				const output =
 					((event.response as { output?: FunctionCallItem[] })?.output as FunctionCallItem[]) ?? [];
 				for (const item of output) this.handleFunctionCall(item);
-				this.speaking = false;
 				// A pure narration finishing is what advances a walkthrough;
 				// responses that called tools drive themselves via the
-				// tool-output nudge instead.
+				// tool-output nudge instead. Generation finishes well before
+				// the audio does, so the actual advance waits for the output
+				// buffer to drain (`speaking` stays true until then).
 				const spoke = output.some((item) => item?.type === 'message');
 				const calledTool = output.some((item) => item?.type === 'function_call');
-				if (spoke && !calledTool) this.advanceTour();
+				if (spoke && !calledTool && this.tour && !this.tour.paused) {
+					if (this.speaking) this.advanceAfterAudio = true;
+					else this.advanceTour();
+				}
 				break;
 			}
 			case 'error': {
@@ -393,6 +416,9 @@ export class RealtimeAssistantState {
 			type: 'conversation.item.create',
 			item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(output) }
 		});
+		// After play_section the narration voice has the stage — a follow-up
+		// response would talk over it. The output alone closes the call.
+		if (item.name === 'play_section') return;
 		// One response even when a turn made several calls: nudge after the
 		// last output instead of answering each one.
 		if (this.respondTimer) clearTimeout(this.respondTimer);
@@ -434,6 +460,14 @@ export class RealtimeAssistantState {
 			const stop = tour.stops[tour.index];
 			return { ok: true, stop: tour.index + 1, of: tour.stops.length, point: stop.point };
 		}
+		if (call.name === 'play_section') {
+			this.pauseTour();
+			this.onClearHighlight?.();
+			// Hands-free would hear the narrator; drop back to hold-to-talk.
+			if (this.mode === 'handsFree') this.setHandsFree(false);
+			this.onPlayPassage?.(call.range);
+			return { ok: true, note: 'Playback started. Stay silent until the reader speaks to you.' };
+		}
 		this.onShowPassage?.(call.range);
 		const location = describePassageLocation(doc, call.range);
 		return location ? { ok: true, under_heading: location } : { ok: true };
@@ -443,6 +477,7 @@ export class RealtimeAssistantState {
 
 	private pauseTour(): void {
 		if (this.tour) this.tour.paused = true;
+		this.advanceAfterAudio = false;
 	}
 
 	private applyTourStop(): void {

@@ -93,13 +93,15 @@ describe('assistantTools', () => {
 			'show_passage',
 			'clear_highlight',
 			'plan_tour',
-			'continue_tour'
+			'continue_tour',
+			'play_section'
 		]);
 		expect(assistantTools(true).map((tool) => tool.name)).toEqual([
 			'show_passage',
 			'clear_highlight',
 			'plan_tour',
 			'continue_tour',
+			'play_section',
 			'read_passage'
 		]);
 	});
@@ -118,6 +120,11 @@ describe('parseAssistantToolCall', () => {
 	it('treats a missing end_segment as a single segment', () => {
 		const result = parseAssistantToolCall(doc(), 'show_passage', '{"start_segment":4}');
 		expect(result.call).toEqual({ name: 'show_passage', range: { startIndex: 4, endIndex: 4 } });
+	});
+
+	it('parses play_section like a passage range', () => {
+		const result = parseAssistantToolCall(doc(), 'play_section', '{"start_segment":1}');
+		expect(result.call).toEqual({ name: 'play_section', range: { startIndex: 1, endIndex: 1 } });
 	});
 
 	it('parses clear_highlight regardless of arguments', () => {

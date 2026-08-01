@@ -114,7 +114,11 @@
 
 	function handlePointerDown(event: PointerEvent): void {
 		if (event.button !== 0) return;
-		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+		try {
+			(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+		} catch {
+			// Capture is best-effort; an inactive pointer id must not kill the press.
+		}
 		pressStart();
 	}
 
