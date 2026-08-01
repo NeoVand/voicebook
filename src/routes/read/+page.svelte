@@ -1641,6 +1641,12 @@
 						aria-hidden="true"
 					></span>
 					<span class="assistant-caption-text">
+						{#if realtimeAssistant.tourProgress && realtimeAssistant.status === 'live'}
+							<strong class="assistant-tour-step">
+								Stop {realtimeAssistant.tourProgress.stop} of {realtimeAssistant.tourProgress.of}
+							</strong>
+							·
+						{/if}
 						{realtimeAssistant.status === 'connecting'
 							? 'Connecting…'
 							: realtimeAssistant.status === 'error'
@@ -3016,6 +3022,11 @@
 		font-size: 12px;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.assistant-tour-step {
+		color: var(--primary);
+		font-weight: 640;
 	}
 
 	.assistant-caption-close {

@@ -19,7 +19,8 @@ import {
 	parseAssistantToolCall,
 	readPassageText,
 	type AssistantInstructions,
-	type PassageRange
+	type PassageRange,
+	type TourStop
 } from '$lib/domain/assistant-context';
 import type { NormalizedDocument } from '$lib/domain/types';
 import { playChime } from '$lib/services/assistant-chimes';
@@ -42,6 +43,16 @@ interface FunctionCallItem {
 	arguments?: string;
 }
 
+/** Local voice detection while the assistant speaks in hold-to-talk: the
+ * WebRTC track stays muted, but an analysis-only clone watches for the
+ * reader's voice so speaking over the assistant interrupts it. The RMS
+ * threshold sits above echo-cancelled speaker bleed; sustained-speech and
+ * trailing-silence windows are in 50 ms ticks. */
+const VOICE_TICK_MS = 50;
+const VOICE_RMS_THRESHOLD = 0.02;
+const VOICE_START_TICKS = 5;
+const VOICE_END_TICKS = 14;
+
 function microphoneErrorMessage(error: unknown): string {
 	const name = error instanceof DOMException ? error.name : '';
 	if (name === 'NotAllowedError' || name === 'SecurityError') {
@@ -62,6 +73,8 @@ export class RealtimeAssistantState {
 	caption = $state('');
 	speaking = $state(false);
 	errorMessage = $state('');
+	/** Progress of a guided walkthrough, for the caption pill. */
+	tourProgress = $state<{ stop: number; of: number }>();
 
 	/** Assigned by the reader page (and cleared on unmount). */
 	onShowPassage?: (range: PassageRange) => void;
@@ -77,6 +90,17 @@ export class RealtimeAssistantState {
 	private captionItemId = '';
 	private respondTimer: ReturnType<typeof setTimeout> | undefined;
 	private holdActive = false;
+	private tour?: { stops: TourStop[]; index: number; paused: boolean };
+	private analysisContext?: AudioContext;
+	private analysisClone?: MediaStream;
+	private analyser?: AnalyserNode;
+	private analysisSamples?: Float32Array<ArrayBuffer>;
+	private analysisTimer: ReturnType<typeof setInterval> | undefined;
+	private voicedTicks = 0;
+	private silentTicks = 0;
+	/** The microphone opened itself because the reader spoke over the
+	 * assistant; trailing silence sends the turn. */
+	private autoListening = false;
 
 	get active(): boolean {
 		return this.status === 'connecting' || this.status === 'live';
@@ -143,6 +167,7 @@ export class RealtimeAssistantState {
 			this.microphone = microphone;
 			// Closed until the reader holds the chip (or hands-free engages).
 			this.setMicrophoneOpen(false);
+			this.startVoiceDetector(microphone);
 
 			// The assistant and the narration voice cannot share the stage —
 			// the microphone would hear the narrator.
@@ -218,6 +243,19 @@ export class RealtimeAssistantState {
 			this.audio.remove();
 			this.audio = undefined;
 		}
+		if (this.analysisTimer) clearInterval(this.analysisTimer);
+		this.analysisTimer = undefined;
+		for (const track of this.analysisClone?.getTracks() ?? []) track.stop();
+		this.analysisClone = undefined;
+		void this.analysisContext?.close().catch(() => {});
+		this.analysisContext = undefined;
+		this.analyser = undefined;
+		this.analysisSamples = undefined;
+		this.voicedTicks = 0;
+		this.silentTicks = 0;
+		this.autoListening = false;
+		this.tour = undefined;
+		this.tourProgress = undefined;
 		this.document = undefined;
 		this.context = undefined;
 		this.seenCalls.clear();
@@ -241,12 +279,19 @@ export class RealtimeAssistantState {
 	}
 
 	private openHeldMicrophone(): void {
-		if (this.mode !== 'ptt' || this.listening || this.status !== 'live') return;
-		if (this.speaking) {
-			// Holding the chip is the barge-in: cut the answer, then listen.
-			this.channel?.send({ type: 'response.cancel' });
-			this.channel?.send({ type: 'output_audio_buffer.clear' });
+		if (this.mode !== 'ptt' || this.status !== 'live') return;
+		if (this.listening) {
+			// The voice detector already opened the microphone; the hold
+			// simply takes ownership of the turn.
+			this.autoListening = false;
+			return;
 		}
+		this.pauseTour();
+		// Holding the chip is the barge-in: cut whatever is playing
+		// (cancelling an idle response is a benign, filtered error), then
+		// listen.
+		this.channel?.send({ type: 'response.cancel' });
+		this.channel?.send({ type: 'output_audio_buffer.clear' });
 		this.channel?.send({ type: 'input_audio_buffer.clear' });
 		this.setMicrophoneOpen(true);
 		playChime('listen');
@@ -260,8 +305,9 @@ export class RealtimeAssistantState {
 		playChime(on ? 'handsFreeOn' : 'handsFreeOff');
 	}
 
-	/** Hands-free lets the server take turns (semantic VAD); hold-to-talk
-	 * commits turns manually, so the model can never hear itself. */
+	/** Hands-free lets the server take turns (semantic VAD, barge-in
+	 * explicitly on); hold-to-talk commits turns manually, so the model can
+	 * never hear itself. */
 	private applyTurnDetection(): void {
 		this.channel?.send({
 			type: 'session.update',
@@ -269,7 +315,10 @@ export class RealtimeAssistantState {
 				type: 'realtime',
 				audio: {
 					input: {
-						turn_detection: this.mode === 'handsFree' ? { type: 'semantic_vad' } : null
+						turn_detection:
+							this.mode === 'handsFree'
+								? { type: 'semantic_vad', interrupt_response: true, create_response: true }
+								: null
 					}
 				}
 			}
@@ -304,6 +353,7 @@ export class RealtimeAssistantState {
 			case 'input_audio_buffer.speech_started':
 				// Hands-free barge-in; the server cuts the response itself.
 				this.speaking = false;
+				this.pauseTour();
 				break;
 			case 'response.output_item.done':
 				this.handleFunctionCall(event.item as FunctionCallItem);
@@ -313,11 +363,23 @@ export class RealtimeAssistantState {
 					((event.response as { output?: FunctionCallItem[] })?.output as FunctionCallItem[]) ?? [];
 				for (const item of output) this.handleFunctionCall(item);
 				this.speaking = false;
+				// A pure narration finishing is what advances a walkthrough;
+				// responses that called tools drive themselves via the
+				// tool-output nudge instead.
+				const spoke = output.some((item) => item?.type === 'message');
+				const calledTool = output.some((item) => item?.type === 'function_call');
+				if (spoke && !calledTool) this.advanceTour();
 				break;
 			}
-			case 'error':
-				console.warn('[voice assistant] realtime error event', event.error ?? event);
+			case 'error': {
+				const code = ((event.error as { code?: string })?.code ?? '') as string;
+				// Cancelling nothing and committing an empty buffer are the
+				// expected fallout of eager interruption — not worth noise.
+				if (!/cancel|empty/.test(code)) {
+					console.warn('[voice assistant] realtime error event', event.error ?? event);
+				}
 				break;
+			}
 		}
 	}
 
@@ -353,9 +415,146 @@ export class RealtimeAssistantState {
 			const passage = readPassageText(doc, call.range);
 			return passage.truncated ? { text: passage.text, truncated: true } : { text: passage.text };
 		}
+		if (call.name === 'plan_tour') {
+			this.tour = { stops: call.stops, index: 0, paused: false };
+			this.applyTourStop();
+			return {
+				ok: true,
+				stop: 1,
+				of: call.stops.length,
+				point: call.stops[0].point,
+				note: 'Stop 1 is highlighted. Narrate it briefly; the app advances you when you finish.'
+			};
+		}
+		if (call.name === 'continue_tour') {
+			const tour = this.tour;
+			if (!tour) return { error: 'No walkthrough is active.' };
+			tour.paused = false;
+			this.applyTourStop();
+			const stop = tour.stops[tour.index];
+			return { ok: true, stop: tour.index + 1, of: tour.stops.length, point: stop.point };
+		}
 		this.onShowPassage?.(call.range);
 		const location = describePassageLocation(doc, call.range);
 		return location ? { ok: true, under_heading: location } : { ok: true };
+	}
+
+	/* ── Guided walkthroughs ─────────────────────────────────────────────── */
+
+	private pauseTour(): void {
+		if (this.tour) this.tour.paused = true;
+	}
+
+	private applyTourStop(): void {
+		const tour = this.tour;
+		if (!tour) return;
+		this.onShowPassage?.(tour.stops[tour.index].range);
+		this.tourProgress = { stop: tour.index + 1, of: tour.stops.length };
+	}
+
+	/** Steer the next response with a system note — per-response
+	 * `instructions` would replace the session instructions (and with them
+	 * the document), so tours are driven through the conversation instead. */
+	private tourSystemNudge(text: string): void {
+		if (this.respondTimer) {
+			clearTimeout(this.respondTimer);
+			this.respondTimer = undefined;
+		}
+		this.channel?.send({
+			type: 'conversation.item.create',
+			item: { type: 'message', role: 'system', content: [{ type: 'input_text', text }] }
+		});
+		this.channel?.send({ type: 'response.create' });
+	}
+
+	private advanceTour(): void {
+		const tour = this.tour;
+		if (!tour || tour.paused) return;
+		if (tour.index + 1 < tour.stops.length) {
+			tour.index += 1;
+			this.applyTourStop();
+			const stop = tour.stops[tour.index];
+			this.tourSystemNudge(
+				`Tour stop ${tour.index + 1} of ${tour.stops.length} is highlighted now` +
+					`${stop.point ? `: ${stop.point}` : ''}. Narrate it in a sentence or two.`
+			);
+		} else {
+			this.tour = undefined;
+			this.tourProgress = undefined;
+			this.tourSystemNudge(
+				'That was the last stop. Wrap up in one sentence and ask whether they want to dig into any of the stops.'
+			);
+		}
+	}
+
+	/* ── Local voice detection (interrupt while muted) ───────────────────── */
+
+	private startVoiceDetector(microphone: MediaStream): void {
+		try {
+			// The clone stays enabled purely for analysis — a disabled track
+			// goes silent for every consumer, including WebAudio, so the
+			// muted WebRTC track cannot be observed directly.
+			const clone = microphone.clone();
+			const context = new AudioContext();
+			const analyser = context.createAnalyser();
+			analyser.fftSize = 1024;
+			context.createMediaStreamSource(clone).connect(analyser);
+			this.analysisClone = clone;
+			this.analysisContext = context;
+			this.analyser = analyser;
+			this.analysisSamples = new Float32Array(analyser.fftSize);
+			this.analysisTimer = setInterval(() => this.pollVoice(), VOICE_TICK_MS);
+		} catch {
+			// Without local analysis, holding to talk still interrupts.
+		}
+	}
+
+	private pollVoice(): void {
+		const analyser = this.analyser;
+		const samples = this.analysisSamples;
+		if (!analyser || !samples) return;
+		analyser.getFloatTimeDomainData(samples);
+		let sum = 0;
+		for (let index = 0; index < samples.length; index += 1) {
+			sum += samples[index] * samples[index];
+		}
+		const voiced = Math.sqrt(sum / samples.length) > VOICE_RMS_THRESHOLD;
+		if (this.autoListening) {
+			if (voiced) this.silentTicks = 0;
+			else if ((this.silentTicks += 1) >= VOICE_END_TICKS) this.finishAutoTurn();
+			return;
+		}
+		const armed = this.status === 'live' && this.mode === 'ptt' && this.speaking && !this.listening;
+		if (!armed || !voiced) {
+			this.voicedTicks = 0;
+			return;
+		}
+		if ((this.voicedTicks += 1) >= VOICE_START_TICKS) this.voiceInterrupt();
+	}
+
+	/** The reader spoke over the assistant: cut the answer and listen. */
+	private voiceInterrupt(): void {
+		this.voicedTicks = 0;
+		this.silentTicks = 0;
+		this.autoListening = true;
+		this.pauseTour();
+		this.channel?.send({ type: 'response.cancel' });
+		this.channel?.send({ type: 'output_audio_buffer.clear' });
+		this.channel?.send({ type: 'input_audio_buffer.clear' });
+		this.setMicrophoneOpen(true);
+		playChime('listen');
+	}
+
+	private finishAutoTurn(): void {
+		this.autoListening = false;
+		// A hold that began meanwhile owns the turn and commits on release.
+		if (this.status !== 'live' || this.mode !== 'ptt' || !this.listening || this.holdActive) {
+			return;
+		}
+		this.setMicrophoneOpen(false);
+		playChime('release');
+		this.channel?.send({ type: 'input_audio_buffer.commit' });
+		this.channel?.send({ type: 'response.create' });
 	}
 }
 
