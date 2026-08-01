@@ -233,6 +233,16 @@
 		realtimeAssistant.onClearHighlight = () => {
 			assistantFocus = undefined;
 		};
+		realtimeAssistant.onPlayPassage = (range) => {
+			const endSegment = book?.segments[range.endIndex];
+			if (!book || !endSegment) return;
+			player.autoFollow = true;
+			narrationAnnouncement = 'Reading the requested passage';
+			void player.playFromSegment(range.startIndex, 0, {
+				segmentIndex: range.endIndex,
+				wordIndex: Math.max(0, endSegment.words.length - 1)
+			});
+		};
 		void providersState.initialize().then(() => {
 			if (providersState.speechEngine === 'elevenlabs')
 				void providersState.refreshElevenLabsVoices();
@@ -248,6 +258,7 @@
 			realtimeAssistant.stop();
 			realtimeAssistant.onShowPassage = undefined;
 			realtimeAssistant.onClearHighlight = undefined;
+			realtimeAssistant.onPlayPassage = undefined;
 			narrationState.stop();
 			void releasePdfRenderer();
 		};
@@ -2964,25 +2975,25 @@
 		backdrop-filter: blur(14px);
 	}
 
-	/* The assistant's status/caption pill floats where return-follow does,
-	   centered so the two never collide. */
+	/* The assistant speaks from a bubble anchored above its mic chip, hugging
+	   the left edge so it lands in the page margin instead of over the text. */
 	.assistant-caption {
 		position: absolute;
-		bottom: calc(var(--player-height) + 16px);
-		left: 50%;
+		bottom: calc(var(--player-height) + 12px);
+		left: 14px;
 		z-index: 15;
 		display: flex;
-		max-width: min(560px, calc(100% - 170px));
-		align-items: center;
+		max-width: min(300px, calc(100% - 96px));
+		align-items: flex-start;
 		gap: 8px;
-		padding: 7px 8px 7px 14px;
+		padding: 9px 10px 9px 13px;
 		border: 1px solid color-mix(in srgb, var(--primary) 42%, transparent);
-		border-radius: 999px;
+		border-radius: 12px;
+		border-bottom-left-radius: 4px;
 		background: color-mix(in srgb, var(--surface) 94%, transparent);
 		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38);
 		color: var(--text);
 		backdrop-filter: blur(14px);
-		transform: translateX(-50%);
 	}
 
 	.assistant-caption.failed {
@@ -2993,6 +3004,7 @@
 		width: 8px;
 		height: 8px;
 		flex: 0 0 8px;
+		margin-top: 4px;
 		border-radius: 999px;
 		background: var(--primary);
 		opacity: 0.55;
@@ -3017,11 +3029,15 @@
 		}
 	}
 
+	/* Wraps like a speech bubble; only truly long captions clamp. */
 	.assistant-caption-text {
+		display: -webkit-box;
 		overflow: hidden;
-		font-size: 12px;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 4;
+		line-clamp: 4;
+		font-size: 11.5px;
+		line-height: 1.45;
 	}
 
 	.assistant-tour-step {
@@ -3031,9 +3047,10 @@
 
 	.assistant-caption-close {
 		display: grid;
-		width: 24px;
-		height: 24px;
-		flex: 0 0 24px;
+		width: 22px;
+		height: 22px;
+		flex: 0 0 22px;
+		margin-top: -2px;
 		place-items: center;
 		padding: 0;
 		border: 0;

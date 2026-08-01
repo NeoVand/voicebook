@@ -22,6 +22,7 @@ export interface TourStop {
 export type AssistantToolCall =
 	| { name: 'show_passage'; range: PassageRange }
 	| { name: 'read_passage'; range: PassageRange }
+	| { name: 'play_section'; range: PassageRange }
 	| { name: 'clear_highlight' }
 	| { name: 'plan_tour'; stops: TourStop[] }
 	| { name: 'continue_tour' };
@@ -119,6 +120,8 @@ Whenever you discuss, quote, summarize, or explain a specific part of the docume
 
 When the reader asks for an overview or a walkthrough ("walk me through…", "give me the big picture", "what should I read?"), call plan_tour with three to seven stops in reading order — each stop is a marker range plus a few words on why it matters. The app then walks you stop by stop: narrate the highlighted stop in a sentence or two, and the next stop arrives when you finish speaking. If the reader interrupts with a question, answer it; call continue_tour when they are ready to go on.
 
+When the reader asks to hear part of the document read aloud ("read this section to me", "play it from here"), call play_section with that range — the app's reading voice takes over, waiting for you to finish speaking first. A short lead-in ("Here's that section") is fine; after it, stay silent until the reader speaks to you again.
+
 Ground everything you say in the document; when it does not contain the answer, say so plainly. Match the language the reader speaks to you (start in the document's language). Keep replies short and conversational — a few sentences unless the reader asks for depth.`;
 
 export function buildAssistantInstructions(
@@ -204,6 +207,22 @@ export function assistantTools(includeReadPassage: boolean): RealtimeToolSpec[] 
 			name: 'continue_tour',
 			description: 'Resume a paused walkthrough at its current stop.',
 			parameters: { type: 'object', properties: {} }
+		},
+		{
+			type: 'function',
+			name: 'play_section',
+			description:
+				"Start the app's reading voice on a passage — for requests like 'read this section to me'. After calling it, stay silent: the narrator has the stage until the reader speaks to you again.",
+			parameters: {
+				type: 'object',
+				properties: {
+					start_segment: segmentParameter('First segment to read.'),
+					end_segment: segmentParameter(
+						'Last segment to read, inclusive. Omit for a single segment.'
+					)
+				},
+				required: ['start_segment']
+			}
 		}
 	];
 	if (includeReadPassage) {
@@ -242,7 +261,7 @@ export function parseAssistantToolCall(
 	}
 	if (name === 'clear_highlight' || name === 'continue_tour') return { call: { name } };
 	if (name === 'plan_tour') return parsePlanTour(doc, parsed);
-	if (name !== 'show_passage' && name !== 'read_passage') {
+	if (name !== 'show_passage' && name !== 'read_passage' && name !== 'play_section') {
 		return { error: `Unknown tool "${name}".` };
 	}
 	const record = (parsed ?? {}) as Record<string, unknown>;
