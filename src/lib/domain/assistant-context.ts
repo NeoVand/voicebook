@@ -5,7 +5,8 @@
  * services/openai-realtime.ts and the orchestration in
  * state/realtime-assistant.svelte.ts.
  */
-import type { NormalizedDocument } from './types';
+import { tableMarkdown } from './narration';
+import type { DocumentBlock, NormalizedDocument } from './types';
 
 export interface PassageRange {
 	/** Inclusive segment indexes into NormalizedDocument.segments. */
@@ -26,7 +27,8 @@ export type AssistantToolCall =
 	| { name: 'clear_highlight' }
 	| { name: 'plan_tour'; stops: TourStop[] }
 	| { name: 'continue_tour' }
-	| { name: 'get_reader_focus' };
+	| { name: 'get_reader_focus' }
+	| { name: 'point_at'; segment: number };
 
 /** What the reader is pointing at right now, as segment indexes. */
 export interface ReaderFocus {
@@ -68,6 +70,22 @@ function segmentText(doc: NormalizedDocument, index: number): string {
 	return text || segment.normalizedText.replace(/\s+/g, ' ').trim();
 }
 
+/** The raw content of a construct block — segments only carry the SPOKEN
+ * description of an equation, table, or diagram, so without this the model
+ * can talk about the narration but never about the thing itself. */
+function blockSource(block: DocumentBlock | undefined): string {
+	if (!block) return '';
+	if (block.table) return `[table]\n${tableMarkdown(block.table)}`;
+	if (block.kind === 'math') return `[equation] ${block.text.trim()}`;
+	if (block.kind === 'mermaid' || (block.kind === 'code' && block.codeLanguage === 'mermaid')) {
+		return `[diagram]\n${block.text.trim()}`;
+	}
+	if (block.kind === 'code') {
+		return `[code${block.codeLanguage ? ` ${block.codeLanguage}` : ''}]\n${block.text.trim()}`;
+	}
+	return '';
+}
+
 interface SerializedBody {
 	body: string;
 	/** Index of the first segment that did NOT fit, or -1 when all fit. */
@@ -93,7 +111,8 @@ function serializeBody(doc: NormalizedDocument, budget: number): SerializedBody 
 				block?.kind === 'heading'
 					? `${'#'.repeat(Math.max(1, Math.min(6, block.level ?? 1)))} `
 					: '';
-			piece = `${parts.length ? '\n\n' : ''}${heading}${marker(index)} ${segmentText(doc, index)}`;
+			const source = blockSource(block);
+			piece = `${parts.length ? '\n\n' : ''}${source ? `${source}\n` : ''}${heading}${marker(index)} ${segmentText(doc, index)}`;
 		}
 		if (length + piece.length > budget) return { body: parts.join(''), cutAt: index };
 		parts.push(piece);
@@ -124,7 +143,9 @@ When the conversation begins, greet the reader in one or two short sentences, in
 
 Markers like ⟦7⟧ number each passage of the document. They are invisible to the reader: never say the numbers or the word "segment" aloud — refer to places naturally ("this paragraph", "the section on…").
 
-Whenever you discuss, quote, summarize, or explain a specific part of the document, call show_passage with that passage's marker numbers first, so the reader sees it highlighted while you speak. When one answer touches several places, call show_passage again for each part just before you speak about it — the highlight should follow your voice. Call clear_highlight when the conversation leaves the document.
+Lines starting with [equation], [table], [code], or [diagram] carry the real content of those constructs; the ⟦n⟧ lines after them are the spoken descriptions the reader hears instead. Ground everything you say about an equation, table, or diagram in the real content, not the description.
+
+Whenever you discuss, quote, summarize, or explain a specific part of the document, call show_passage with that passage's marker numbers first, so the reader sees it highlighted while you speak. When one answer touches several places, call show_passage again for each part just before you speak about it — the highlight should follow your voice. When a highlighted passage has several pieces — bullets, list items, table rows, steps — call point_at with the exact segment you are describing as you reach it: the reader follows the darker mark through the passage. Call clear_highlight when the conversation leaves the document.
 
 When the reader says "this", "here", or "what I'm looking at" ("explain this section", "what does this mean?"), call get_reader_focus first — it reports their text selection, the passage under their cursor, and the narration playhead. Trust the selection over the hover, and the hover over the playhead. Then show_passage it and answer.
 
@@ -175,6 +196,19 @@ export function assistantTools(includeReadPassage: boolean): RealtimeToolSpec[] 
 					)
 				},
 				required: ['start_segment']
+			}
+		},
+		{
+			type: 'function',
+			name: 'point_at',
+			description:
+				'Within the highlighted passage, put a stronger mark on the one segment you are describing right now — move it piece by piece through bullets, rows, or steps.',
+			parameters: {
+				type: 'object',
+				properties: {
+					segment: segmentParameter('The ⟦n⟧ segment to emphasize.')
+				},
+				required: ['segment']
 			}
 		},
 		{
@@ -280,6 +314,14 @@ export function parseAssistantToolCall(
 		return { call: { name } };
 	}
 	if (name === 'plan_tour') return parsePlanTour(doc, parsed);
+	if (name === 'point_at') {
+		const segment = toSegmentIndex((parsed as { segment?: unknown })?.segment);
+		const last = doc.segments.length - 1;
+		if (segment === undefined || segment > last) {
+			return { error: `point_at needs a segment number from 0 to ${last}.` };
+		}
+		return { call: { name: 'point_at', segment } };
+	}
 	if (name !== 'show_passage' && name !== 'read_passage' && name !== 'play_section') {
 		return { error: `Unknown tool "${name}".` };
 	}
@@ -332,13 +374,16 @@ export function readPassageText(
 	range: PassageRange,
 	charLimit = READ_PASSAGE_CHAR_LIMIT
 ): { text: string; truncated: boolean } {
+	const blocksById = new Map(doc.blocks.map((block) => [block.id, block]));
 	const parts: string[] = [];
 	let length = 0;
 	let previousBlockId: string | undefined;
 	for (let index = range.startIndex; index <= range.endIndex; index += 1) {
 		const segment = doc.segments[index];
 		const separator = !parts.length ? '' : segment.blockId === previousBlockId ? ' ' : '\n\n';
-		const piece = `${separator}${marker(index)} ${segmentText(doc, index)}`;
+		const source =
+			segment.blockId === previousBlockId ? '' : blockSource(blocksById.get(segment.blockId));
+		const piece = `${separator}${source ? `${source}\n` : ''}${marker(index)} ${segmentText(doc, index)}`;
 		if (length + piece.length > charLimit) return { text: parts.join(''), truncated: true };
 		parts.push(piece);
 		length += piece.length;

@@ -70,6 +70,7 @@ export default defineConfig({
 			reporter: ['text', 'json', 'json-summary', 'html'],
 			include: [
 				'src/lib/domain/assistant-context.ts',
+				'src/lib/domain/document-lens.ts',
 				'src/lib/domain/docx-extras.ts',
 				'src/lib/domain/explain-prompts.ts',
 				'src/lib/domain/importers.ts',
