@@ -13,10 +13,20 @@ export interface PassageRange {
 	endIndex: number;
 }
 
+export interface TourStop {
+	range: PassageRange;
+	/** The model's own note on what to say at this stop. */
+	point: string;
+}
+
 export type AssistantToolCall =
 	| { name: 'show_passage'; range: PassageRange }
 	| { name: 'read_passage'; range: PassageRange }
-	| { name: 'clear_highlight' };
+	| { name: 'clear_highlight' }
+	| { name: 'plan_tour'; stops: TourStop[] }
+	| { name: 'continue_tour' };
+
+export const TOUR_STOP_LIMIT = 8;
 
 export interface AssistantInstructions {
 	instructions: string;
@@ -105,7 +115,9 @@ When the conversation begins, greet the reader in one or two short sentences, in
 
 Markers like ⟦7⟧ number each passage of the document. They are invisible to the reader: never say the numbers or the word "segment" aloud — refer to places naturally ("this paragraph", "the section on…").
 
-Whenever you discuss, quote, summarize, or explain a specific part of the document, call show_passage with that passage's marker numbers first, so the reader sees it highlighted while you speak. Move the highlight as you move through the text; call clear_highlight when the conversation leaves the document.
+Whenever you discuss, quote, summarize, or explain a specific part of the document, call show_passage with that passage's marker numbers first, so the reader sees it highlighted while you speak. When one answer touches several places, call show_passage again for each part just before you speak about it — the highlight should follow your voice. Call clear_highlight when the conversation leaves the document.
+
+When the reader asks for an overview or a walkthrough ("walk me through…", "give me the big picture", "what should I read?"), call plan_tour with three to seven stops in reading order — each stop is a marker range plus a few words on why it matters. The app then walks you stop by stop: narrate the highlighted stop in a sentence or two, and the next stop arrives when you finish speaking. If the reader interrupts with a question, answer it; call continue_tour when they are ready to go on.
 
 Ground everything you say in the document; when it does not contain the answer, say so plainly. Match the language the reader speaks to you (start in the document's language). Keep replies short and conversational — a few sentences unless the reader asks for depth.`;
 
@@ -157,6 +169,41 @@ export function assistantTools(includeReadPassage: boolean): RealtimeToolSpec[] 
 			name: 'clear_highlight',
 			description: 'Remove the highlight once the conversation moves away from the text.',
 			parameters: { type: 'object', properties: {} }
+		},
+		{
+			type: 'function',
+			name: 'plan_tour',
+			description:
+				'Plan a guided walkthrough of the document. Give the stops in reading order; the app highlights each stop in turn and advances you as you finish narrating it. Use for overview and "walk me through" requests.',
+			parameters: {
+				type: 'object',
+				properties: {
+					stops: {
+						type: 'array',
+						minItems: 1,
+						maxItems: TOUR_STOP_LIMIT,
+						items: {
+							type: 'object',
+							properties: {
+								start_segment: segmentParameter('First segment of this stop.'),
+								end_segment: segmentParameter('Last segment of this stop, inclusive.'),
+								point: {
+									type: 'string',
+									description: 'A few words on what to say at this stop.'
+								}
+							},
+							required: ['start_segment', 'end_segment', 'point']
+						}
+					}
+				},
+				required: ['stops']
+			}
+		},
+		{
+			type: 'function',
+			name: 'continue_tour',
+			description: 'Resume a paused walkthrough at its current stop.',
+			parameters: { type: 'object', properties: {} }
 		}
 	];
 	if (includeReadPassage) {
@@ -193,7 +240,8 @@ export function parseAssistantToolCall(
 	} catch {
 		return { error: 'The arguments were not valid JSON.' };
 	}
-	if (name === 'clear_highlight') return { call: { name } };
+	if (name === 'clear_highlight' || name === 'continue_tour') return { call: { name } };
+	if (name === 'plan_tour') return parsePlanTour(doc, parsed);
 	if (name !== 'show_passage' && name !== 'read_passage') {
 		return { error: `Unknown tool "${name}".` };
 	}
@@ -210,6 +258,34 @@ export function parseAssistantToolCall(
 	return {
 		call: { name, range: { startIndex: Math.min(start, end), endIndex: Math.max(start, end) } }
 	};
+}
+
+function parsePlanTour(
+	doc: NormalizedDocument,
+	parsed: unknown
+): { call?: AssistantToolCall; error?: string } {
+	const stops = (parsed as { stops?: unknown })?.stops;
+	if (!Array.isArray(stops) || stops.length === 0) {
+		return { error: 'plan_tour needs a non-empty stops array.' };
+	}
+	if (stops.length > TOUR_STOP_LIMIT) {
+		return { error: `Plan at most ${TOUR_STOP_LIMIT} stops.` };
+	}
+	const last = doc.segments.length - 1;
+	const parsedStops: TourStop[] = [];
+	for (const stop of stops) {
+		const record = (stop ?? {}) as Record<string, unknown>;
+		const start = toSegmentIndex(record.start_segment);
+		const end = record.end_segment === undefined ? start : toSegmentIndex(record.end_segment);
+		if (start === undefined || end === undefined || start > last || end > last) {
+			return { error: `Every stop needs segment numbers from 0 to ${last}.` };
+		}
+		parsedStops.push({
+			range: { startIndex: Math.min(start, end), endIndex: Math.max(start, end) },
+			point: typeof record.point === 'string' ? record.point.slice(0, 200) : ''
+		});
+	}
+	return { call: { name: 'plan_tour', stops: parsedStops } };
 }
 
 /** The passage's text with markers kept, so the model can cite precisely. */
