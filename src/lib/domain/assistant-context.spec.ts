@@ -92,6 +92,7 @@ describe('assistantTools', () => {
 		expect(assistantTools(false).map((tool) => tool.name)).toEqual([
 			'show_passage',
 			'clear_highlight',
+			'get_reader_focus',
 			'plan_tour',
 			'continue_tour',
 			'play_section'
@@ -99,6 +100,7 @@ describe('assistantTools', () => {
 		expect(assistantTools(true).map((tool) => tool.name)).toEqual([
 			'show_passage',
 			'clear_highlight',
+			'get_reader_focus',
 			'plan_tour',
 			'continue_tour',
 			'play_section',
@@ -169,6 +171,12 @@ describe('parseAssistantToolCall', () => {
 	it('parses continue_tour regardless of arguments', () => {
 		expect(parseAssistantToolCall(doc(), 'continue_tour', '').call).toEqual({
 			name: 'continue_tour'
+		});
+	});
+
+	it('parses get_reader_focus regardless of arguments', () => {
+		expect(parseAssistantToolCall(doc(), 'get_reader_focus', '').call).toEqual({
+			name: 'get_reader_focus'
 		});
 	});
 

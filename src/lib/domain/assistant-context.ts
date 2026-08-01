@@ -25,7 +25,15 @@ export type AssistantToolCall =
 	| { name: 'play_section'; range: PassageRange }
 	| { name: 'clear_highlight' }
 	| { name: 'plan_tour'; stops: TourStop[] }
-	| { name: 'continue_tour' };
+	| { name: 'continue_tour' }
+	| { name: 'get_reader_focus' };
+
+/** What the reader is pointing at right now, as segment indexes. */
+export interface ReaderFocus {
+	selection?: PassageRange;
+	hovered?: number;
+	playhead?: number;
+}
 
 export const TOUR_STOP_LIMIT = 8;
 
@@ -118,6 +126,8 @@ Markers like ⟦7⟧ number each passage of the document. They are invisible to 
 
 Whenever you discuss, quote, summarize, or explain a specific part of the document, call show_passage with that passage's marker numbers first, so the reader sees it highlighted while you speak. When one answer touches several places, call show_passage again for each part just before you speak about it — the highlight should follow your voice. Call clear_highlight when the conversation leaves the document.
 
+When the reader says "this", "here", or "what I'm looking at" ("explain this section", "what does this mean?"), call get_reader_focus first — it reports their text selection, the passage under their cursor, and the narration playhead. Trust the selection over the hover, and the hover over the playhead. Then show_passage it and answer.
+
 When the reader asks for an overview or a walkthrough ("walk me through…", "give me the big picture", "what should I read?"), call plan_tour with three to seven stops in reading order — each stop is a marker range plus a few words on why it matters. The app then walks you stop by stop: narrate the highlighted stop in a sentence or two, and the next stop arrives when you finish speaking. If the reader interrupts with a question, answer it; call continue_tour when they are ready to go on.
 
 When the reader asks to hear part of the document read aloud ("read this section to me", "play it from here"), call play_section with that range — the app's reading voice takes over, waiting for you to finish speaking first. A short lead-in ("Here's that section") is fine; after it, stay silent until the reader speaks to you again.
@@ -171,6 +181,13 @@ export function assistantTools(includeReadPassage: boolean): RealtimeToolSpec[] 
 			type: 'function',
 			name: 'clear_highlight',
 			description: 'Remove the highlight once the conversation moves away from the text.',
+			parameters: { type: 'object', properties: {} }
+		},
+		{
+			type: 'function',
+			name: 'get_reader_focus',
+			description:
+				'See what the reader is pointing at right now: their text selection, the passage under their mouse, and the narration playhead, as segment numbers. Call when they say "this", "here", or similar.',
 			parameters: { type: 'object', properties: {} }
 		},
 		{
@@ -259,7 +276,9 @@ export function parseAssistantToolCall(
 	} catch {
 		return { error: 'The arguments were not valid JSON.' };
 	}
-	if (name === 'clear_highlight' || name === 'continue_tour') return { call: { name } };
+	if (name === 'clear_highlight' || name === 'continue_tour' || name === 'get_reader_focus') {
+		return { call: { name } };
+	}
 	if (name === 'plan_tour') return parsePlanTour(doc, parsed);
 	if (name !== 'show_passage' && name !== 'read_passage' && name !== 'play_section') {
 		return { error: `Unknown tool "${name}".` };

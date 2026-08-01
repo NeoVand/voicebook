@@ -8,6 +8,7 @@
 		ChevronLeft,
 		ChevronRight,
 		LoaderCircle,
+		EyeOff,
 		LocateFixed,
 		MoonStar,
 		Pause,
@@ -233,6 +234,11 @@
 		realtimeAssistant.onClearHighlight = () => {
 			assistantFocus = undefined;
 		};
+		realtimeAssistant.onGetReaderFocus = () => ({
+			selection: selectionSegmentRange(),
+			hovered: hoveredSegmentId ? segmentIndexes.get(hoveredSegmentId) : undefined,
+			playhead: player.currentSegmentIndex
+		});
 		realtimeAssistant.onPlayPassage = (range) => {
 			const endSegment = book?.segments[range.endIndex];
 			if (!book || !endSegment) return;
@@ -259,6 +265,7 @@
 			realtimeAssistant.onShowPassage = undefined;
 			realtimeAssistant.onClearHighlight = undefined;
 			realtimeAssistant.onPlayPassage = undefined;
+			realtimeAssistant.onGetReaderFocus = undefined;
 			narrationState.stop();
 			void releasePdfRenderer();
 		};
@@ -775,6 +782,32 @@
 		requestAnimationFrame(() => element.focus());
 	};
 
+	/** Last passage the cursor rested on — the assistant's "this". */
+	let hoveredSegmentId: string | undefined;
+
+	function trackHoveredSegment(event: PointerEvent): void {
+		const id = (event.target as Element | null)
+			?.closest?.('[data-segment-id]')
+			?.getAttribute('data-segment-id');
+		if (id) hoveredSegmentId = id;
+	}
+
+	/** The current selection as a segment range, when it lands in the text. */
+	function selectionSegmentRange(): PassageRange | undefined {
+		const selection = window.getSelection();
+		if (!selection || selection.isCollapsed || !book) return;
+		const toElement = (node: Node | null) =>
+			node instanceof Element ? node : (node?.parentElement ?? null);
+		const anchor = segmentForElement(toElement(selection.anchorNode));
+		const focus = segmentForElement(toElement(selection.focusNode));
+		const a = anchor ? segmentIndexes.get(anchor.id) : undefined;
+		const b = focus ? segmentIndexes.get(focus.id) : undefined;
+		const start = a ?? b;
+		const end = b ?? a;
+		if (start === undefined || end === undefined) return;
+		return { startIndex: Math.min(start, end), endIndex: Math.max(start, end) };
+	}
+
 	function segmentForElement(element: Element | null): SpeechSegment | undefined {
 		const segmentId = element?.closest<HTMLElement>('[data-segment-id]')?.dataset.segmentId;
 		return segmentId ? book?.segments.find((candidate) => candidate.id === segmentId) : undefined;
@@ -1008,9 +1041,12 @@
 			realtimeAssistant.stopTalking();
 			return;
 		}
-		// While a voice conversation is on, Space belongs to it — starting
-		// narration underneath would put two voices on stage.
-		if (realtimeAssistant.active) return;
+		// While a voice conversation is on, Space belongs to it — a quick tap
+		// hushes the assistant into standby instead of toggling narration.
+		if (realtimeAssistant.active) {
+			realtimeAssistant.hush();
+			return;
+		}
 		if (player.isBuffering) player.cancelGeneration();
 		else void player.toggle();
 	}
@@ -1502,6 +1538,7 @@
 				style:--document-zoom={readerChrome.documentZoom}
 				style:--document-canvas-width={`${readerChrome.documentCanvasWidth}px`}
 				aria-label={book.title}
+				onpointerover={trackHoveredSegment}
 				{@attach trackReadingCanvas}
 			>
 				<header class="document-heading" id={titleBlock?.id} tabindex="-1">
@@ -1640,7 +1677,7 @@
 				</button>
 			{/if}
 
-			{#if realtimeAssistant.status !== 'idle'}
+			{#if realtimeAssistant.status !== 'idle' && (readerChrome.assistantCaptions || realtimeAssistant.status === 'error')}
 				<div
 					class="assistant-caption"
 					class:failed={realtimeAssistant.status === 'error'}
@@ -1669,6 +1706,17 @@
 											: 'Listening — release to send'
 										: 'Hold the mic or Space to talk — click the mic for options')}
 					</span>
+					{#if realtimeAssistant.status !== 'error'}
+						<button
+							class="assistant-caption-close"
+							type="button"
+							aria-label="Hide assistant commentary. Turn it back on from the mic menu"
+							title="Hide commentary"
+							onclick={() => readerChrome.setAssistantCaptions(false)}
+						>
+							<EyeOff size={13} />
+						</button>
+					{/if}
 					<button
 						class="assistant-caption-close"
 						type="button"

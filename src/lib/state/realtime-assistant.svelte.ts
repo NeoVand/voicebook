@@ -20,6 +20,7 @@ import {
 	readPassageText,
 	type AssistantInstructions,
 	type PassageRange,
+	type ReaderFocus,
 	type TourStop
 } from '$lib/domain/assistant-context';
 import type { NormalizedDocument } from '$lib/domain/types';
@@ -81,6 +82,8 @@ export class RealtimeAssistantState {
 	onClearHighlight?: () => void;
 	/** Start the app's narration voice over a passage (play_section). */
 	onPlayPassage?: (range: PassageRange) => void;
+	/** What the reader is pointing at (selection, hover, playhead). */
+	onGetReaderFocus?: () => ReaderFocus;
 
 	private channel?: RealtimeChannel;
 	private microphone?: MediaStream;
@@ -122,6 +125,16 @@ export class RealtimeAssistantState {
 			return;
 		}
 		if (this.status === 'live') this.openHeldMicrophone();
+	}
+
+	/** Quiet the assistant without opening the microphone: cut the current
+	 * answer and pause any tour — the session stays live in standby. */
+	hush(): void {
+		if (this.status !== 'live') return;
+		this.pauseTour();
+		this.pendingPlayback = undefined;
+		this.channel?.send({ type: 'response.cancel' });
+		this.channel?.send({ type: 'output_audio_buffer.clear' });
 	}
 
 	/** Release: close the microphone and ask for the answer. */
@@ -471,6 +484,29 @@ export class RealtimeAssistantState {
 			this.applyTourStop();
 			const stop = tour.stops[tour.index];
 			return { ok: true, stop: tour.index + 1, of: tour.stops.length, point: stop.point };
+		}
+		if (call.name === 'get_reader_focus') {
+			const focus = this.onGetReaderFocus?.();
+			const output: Record<string, unknown> = {};
+			if (focus?.selection) {
+				output.selected_segments = {
+					start: focus.selection.startIndex,
+					end: focus.selection.endIndex,
+					text: readPassageText(doc, focus.selection, 500).text
+				};
+			}
+			if (focus?.hovered !== undefined) {
+				output.hovered_segment = {
+					index: focus.hovered,
+					text: readPassageText(doc, { startIndex: focus.hovered, endIndex: focus.hovered }, 300)
+						.text
+				};
+			}
+			if (focus?.playhead !== undefined) output.playhead_segment = focus.playhead;
+			if (!Object.keys(output).length) {
+				return { note: 'The reader is not pointing at anything right now.' };
+			}
+			return output;
 		}
 		if (call.name === 'play_section') {
 			this.pauseTour();

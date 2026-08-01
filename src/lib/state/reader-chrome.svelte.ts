@@ -9,6 +9,9 @@ class ReaderChromeState {
 	/** The listening mode new imports start in. Per-document overrides live on
 	 * the document itself and take precedence in the reader. */
 	defaultListeningMode = $state<ListeningMode>(DEFAULT_LISTENING_MODE);
+	/** The voice assistant's commentary bubble; hideable from the bubble
+	 * itself, restorable from the mic chip's menu. */
+	assistantCaptions = $state(true);
 
 	get zoomPercent(): number {
 		return Math.round(this.documentZoom * 100);
@@ -24,6 +27,14 @@ class ReaderChromeState {
 		if (Number.isFinite(stored) && stored >= 0.8 && stored <= 1.6) this.documentZoom = stored;
 		const mode = window.localStorage.getItem('voicebook:listening-mode');
 		if (isListeningMode(mode)) this.defaultListeningMode = mode;
+		this.assistantCaptions = window.localStorage.getItem('voicebook:assistant-captions') !== '0';
+	}
+
+	setAssistantCaptions(on: boolean): void {
+		this.assistantCaptions = on;
+		if (typeof window !== 'undefined') {
+			window.localStorage.setItem('voicebook:assistant-captions', on ? '1' : '0');
+		}
 	}
 
 	setDefaultListeningMode(mode: ListeningMode): void {

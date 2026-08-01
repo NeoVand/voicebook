@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Mic, MicOff, PhoneOff } from '@lucide/svelte';
+	import { Eye, Mic, MicOff, PhoneOff } from '@lucide/svelte';
 	import { tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
@@ -11,6 +11,7 @@
 	} from '$lib/domain/provider-catalog';
 	import type { NormalizedDocument } from '$lib/domain/types';
 	import { providersState } from '$lib/state/providers.svelte';
+	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
 
 	interface Props {
@@ -325,6 +326,24 @@
 				<span>
 					<strong>Hands-free conversation</strong>
 					<small>{handsFree ? 'On — it listens continuously' : 'Talk without holding'}</small>
+				</span>
+			</button>
+
+			<button
+				class="menu-item"
+				type="button"
+				role="menuitemcheckbox"
+				aria-checked={readerChrome.assistantCaptions}
+				onclick={() => readerChrome.setAssistantCaptions(!readerChrome.assistantCaptions)}
+			>
+				<Eye size={15} strokeWidth={1.8} aria-hidden="true" />
+				<span>
+					<strong>Show commentary</strong>
+					<small>
+						{readerChrome.assistantCaptions
+							? 'On — captions above the mic'
+							: 'Off — hidden while it talks'}
+					</small>
 				</span>
 			</button>
 
