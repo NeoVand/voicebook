@@ -436,15 +436,23 @@ test('import → install → play → seek → reload → offline reopen', async
 		'fill',
 		'none'
 	);
-	const brandPalette = await page.locator('.brand-logo').evaluate((logo) => {
-		const fill = (selector: string) => {
-			const element = logo.querySelector<SVGElement>(selector);
-			if (!element) throw new Error(`Missing brand layer: ${selector}`);
-			return getComputedStyle(element).fill;
-		};
-		return [fill('.headphones'), fill('.paper'), fill('.wave-bar'), fill('.wave-bar:nth-child(2)')];
-	});
-	expect(new Set(brandPalette).size).toBe(3);
+	// The brand mark is a stroke icon that inherits the theme color from its
+	// wrapper — a broken theme wiring would leave it black or fill it solid.
+	const brand = await page
+		.locator('.brand-logo')
+		.first()
+		.evaluate((logo) => {
+			const path = logo.querySelector<SVGPathElement>('svg path');
+			if (!path) throw new Error('Missing brand icon path');
+			return {
+				stroke: getComputedStyle(path).stroke,
+				fill: getComputedStyle(path).fill,
+				color: getComputedStyle(logo).color
+			};
+		});
+	expect(brand.fill).toBe('none');
+	expect(brand.stroke).toBe(brand.color);
+	expect(brand.stroke.startsWith('rgb')).toBe(true);
 	const readerTypography = await page.evaluate(() => {
 		const title = document.querySelector<HTMLElement>('.reader-commandbar-title strong');
 		const outlineItem = document.querySelector<HTMLElement>('.outline-panel nav button');

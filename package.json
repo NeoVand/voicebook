@@ -62,6 +62,8 @@
 	"dependencies": {
 		"@fontsource-variable/instrument-sans": "5.3.0",
 		"@fontsource-variable/newsreader": "5.3.0",
+		"@hugeicons/core-free-icons": "^4.2.3",
+		"@hugeicons/svelte": "^1.1.4",
 		"@huggingface/hub": "^2.13.3",
 		"@huggingface/transformers": "^4.2.0",
 		"@llamaindex/liteparse-wasm": "^2.8.0",
