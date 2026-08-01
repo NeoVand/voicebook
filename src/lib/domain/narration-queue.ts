@@ -42,46 +42,52 @@ const CONTEXT_KINDS = new Set([
 	'definition-description'
 ]);
 
+/** Marks where the narration will be spoken inside its surrounding prose, so
+ * the model writes a continuation of the flow rather than an announcement. */
+export const NARRATION_SLOT = '⟪the narration speaks here⟫';
+
 /**
- * The prose surrounding a construct's block. For display equations the
- * sentence AFTER the equation usually defines the symbols ("where the
- * discount factor gamma controls…"), so a slice of the following prose block
- * is appended after the preceding text.
+ * The prose surrounding a construct's block, with an explicit slot where the
+ * narration will land: "…text before ⟪the narration speaks here⟫ text
+ * after…". The sentence after a display equation usually defines the symbols
+ * ("where the discount factor gamma controls…"), and the prose around a
+ * table or diagram is what its narration should connect to.
  */
 export function documentContextFor(
 	blocks: DocumentBlock[],
 	construct: NarrationConstruct,
 	limits: { before?: number; after?: number } = {}
 ): string {
-	const before = limits.before ?? 260;
-	const after = limits.after ?? 220;
+	const beforeLimit = limits.before ?? 260;
+	const afterLimit = limits.after ?? 220;
 	const index = blocks.findIndex((block) => block.id === construct.blockId);
 	if (index < 0) return '';
-	let context = '';
-	for (let cursor = index - 1; cursor >= 0 && context.length < before; cursor -= 1) {
+	let before = '';
+	for (let cursor = index - 1; cursor >= 0 && before.length < beforeLimit; cursor -= 1) {
 		const block = blocks[cursor];
 		if (!CONTEXT_KINDS.has(block.kind) || !block.text.trim()) continue;
-		context = context ? `${block.text} ${context}` : block.text;
+		before = before ? `${block.text} ${before}` : block.text;
 	}
-	if (context.length > before) context = context.slice(-before);
+	if (before.length > beforeLimit) before = before.slice(-beforeLimit);
 
-	if (after > 0 && (construct.kind === 'math-block' || construct.kind === 'mermaid')) {
+	let after = '';
+	if (afterLimit > 0) {
 		for (let cursor = index + 1; cursor < blocks.length; cursor += 1) {
 			const block = blocks[cursor];
 			if (!CONTEXT_KINDS.has(block.kind) || !block.text.trim()) continue;
-			let following = block.text.replace(/\s+/g, ' ').trim();
-			if (following.length > after) {
-				const clipped = following.slice(0, after);
+			after = block.text.replace(/\s+/g, ' ').trim();
+			if (after.length > afterLimit) {
+				const clipped = after.slice(0, afterLimit);
 				const sentenceEnd = Math.max(
 					clipped.lastIndexOf('. '),
 					clipped.lastIndexOf('! '),
 					clipped.lastIndexOf('? ')
 				);
-				following = sentenceEnd > after * 0.3 ? clipped.slice(0, sentenceEnd + 1) : clipped;
+				after = sentenceEnd > afterLimit * 0.3 ? clipped.slice(0, sentenceEnd + 1) : clipped;
 			}
-			context = context ? `${context} ${following}` : following;
 			break;
 		}
 	}
-	return context;
+	if (!before && !after) return '';
+	return [before, NARRATION_SLOT, after].filter(Boolean).join(' ');
 }

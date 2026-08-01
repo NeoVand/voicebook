@@ -44,13 +44,14 @@ export const DEFAULT_NARRATION_PROMPTS: NarrationPromptTemplates = {
 		'- Reply with plain English words only. Nothing else.',
 		'- Never output symbols, formulas, LaTeX, code, or markdown. No characters like = + * / ^ _ { } ( ) [ ] | % # or backslash.',
 		'- Say everything in words: "x squared", "equals", "seventy one point four percent".',
-		'- Do not repeat the input, explain your task, or add introductions.'
+		'- Do not repeat the input, explain your task, or add introductions.',
+		'- Your narration is spoken inside the reading flow, at the ⟪the narration speaks here⟫ slot in the nearby text: continue naturally from the words before it and hand off to the words after. Prefer a connecting phrase over an announcement — never open with "There is" or "This shows" when the flow offers a better way in.'
 	].join('\n'),
 	'math-block': [
 		'A document reads an equation aloud as: "{{reading}}"',
 		'Nearby text: {{context}}',
 		'',
-		'Write one short sentence naming what the symbols stand for, in the form "Here <symbol> is <what the nearby text calls it>". Use only symbols from the reading and only facts from the nearby text. If the nearby text does not explain the symbols, reply exactly: skip'
+		'Write one short sentence naming what the symbols stand for, fitting the reading flow (for example "Here <symbol> is <what the nearby text calls it>"). Use only symbols from the reading and only facts from the nearby text. If the nearby text does not explain the symbols, reply exactly: skip'
 	].join('\n'),
 	'math-inline': [
 		'Say this math expression as a short spoken phrase in plain words. A backslash starts a Greek letter name, "\\mid" reads as "given", an underscore reads as "sub". Reply with only the phrase, nothing else:',
@@ -58,25 +59,30 @@ export const DEFAULT_NARRATION_PROMPTS: NarrationPromptTemplates = {
 		'{{source}}'
 	].join('\n'),
 	'table-row': [
-		'A table row with columns {{header}}. Say this row as one short natural sentence in words only, covering every column:',
+		'A table row with columns {{header}}. Nearby text: {{context}}',
+		'',
+		'Say this row as one short natural sentence in words only, covering every column and fitting the reading flow — relate or contrast with what came before when the nearby text invites it, and never open with "This row":',
 		'',
 		'{{source}}'
 	].join('\n'),
 	mermaid: [
-		'This code draws {{type}}. In at most two short sentences, tell a listener what it shows, in words only:',
+		'This code draws {{type}}. Nearby text: {{context}}',
+		'',
+		'In at most two short sentences that continue the reading flow, tell a listener what it shows, in words only:',
 		'',
 		'{{source}}'
 	].join('\n'),
 	'code-block': [
-		'A document shows this {{type}} snippet:',
+		'A document shows this {{type}} snippet. Nearby text: {{context}}',
 		'',
 		'{{source}}',
 		'',
-		'Read it aloud for a listener in plain words. If it is a short list of rules or values, speak each line naturally with numbers and signs as words; otherwise say what it does in one or two short sentences. Words only.'
+		'Read it aloud for a listener in plain words, continuing the reading flow. If it is a short list of rules or values, speak each line naturally with numbers and signs as words; otherwise say what it does in one or two short sentences. Words only.'
 	].join('\n'),
 	image: [
 		'A figure has this caption: {{source}}',
-		'Announce the figure to a listener in one short sentence, mentioning only what the caption says.'
+		'Nearby text: {{context}}',
+		'Introduce the figure in one short sentence that continues the reading flow, mentioning only what the caption says.'
 	].join('\n')
 };
 
@@ -132,6 +138,7 @@ const EXEMPLARS: Partial<
 		{
 			source: 'Model: LFM 2.5 | Parameters: 1.2 billion | Accuracy: 71.4%',
 			header: 'Model, Parameters, Accuracy',
+			context: 'The benchmark compares each model in turn. ⟪the narration speaks here⟫',
 			answer:
 				'The model LFM two point five has one point two billion parameters and seventy one point four percent accuracy.'
 		}

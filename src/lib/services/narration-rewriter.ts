@@ -81,11 +81,27 @@ export async function rewriteConstruct(
 	request: NarrationRewriteRequest,
 	signal?: AbortSignal
 ): Promise<string> {
-	const params = request.params ?? NARRATION_GENERATION_PARAMS[request.construct.kind];
+	const engine = request.engine ?? { type: 'local' as const };
+	const reading =
+		request.construct.kind === 'math-block' ? mathBlockReading(request.construct.source) : null;
+	// LaTeX the deterministic reader cannot voice used to dead-end: the
+	// symbol-sentence prompt had no reading to stand on, failed, and playback
+	// spoke "An equation is shown here." A cloud engine instead reads the
+	// equation itself from source.
+	const speakEquation =
+		request.construct.kind === 'math-block' && !reading && engine.type === 'cloud';
+	const baseParams = request.params ?? NARRATION_GENERATION_PARAMS[request.construct.kind];
 	// A zero token budget means the preset wants the deterministic text only
 	// (Concise equations): settle without touching any engine.
-	if (params.maxNewTokens <= 0) return request.construct.fallbackText;
-	const engine = request.engine ?? { type: 'local' as const };
+	if (baseParams.maxNewTokens <= 0) return request.construct.fallbackText;
+	// A full spoken reading needs room the one-sentence budgets do not give.
+	const params = speakEquation
+		? {
+				...baseParams,
+				maxNewTokens: Math.max(baseParams.maxNewTokens, 160),
+				maxChars: Math.max(baseParams.maxChars, 480)
+			}
+		: baseParams;
 	// Images: cloud engines see the actual pixels; without them a caption is
 	// required (the local model must not invent what it cannot see).
 	let image: CloudImageAttachment | null = null;
@@ -117,9 +133,6 @@ export async function rewriteConstruct(
 					temperature: params.temperature,
 					signal
 				});
-	const reading =
-		request.construct.kind === 'math-block' ? mathBlockReading(request.construct.source) : null;
-
 	for (const strict of [false, true]) {
 		const messages = buildNarrationMessages(request.construct, request.documentContext, {
 			overrides: request.promptOverrides,
@@ -137,6 +150,19 @@ export async function rewriteConstruct(
 					(strict ? '\nRemember: words only, one or two short sentences.' : '')
 			};
 		}
+		if (speakEquation) {
+			messages[messages.length - 1] = {
+				role: 'user',
+				content:
+					'Speak this equation for a listener, in plain words only ("x squared", "equals", ' +
+					'"the sum over"), then add one short sentence saying what it expresses. Continue ' +
+					'the reading flow naturally into it — a lead-in like "The loss is defined as…" ' +
+					'beats an announcement. ' +
+					(request.documentContext ? `Nearby text: ${request.documentContext}\n\n` : '\n') +
+					request.construct.source +
+					(strict ? '\nRemember: words only, short sentences.' : '')
+			};
+		}
 		let raw: string;
 		try {
 			raw = await generate(messages);
@@ -149,6 +175,8 @@ export async function rewriteConstruct(
 		}
 		const cleaned = sanitizeNarration(raw, request.construct.kind, params);
 		if (!cleaned) continue;
+		// The full reading is the narration — no deterministic base to graft.
+		if (speakEquation) return cleaned;
 		if (request.construct.kind !== 'math-block') return cleaned;
 		// Equations: the deterministic reading carries the math; the LLM's
 		// symbol-meaning sentence is appended only when every symbol it names
