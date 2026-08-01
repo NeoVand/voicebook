@@ -44,7 +44,7 @@ describe('anthropic request body', () => {
 
 describe('openai request body', () => {
 	it('keeps system in the message list, disables reasoning, and omits temperature', () => {
-		const body = openaiRequestBody('gpt-5.4-mini', MESSAGES, { maxNewTokens: 64 });
+		const body = openaiRequestBody('gpt-5.6-luna', MESSAGES, { maxNewTokens: 64 });
 		expect(body.reasoning_effort).toBe('none');
 		expect(body.max_completion_tokens).toBe(256);
 		expect(body).not.toHaveProperty('temperature');
@@ -52,7 +52,7 @@ describe('openai request body', () => {
 	});
 
 	it('can drop the reasoning parameter for models that reject it', () => {
-		const body = openaiRequestBody('gpt-5.4-mini', MESSAGES, {}, null);
+		const body = openaiRequestBody('gpt-5.6-luna', MESSAGES, {}, null);
 		expect(body).not.toHaveProperty('reasoning_effort');
 	});
 });
