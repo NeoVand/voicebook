@@ -91,11 +91,15 @@ describe('assistantTools', () => {
 	it('offers read_passage only for truncated documents', () => {
 		expect(assistantTools(false).map((tool) => tool.name)).toEqual([
 			'show_passage',
-			'clear_highlight'
+			'clear_highlight',
+			'plan_tour',
+			'continue_tour'
 		]);
 		expect(assistantTools(true).map((tool) => tool.name)).toEqual([
 			'show_passage',
 			'clear_highlight',
+			'plan_tour',
+			'continue_tour',
 			'read_passage'
 		]);
 	});
@@ -119,6 +123,45 @@ describe('parseAssistantToolCall', () => {
 	it('parses clear_highlight regardless of arguments', () => {
 		expect(parseAssistantToolCall(doc(), 'clear_highlight', '').call).toEqual({
 			name: 'clear_highlight'
+		});
+	});
+
+	it('parses plan_tour stops, ordering reversed ranges and clamping notes', () => {
+		const result = parseAssistantToolCall(
+			doc(),
+			'plan_tour',
+			JSON.stringify({
+				stops: [
+					{ start_segment: 2, end_segment: 1, point: 'songs carry far' },
+					{ start_segment: 4, end_segment: 4, point: 'x'.repeat(300) }
+				]
+			})
+		);
+		expect(result.call).toEqual({
+			name: 'plan_tour',
+			stops: [
+				{ range: { startIndex: 1, endIndex: 2 }, point: 'songs carry far' },
+				{ range: { startIndex: 4, endIndex: 4 }, point: 'x'.repeat(200) }
+			]
+		});
+	});
+
+	it('rejects empty, oversized, and out-of-range tour plans', () => {
+		expect(parseAssistantToolCall(doc(), 'plan_tour', '{"stops":[]}').error).toBe(
+			'plan_tour needs a non-empty stops array.'
+		);
+		const many = JSON.stringify({
+			stops: Array.from({ length: 9 }, () => ({ start_segment: 0, end_segment: 0, point: '' }))
+		});
+		expect(parseAssistantToolCall(doc(), 'plan_tour', many).error).toBe('Plan at most 8 stops.');
+		expect(
+			parseAssistantToolCall(doc(), 'plan_tour', '{"stops":[{"start_segment":7}]}').error
+		).toBe('Every stop needs segment numbers from 0 to 4.');
+	});
+
+	it('parses continue_tour regardless of arguments', () => {
+		expect(parseAssistantToolCall(doc(), 'continue_tour', '').call).toEqual({
+			name: 'continue_tour'
 		});
 	});
 
