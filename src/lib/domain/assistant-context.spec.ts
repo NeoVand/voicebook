@@ -39,6 +39,42 @@ function doc(overrides: Partial<NormalizedDocument> = {}): NormalizedDocument {
 		segment('h2:s0', 'h2', 'Migration'),
 		segment('p2:s0', 'p2', 'Humpbacks migrate toward the poles each summer.')
 	];
+	return base(blocks, segments, overrides);
+}
+
+/** A document whose constructs narrate — the model must still see sources. */
+function constructDoc(): NormalizedDocument {
+	const math: DocumentBlock = { ...block('m1', 'math'), text: 'E = mc^2' };
+	const table: DocumentBlock = {
+		...block('t1'),
+		table: {
+			align: [null, null],
+			header: [
+				{ text: 'Whale', inlines: [] },
+				{ text: 'Range km', inlines: [] }
+			],
+			rows: [
+				[
+					{ text: 'Humpback', inlines: [] },
+					{ text: '8000', inlines: [] }
+				]
+			]
+		}
+	};
+	const blocks = [block('p1'), math, table];
+	const segments = [
+		segment('p1:s0', 'p1', 'Energy relates to mass.'),
+		segment('m1:n0', 'm1', 'Energy equals mass times the speed of light squared.'),
+		segment('t1:n0', 't1', 'Humpbacks range eight thousand kilometres.')
+	];
+	return base(blocks, segments, {});
+}
+
+function base(
+	blocks: DocumentBlock[],
+	segments: SpeechSegment[],
+	overrides: Partial<NormalizedDocument>
+): NormalizedDocument {
 	return {
 		id: 'doc',
 		fingerprint: 'fp',
@@ -79,6 +115,14 @@ describe('buildAssistantInstructions', () => {
 		expect(built.instructions).toContain('# ⟦0⟧ Whale Song');
 		expect(built.instructions).not.toContain('Humpbacks migrate');
 		expect(built.instructions).toMatch(/Passages ⟦\d⟧ through ⟦4⟧ are omitted/);
+	});
+
+	it('exposes construct sources alongside their spoken descriptions', () => {
+		const built = buildAssistantInstructions(constructDoc());
+		expect(built.instructions).toContain('[equation] E = mc^2\n⟦1⟧ Energy equals mass');
+		expect(built.instructions).toContain(
+			'[table]\n| Whale | Range km |\n| --- | --- |\n| Humpback | 8000 |\n⟦2⟧ Humpbacks range'
+		);
 	});
 
 	it('omits the outline section for documents without one', () => {
@@ -214,6 +258,13 @@ describe('readPassageText', () => {
 		expect(passage.truncated).toBe(false);
 		expect(passage.text).toBe(
 			'⟦1⟧ Whales sing across ocean basins. ⟦2⟧ Their songs travel for thousands of miles.\n\n⟦3⟧ Migration'
+		);
+	});
+
+	it('includes construct sources in fetched passages', () => {
+		const passage = readPassageText(constructDoc(), { startIndex: 1, endIndex: 1 });
+		expect(passage.text).toBe(
+			'[equation] E = mc^2\n⟦1⟧ Energy equals mass times the speed of light squared.'
 		);
 	});
 
