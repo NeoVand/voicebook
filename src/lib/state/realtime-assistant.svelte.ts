@@ -95,6 +95,9 @@ export class RealtimeAssistantState {
 	private tour?: { stops: TourStop[]; index: number; paused: boolean };
 	/** A narrated tour stop finished generating; advance when audio drains. */
 	private advanceAfterAudio = false;
+	/** play_section range waiting for the assistant's own audio to drain —
+	 * starting the narrator under the assistant's voice doubles the stage. */
+	private pendingPlayback?: PassageRange;
 	private analysisContext?: AudioContext;
 	private analysisClone?: MediaStream;
 	private analyser?: AnalyserNode;
@@ -261,6 +264,7 @@ export class RealtimeAssistantState {
 		this.tour = undefined;
 		this.tourProgress = undefined;
 		this.advanceAfterAudio = false;
+		this.pendingPlayback = undefined;
 		this.document = undefined;
 		this.context = undefined;
 		this.seenCalls.clear();
@@ -292,6 +296,8 @@ export class RealtimeAssistantState {
 			return;
 		}
 		this.pauseTour();
+		// The reader preempted a queued handoff to the narrator.
+		this.pendingPlayback = undefined;
 		// An open microphone must not hear the narration voice.
 		if (player.isPlaying) player.pause();
 		// Holding the chip is the barge-in: cut whatever is playing
@@ -356,10 +362,11 @@ export class RealtimeAssistantState {
 				break;
 			case 'output_audio_buffer.stopped':
 				this.speaking = false;
-				// The walkthrough advances when the SPEAKER drains, not when
-				// generation ends — audio plays out far behind response.done,
-				// and advancing early drags the highlight a stop ahead of the
-				// voice.
+				// The walkthrough advances — and queued playback starts — when
+				// the SPEAKER drains, not when generation ends: audio plays out
+				// far behind response.done, and acting early puts the app a
+				// step ahead of the voice.
+				this.startPendingPlayback();
 				if (this.advanceAfterAudio) {
 					this.advanceAfterAudio = false;
 					this.advanceTour();
@@ -368,6 +375,7 @@ export class RealtimeAssistantState {
 			case 'output_audio_buffer.cleared':
 				this.speaking = false;
 				this.advanceAfterAudio = false;
+				this.pendingPlayback = undefined;
 				break;
 			case 'input_audio_buffer.speech_started':
 				// Hands-free barge-in; the server cuts the response itself.
@@ -392,6 +400,10 @@ export class RealtimeAssistantState {
 					if (this.speaking) this.advanceAfterAudio = true;
 					else this.advanceTour();
 				}
+				// A call-only response produces no audio events at all — start
+				// the queued playback here instead of waiting for a drain that
+				// will never come.
+				if (!this.speaking) this.startPendingPlayback();
 				break;
 			}
 			case 'error': {
@@ -465,8 +477,14 @@ export class RealtimeAssistantState {
 			this.onClearHighlight?.();
 			// Hands-free would hear the narrator; drop back to hold-to-talk.
 			if (this.mode === 'handsFree') this.setHandsFree(false);
-			this.onPlayPassage?.(call.range);
-			return { ok: true, note: 'Playback started. Stay silent until the reader speaks to you.' };
+			// At tool time there is no telling whether spoken audio follows in
+			// this response — always queue, and start once the assistant's
+			// voice has fully drained.
+			this.pendingPlayback = call.range;
+			return {
+				ok: true,
+				note: 'Playback starts when you finish speaking. Stay silent until the reader speaks to you.'
+			};
 		}
 		this.onShowPassage?.(call.range);
 		const location = describePassageLocation(doc, call.range);
@@ -478,6 +496,13 @@ export class RealtimeAssistantState {
 	private pauseTour(): void {
 		if (this.tour) this.tour.paused = true;
 		this.advanceAfterAudio = false;
+	}
+
+	private startPendingPlayback(): void {
+		const range = this.pendingPlayback;
+		if (!range) return;
+		this.pendingPlayback = undefined;
+		this.onPlayPassage?.(range);
 	}
 
 	private applyTourStop(): void {
@@ -573,6 +598,7 @@ export class RealtimeAssistantState {
 		this.silentTicks = 0;
 		this.autoListening = true;
 		this.pauseTour();
+		this.pendingPlayback = undefined;
 		this.channel?.send({ type: 'response.cancel' });
 		this.channel?.send({ type: 'output_audio_buffer.clear' });
 		this.channel?.send({ type: 'input_audio_buffer.clear' });
