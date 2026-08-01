@@ -155,7 +155,9 @@ export async function rewriteConstruct(
 				role: 'user',
 				content:
 					'Speak this equation for a listener, in plain words only ("x squared", "equals", ' +
-					'"the sum over"), then add one short sentence saying what it expresses. ' +
+					'"the sum over"), then add one short sentence saying what it expresses. Continue ' +
+					'the reading flow naturally into it — a lead-in like "The loss is defined as…" ' +
+					'beats an announcement. ' +
 					(request.documentContext ? `Nearby text: ${request.documentContext}\n\n` : '\n') +
 					request.construct.source +
 					(strict ? '\nRemember: words only, short sentences.' : '')

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { blockPositions, documentContextFor, prioritizeQueue } from './narration-queue';
+import {
+	NARRATION_SLOT,
+	blockPositions,
+	documentContextFor,
+	prioritizeQueue
+} from './narration-queue';
 import { hashNarrationSource, type NarrationConstruct } from './narration';
 import type { DocumentBlock } from './types';
 
@@ -55,25 +60,41 @@ describe('documentContextFor', () => {
 		makeBlock('b3', 'math', '\\sum x')
 	];
 
-	it('collects preceding prose, skipping non-prose blocks', () => {
+	it('collects preceding prose around the slot, skipping non-prose blocks', () => {
 		const context = documentContextFor(blocks, construct('b3', 'b3'));
-		expect(context).toBe('Losses The loss combines a data term with a ridge penalty:');
+		expect(context).toBe(
+			`Losses The loss combines a data term with a ridge penalty: ${NARRATION_SLOT}`
+		);
 	});
 
-	it('trims to the limit from the end (nearest text wins)', () => {
+	it('trims the preceding prose to its limit (nearest text wins)', () => {
 		const context = documentContextFor(blocks, construct('b3', 'b3'), { before: 20, after: 0 });
-		expect(context.length).toBeLessThanOrEqual(20);
-		expect(context.endsWith('penalty:')).toBe(true);
+		const [before] = context.split(NARRATION_SLOT);
+		expect(before.trim().length).toBeLessThanOrEqual(20);
+		expect(before.trim().endsWith('penalty:')).toBe(true);
 	});
 
-	it('appends the prose following a display equation (symbol definitions)', () => {
+	it('puts the following prose after the slot (symbol definitions)', () => {
 		const withFollowing = [
 			...blocks,
 			makeBlock('b4', 'paragraph', 'where the discount factor gamma controls future reward.')
 		];
 		const context = documentContextFor(withFollowing, construct('b3', 'b3'));
-		expect(context).toContain('ridge penalty');
-		expect(context).toContain('where the discount factor gamma controls');
+		expect(context).toBe(
+			`Losses The loss combines a data term with a ridge penalty: ${NARRATION_SLOT} ` +
+				'where the discount factor gamma controls future reward.'
+		);
+	});
+
+	it('surrounds every construct kind, not only equations', () => {
+		const withFollowing = [
+			...blocks,
+			makeBlock('b4', 'paragraph', 'Larger models score higher across the board.')
+		];
+		const row: NarrationConstruct = { ...construct('b2', 'b2'), kind: 'table-row' };
+		const context = documentContextFor(withFollowing, row);
+		expect(context).toContain(NARRATION_SLOT);
+		expect(context).toContain('Larger models score higher');
 	});
 
 	it('returns empty for an unknown block', () => {

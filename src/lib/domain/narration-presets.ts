@@ -55,21 +55,25 @@ export const NARRATION_PRESETS: NarrationPreset[] = [
 		prompts: {
 			...DEFAULT_NARRATION_PROMPTS,
 			'table-row': [
-				'A table row with columns {{header}}. Say this row as one very short sentence in words only, keeping only the values a listener needs:',
+				'A table row with columns {{header}}. Nearby text: {{context}}',
+				'',
+				'Say this row as one very short sentence in words only, keeping only the values a listener needs and fitting the reading flow — never open with "This row":',
 				'',
 				'{{source}}'
 			].join('\n'),
 			mermaid: [
-				'This code draws {{type}}. Tell a listener what it shows in one short sentence, words only:',
+				'This code draws {{type}}. Nearby text: {{context}}',
+				'',
+				'Tell a listener what it shows in one short sentence that continues the reading flow, words only:',
 				'',
 				'{{source}}'
 			].join('\n'),
 			'code-block': [
-				'A document shows this {{type}} snippet:',
+				'A document shows this {{type}} snippet. Nearby text: {{context}}',
 				'',
 				'{{source}}',
 				'',
-				'Tell a listener what it is in one short sentence, words only. Speak a short list of rules or values directly; summarize anything longer.'
+				'Tell a listener what it is in one short sentence that continues the reading flow, words only. Speak a short list of rules or values directly; summarize anything longer.'
 			].join('\n')
 		},
 		params: CONCISE_PARAMS
@@ -91,24 +95,28 @@ export const NARRATION_PRESETS: NarrationPreset[] = [
 				'A document reads an equation aloud as: "{{reading}}"',
 				'Nearby text: {{context}}',
 				'',
-				'In two or three short sentences, explain in plain words what the equation says: name what the symbols stand for and what the equation tells us, starting with "Here". Use only symbols from the reading and only facts from the nearby text. If the nearby text does not explain the symbols, reply exactly: skip'
+				'In two or three short sentences that continue the reading flow, explain in plain words what the equation says: name what the symbols stand for and what the equation tells us. Use only symbols from the reading and only facts from the nearby text. If the nearby text does not explain the symbols, reply exactly: skip'
 			].join('\n'),
 			'table-row': [
-				'A table row with columns {{header}}. Say this row as one or two natural sentences in words only, covering every column and pointing out anything notable:',
+				'A table row with columns {{header}}. Nearby text: {{context}}',
+				'',
+				'Say this row as one or two natural sentences in words only, covering every column and fitting the reading flow — relate or contrast with what came before when the nearby text invites it, and never open with "This row":',
 				'',
 				'{{source}}'
 			].join('\n'),
 			mermaid: [
-				'This code draws {{type}}. In three or four short sentences, walk a listener through what it shows and why the pieces connect the way they do, in words only:',
+				'This code draws {{type}}. Nearby text: {{context}}',
+				'',
+				'In three or four short sentences that continue the reading flow, walk a listener through what it shows and why the pieces connect the way they do, in words only:',
 				'',
 				'{{source}}'
 			].join('\n'),
 			'code-block': [
-				'A document shows this {{type}} snippet:',
+				'A document shows this {{type}} snippet. Nearby text: {{context}}',
 				'',
 				'{{source}}',
 				'',
-				'In two or three short sentences, walk a listener through it in plain words: speak short rules or values line by line with numbers and signs as words, or explain what the code does and why. Words only.'
+				'In two or three short sentences that continue the reading flow, walk a listener through it in plain words: speak short rules or values line by line with numbers and signs as words, or explain what the code does and why. Words only.'
 			].join('\n')
 		},
 		params: EDUCATIONAL_PARAMS
