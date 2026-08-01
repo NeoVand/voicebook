@@ -49,6 +49,7 @@
 	} from '$lib/domain/types';
 	import { tableMarkdown } from '$lib/domain/narration';
 	import { assembleExplainContext } from '$lib/domain/explain-prompts';
+	import { breadcrumbFor, outlineText } from '$lib/domain/document-lens';
 	import { generateExplanation } from '$lib/services/explain';
 	import { pageCount, pageStartMap } from '$lib/domain/pages';
 	import { releasePdfRenderer } from '$lib/services/pdf-pages';
@@ -104,6 +105,8 @@
 	let explainSpeaking = $state<{ startBlockId: string; endBlockId: string }>();
 	/** The passage the voice assistant is talking about; pulses like Explain. */
 	let assistantFocus = $state<PassageRange>();
+	/** The one segment the assistant is describing right now — solid, darker. */
+	let assistantPointId = $state<string>();
 	let narrationAnnouncement = $state('');
 	let appReady = $state(false);
 	let openingTitle = $state<string>();
@@ -225,14 +228,25 @@
 		};
 		realtimeAssistant.onShowPassage = (range) => {
 			assistantFocus = range;
+			assistantPointId = undefined;
 			requestAnimationFrame(() => {
 				const segment = book?.segments[range.startIndex];
 				const element = segment ? segmentElements.get(segment.id) : undefined;
 				if (element) scrollNarrationIntoView(element);
 			});
 		};
+		realtimeAssistant.onPointAt = (index) => {
+			const segment = book?.segments[index];
+			if (!segment) return;
+			assistantPointId = segment.id;
+			requestAnimationFrame(() => {
+				const element = segmentElements.get(segment.id);
+				if (element) scrollNarrationIntoView(element);
+			});
+		};
 		realtimeAssistant.onClearHighlight = () => {
 			assistantFocus = undefined;
+			assistantPointId = undefined;
 		};
 		realtimeAssistant.onGetReaderFocus = () => ({
 			selection: selectionSegmentRange(),
@@ -266,6 +280,7 @@
 			realtimeAssistant.onClearHighlight = undefined;
 			realtimeAssistant.onPlayPassage = undefined;
 			realtimeAssistant.onGetReaderFocus = undefined;
+			realtimeAssistant.onPointAt = undefined;
 			narrationState.stop();
 			void releasePdfRenderer();
 		};
@@ -728,14 +743,25 @@
 				const ready = await llmState.ensureReadyForNarration();
 				if (!ready) throw new Error('The on-device language model could not load.');
 			}
-			const context = assembleExplainContext(book.blocks, box.startBlockId, box.endBlockId);
+			// Cloud engines get the wider lens — triple the surrounding prose
+			// plus the document outline; the on-device model keeps its tuned
+			// tight windows and just learns where the selection sits.
+			const cloud = engine.type === 'cloud';
+			const context = assembleExplainContext(
+				book.blocks,
+				box.startBlockId,
+				box.endBlockId,
+				cloud ? { before: 3600, after: 1400 } : {}
+			);
 			const answer = await generateExplanation(
 				{
 					documentTitle: book.title,
 					selection: box.selection,
 					selectionKind: box.kind,
 					context,
-					question: explainQuestion
+					question: explainQuestion,
+					location: breadcrumbFor(book, box.startBlockId),
+					outline: cloud ? outlineText(book) : undefined
 				},
 				engine,
 				llmState.explainPrompt,
@@ -1072,7 +1098,9 @@
 	<span
 		class="speech-segment"
 		class:active={isActive}
-		class:explaining={explainingBlockIds.has(block.id) || assistantSegmentIds.has(segment.id)}
+		class:assistant-point={assistantPointId === segment.id}
+		class:explaining={(explainingBlockIds.has(block.id) || assistantSegmentIds.has(segment.id)) &&
+			assistantPointId !== segment.id}
 		role="button"
 		tabindex="0"
 		aria-label={segment.text}
@@ -2909,6 +2937,15 @@
 	.speech-segment.active {
 		background: color-mix(in srgb, var(--primary) 13%, transparent);
 		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
+		color: var(--reader-ink-strong);
+	}
+
+	/* The assistant's fingertip: the one segment it is describing right now —
+	   solid and darker against the soft pulse of the surrounding passage. */
+	.speech-segment.assistant-point {
+		border-radius: 6px;
+		background: color-mix(in srgb, var(--primary) 24%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 24%, transparent);
 		color: var(--reader-ink-strong);
 	}
 

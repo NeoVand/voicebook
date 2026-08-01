@@ -84,6 +84,8 @@ export class RealtimeAssistantState {
 	onPlayPassage?: (range: PassageRange) => void;
 	/** What the reader is pointing at (selection, hover, playhead). */
 	onGetReaderFocus?: () => ReaderFocus;
+	/** Strong per-segment emphasis inside the highlighted passage. */
+	onPointAt?: (segment: number) => void;
 
 	private channel?: RealtimeChannel;
 	private microphone?: MediaStream;
@@ -506,6 +508,10 @@ export class RealtimeAssistantState {
 			this.applyTourStop();
 			const stop = tour.stops[tour.index];
 			return { ok: true, stop: tour.index + 1, of: tour.stops.length, point: stop.point };
+		}
+		if (call.name === 'point_at') {
+			this.onPointAt?.(call.segment);
+			return { ok: true };
 		}
 		if (call.name === 'get_reader_focus') {
 			const focus = this.onGetReaderFocus?.();

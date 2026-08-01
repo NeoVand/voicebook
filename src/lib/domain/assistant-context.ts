@@ -26,7 +26,8 @@ export type AssistantToolCall =
 	| { name: 'clear_highlight' }
 	| { name: 'plan_tour'; stops: TourStop[] }
 	| { name: 'continue_tour' }
-	| { name: 'get_reader_focus' };
+	| { name: 'get_reader_focus' }
+	| { name: 'point_at'; segment: number };
 
 /** What the reader is pointing at right now, as segment indexes. */
 export interface ReaderFocus {
@@ -124,7 +125,7 @@ When the conversation begins, greet the reader in one or two short sentences, in
 
 Markers like ⟦7⟧ number each passage of the document. They are invisible to the reader: never say the numbers or the word "segment" aloud — refer to places naturally ("this paragraph", "the section on…").
 
-Whenever you discuss, quote, summarize, or explain a specific part of the document, call show_passage with that passage's marker numbers first, so the reader sees it highlighted while you speak. When one answer touches several places, call show_passage again for each part just before you speak about it — the highlight should follow your voice. Call clear_highlight when the conversation leaves the document.
+Whenever you discuss, quote, summarize, or explain a specific part of the document, call show_passage with that passage's marker numbers first, so the reader sees it highlighted while you speak. When one answer touches several places, call show_passage again for each part just before you speak about it — the highlight should follow your voice. When a highlighted passage has several pieces — bullets, list items, table rows, steps — call point_at with the exact segment you are describing as you reach it: the reader follows the darker mark through the passage. Call clear_highlight when the conversation leaves the document.
 
 When the reader says "this", "here", or "what I'm looking at" ("explain this section", "what does this mean?"), call get_reader_focus first — it reports their text selection, the passage under their cursor, and the narration playhead. Trust the selection over the hover, and the hover over the playhead. Then show_passage it and answer.
 
@@ -175,6 +176,19 @@ export function assistantTools(includeReadPassage: boolean): RealtimeToolSpec[] 
 					)
 				},
 				required: ['start_segment']
+			}
+		},
+		{
+			type: 'function',
+			name: 'point_at',
+			description:
+				'Within the highlighted passage, put a stronger mark on the one segment you are describing right now — move it piece by piece through bullets, rows, or steps.',
+			parameters: {
+				type: 'object',
+				properties: {
+					segment: segmentParameter('The ⟦n⟧ segment to emphasize.')
+				},
+				required: ['segment']
 			}
 		},
 		{
@@ -280,6 +294,14 @@ export function parseAssistantToolCall(
 		return { call: { name } };
 	}
 	if (name === 'plan_tour') return parsePlanTour(doc, parsed);
+	if (name === 'point_at') {
+		const segment = toSegmentIndex((parsed as { segment?: unknown })?.segment);
+		const last = doc.segments.length - 1;
+		if (segment === undefined || segment > last) {
+			return { error: `point_at needs a segment number from 0 to ${last}.` };
+		}
+		return { call: { name: 'point_at', segment } };
+	}
 	if (name !== 'show_passage' && name !== 'read_passage' && name !== 'play_section') {
 		return { error: `Unknown tool "${name}".` };
 	}

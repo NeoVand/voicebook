@@ -91,6 +91,7 @@ describe('assistantTools', () => {
 	it('offers read_passage only for truncated documents', () => {
 		expect(assistantTools(false).map((tool) => tool.name)).toEqual([
 			'show_passage',
+			'point_at',
 			'clear_highlight',
 			'get_reader_focus',
 			'plan_tour',
@@ -99,6 +100,7 @@ describe('assistantTools', () => {
 		]);
 		expect(assistantTools(true).map((tool) => tool.name)).toEqual([
 			'show_passage',
+			'point_at',
 			'clear_highlight',
 			'get_reader_focus',
 			'plan_tour',
@@ -172,6 +174,16 @@ describe('parseAssistantToolCall', () => {
 		expect(parseAssistantToolCall(doc(), 'continue_tour', '').call).toEqual({
 			name: 'continue_tour'
 		});
+	});
+
+	it('parses point_at and rejects out-of-range segments', () => {
+		expect(parseAssistantToolCall(doc(), 'point_at', '{"segment":3}').call).toEqual({
+			name: 'point_at',
+			segment: 3
+		});
+		expect(parseAssistantToolCall(doc(), 'point_at', '{"segment":9}').error).toBe(
+			'point_at needs a segment number from 0 to 4.'
+		);
 	});
 
 	it('parses get_reader_focus regardless of arguments', () => {

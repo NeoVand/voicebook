@@ -7,6 +7,7 @@ import {
 	reconcileNarrations,
 	type NarrationConstruct
 } from '$lib/domain/narration';
+import { breadcrumbFor } from '$lib/domain/document-lens';
 import { blockPositions, documentContextFor, prioritizeQueue } from '$lib/domain/narration-queue';
 import type { NarrationEntry, NormalizedDocument } from '$lib/domain/types';
 import {
@@ -422,9 +423,24 @@ export class NarrationState {
 	private async rewrite(construct: NarrationConstruct, token: number): Promise<string> {
 		const book = player.book;
 		const engine = this.engine ?? undefined;
+		// Cloud models handle — and reward — a wider view: three times the
+		// surrounding prose plus where the construct sits in the document.
+		// The on-device model keeps its tight, tuned windows.
+		const cloud = engine?.type === 'cloud';
+		const surrounding = documentContextFor(
+			book?.blocks ?? [],
+			construct,
+			cloud ? { before: 700, after: 500 } : {}
+		);
+		const documentContext =
+			cloud && book
+				? [`This sits under: ${breadcrumbFor(book, construct.blockId)}.`, surrounding]
+						.filter(Boolean)
+						.join(' ')
+				: surrounding;
 		const request = {
 			construct,
-			documentContext: documentContextFor(book?.blocks ?? [], construct),
+			documentContext,
 			promptOverrides: llmState.activePromptOverrides,
 			params: llmState.generationParams[construct.kind],
 			engine

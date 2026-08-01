@@ -36,8 +36,11 @@ export interface ExplainContext {
 export function assembleExplainContext(
 	blocks: DocumentBlock[],
 	startBlockId: string,
-	endBlockId: string
+	endBlockId: string,
+	limits: { before?: number; after?: number } = {}
 ): ExplainContext {
+	const beforeChars = limits.before ?? CONTEXT_BEFORE_CHARS;
+	const afterChars = limits.after ?? CONTEXT_AFTER_CHARS;
 	const startIndex = blocks.findIndex((block) => block.id === startBlockId);
 	const endIndex = blocks.findIndex((block) => block.id === endBlockId);
 	if (startIndex < 0 || endIndex < 0) return { before: '', after: '' };
@@ -48,13 +51,13 @@ export function assembleExplainContext(
 			.join('\n');
 	let before = text(blocks.slice(0, startIndex + 1));
 	let after = text(blocks.slice(endIndex + 1));
-	if (before.length > CONTEXT_BEFORE_CHARS) {
-		before = before.slice(-CONTEXT_BEFORE_CHARS);
+	if (before.length > beforeChars) {
+		before = before.slice(-beforeChars);
 		const firstBreak = before.search(/\s/);
 		if (firstBreak > 0) before = before.slice(firstBreak + 1);
 	}
-	if (after.length > CONTEXT_AFTER_CHARS) {
-		after = after.slice(0, CONTEXT_AFTER_CHARS);
+	if (after.length > afterChars) {
+		after = after.slice(0, afterChars);
 		const lastBreak = after.search(/\s\S*$/);
 		if (lastBreak > 0) after = after.slice(0, lastBreak);
 	}
@@ -70,6 +73,10 @@ export interface ExplainRequest {
 	context: ExplainContext;
 	/** The listener's own question, when they typed one. */
 	question?: string;
+	/** "Title › Section › Subsection" breadcrumb for the selection. */
+	location?: string;
+	/** Compact document outline (cloud engines only — it costs tokens). */
+	outline?: string;
 }
 
 export function buildExplainMessages(
@@ -79,6 +86,8 @@ export function buildExplainMessages(
 	const kind = request.selectionKind?.trim() || 'passage';
 	const parts = [
 		`The document is titled "${request.documentTitle}".`,
+		request.location ? `The selection sits under: ${request.location}.` : '',
+		request.outline ? `Document outline:\n${request.outline}` : '',
 		request.context.before
 			? `Document excerpt before and around the selection:\n${request.context.before}`
 			: '',
