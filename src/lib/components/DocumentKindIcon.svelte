@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FileCode, FileImage, FileText, FileType } from '@lucide/svelte';
+	import { FileCode, FileImage, FileText, FileType, Globe } from '@lucide/svelte';
 	import type { DocumentKind } from '$lib/domain/types';
 
 	let {
@@ -15,6 +15,8 @@
 	<FileType {size} {strokeWidth} aria-hidden="true" />
 {:else if kind === 'markdown'}
 	<FileCode {size} {strokeWidth} aria-hidden="true" />
+{:else if kind === 'web'}
+	<Globe {size} {strokeWidth} aria-hidden="true" />
 {:else}
 	<FileText {size} {strokeWidth} aria-hidden="true" />
 {/if}
