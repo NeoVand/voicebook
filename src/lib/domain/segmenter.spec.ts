@@ -367,6 +367,57 @@ describe('narrated construct segmentation', () => {
 		expect(segments[1].words.length).toBeGreaterThan(0);
 	});
 
+	it('never places a segment boundary inside an inline math span', () => {
+		// Wikipedia-style TeX is full of sentence punctuation: `\!` spacing,
+		// commas, and trailing periods. A boundary inside the span would
+		// bisect the KaTeX run and make the next segment speak raw TeX.
+		const tex =
+			'{\\textstyle P_{\\lambda }\\psi {\\big /}\\!{\\sqrt {\\langle \\psi ,P \\rangle }}}';
+		const paragraph = block({
+			id: 'b7',
+			text: `The state collapses to ${tex}, in the general case. A second sentence follows here.`,
+			inlines: [
+				{ text: 'The state collapses to ' },
+				{ text: tex, math: true },
+				{ text: ', in the general case. A second sentence follows here.' }
+			]
+		});
+		const segments = segmentBlocks([paragraph]);
+		const mathStart = paragraph.text.indexOf(tex);
+		const mathEnd = mathStart + tex.length;
+		for (const segment of segments) {
+			expect(segment.start > mathStart && segment.start < mathEnd).toBe(false);
+			expect(segment.end > mathStart && segment.end < mathEnd).toBe(false);
+			expect(segment.normalizedText).not.toContain('sqrt');
+		}
+		const holder = segments.find((segment) => segment.start <= mathStart);
+		expect(holder?.text).toContain(tex);
+	});
+
+	it('routes long-sentence breaks around math spans and swallows oversized ones', () => {
+		const longTex = `{\\displaystyle ${'x_{i}, '.repeat(60)}}`;
+		expect(longTex.length).toBeGreaterThan(MAX_SEGMENT_CHARS);
+		const paragraph = block({
+			id: 'b8',
+			text: `A run-on opener that keeps going without end punctuation ${longTex} and then trails onward with plain words, again and again, until the splitter has to cut somewhere sensible`,
+			inlines: [
+				{ text: 'A run-on opener that keeps going without end punctuation ' },
+				{ text: longTex, math: true },
+				{
+					text: ' and then trails onward with plain words, again and again, until the splitter has to cut somewhere sensible'
+				}
+			]
+		});
+		const segments = segmentBlocks([paragraph]);
+		const mathStart = paragraph.text.indexOf(longTex);
+		const mathEnd = mathStart + longTex.length;
+		expect(segments.length).toBeGreaterThan(1);
+		for (const segment of segments) {
+			expect(segment.start > mathStart && segment.start < mathEnd).toBe(false);
+			expect(segment.end > mathStart && segment.end < mathEnd).toBe(false);
+		}
+	});
+
 	it('leaves sentences with single-letter math as plain word-highlighted text', () => {
 		const paragraph = block({
 			id: 'b4',

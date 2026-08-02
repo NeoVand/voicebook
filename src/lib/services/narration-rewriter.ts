@@ -94,10 +94,13 @@ export async function rewriteConstruct(
 	// A zero token budget means the preset wants the deterministic text only
 	// (Concise equations): settle without touching any engine.
 	if (baseParams.maxNewTokens <= 0) return request.construct.fallbackText;
-	// A full spoken reading needs room the one-sentence budgets do not give.
+	// A full spoken reading needs room the one-sentence budgets do not give,
+	// and the 'reading' sanitize mode: the symbol-sentence contract would
+	// reject prose that opens with the equation itself.
 	const params = speakEquation
 		? {
 				...baseParams,
+				mathProse: 'reading' as const,
 				maxNewTokens: Math.max(baseParams.maxNewTokens, 160),
 				maxChars: Math.max(baseParams.maxChars, 480)
 			}

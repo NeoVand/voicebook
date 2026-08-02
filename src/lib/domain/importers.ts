@@ -1,5 +1,11 @@
 import mammoth from 'mammoth';
 import { extractDocxExtras, type DocxExtra } from './docx-extras';
+import {
+	WEB_ARTICLE_MIME,
+	hostLabel,
+	webArticleFingerprint,
+	webArticleSourceName
+} from './web-article';
 import remarkDefinitionList from 'remark-definition-list';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -113,6 +119,9 @@ function extensionOf(name: string): string {
 
 export function kindForFile(file: Pick<File, 'name' | 'type'>): DocumentKind {
 	const extension = extensionOf(file.name);
+	// Stored web articles are extracted markdown under a marker mime type, so
+	// normalization migrations re-parse them without losing the 'web' identity.
+	if (file.type === WEB_ARTICLE_MIME) return 'web';
 	if (file.type === 'application/pdf' || extension === 'pdf') return 'pdf';
 	if (
 		file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
@@ -1613,7 +1622,10 @@ export async function importFile(
 	else if (sourceKind === 'docx') parsed = await parseDocx(file);
 	else {
 		const text = await file.text();
-		parsed = sourceKind === 'markdown' ? parseMarkdown(text) : { blocks: textBlocks(text) };
+		parsed =
+			sourceKind === 'markdown' || sourceKind === 'web'
+				? parseMarkdown(text)
+				: { blocks: textBlocks(text) };
 	}
 
 	if (!parsed.blocks.length)
@@ -1661,6 +1673,46 @@ export function renumberBlocks(source: DocumentBlock[]): DocumentBlock[] {
 			? { children: candidate.children.map((child) => rename.get(child) ?? child) }
 			: {})
 	}));
+}
+
+/**
+ * A document from a web page's extracted markdown. The markdown (already
+ * composed with its title heading and byline) is the stored source of truth:
+ * migrations re-parse it exactly like a markdown file, keyed back to this
+ * path by the marker mime type. The fingerprint is the normalized address,
+ * so re-adding the same page surfaces the existing document.
+ */
+export function documentFromWebArticle(
+	url: string,
+	markdown: string,
+	title?: string
+): NormalizedDocument {
+	const parsed = parseMarkdown(markdown);
+	if (!parsed.blocks.length)
+		throw new ImportError('No readable text was found on this page.', 'malformed');
+	const address = new URL(url);
+	const now = Date.now();
+	const blocks = renumberBlocks(parsed.blocks);
+	return {
+		normalizationVersion: DOCUMENT_NORMALIZATION_VERSION,
+		id: crypto.randomUUID(),
+		fingerprint: webArticleFingerprint(address),
+		// The extraction's title first: pages that open with a short-form
+		// heading (encyclopedia entries) have no level-1 heading to parse.
+		title: title?.trim() || parsed.title || hostLabel(url) || 'Web article',
+		sourceName: webArticleSourceName(address),
+		sourceKind: 'web',
+		mimeType: WEB_ARTICLE_MIME,
+		language: 'en',
+		createdAt: now,
+		updatedAt: now,
+		blocks,
+		segments: segmentBlocks(blocks),
+		outline: outlineFor(blocks),
+		warnings: parsed.warnings ?? [],
+		includeCode: false,
+		sourceUrl: url
+	};
 }
 
 export function documentFromText(title: string, text: string): NormalizedDocument {

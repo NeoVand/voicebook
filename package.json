@@ -71,6 +71,7 @@
 		"@mediabunny/mp3-encoder": "1.50.9",
 		"@soundtouchjs/audio-worklet": "2.1.0",
 		"@tesseract.js-data/eng": "^1.0.0",
+		"defuddle": "^0.19.2",
 		"driver.js": "^1.8.0",
 		"highlight.js": "^11.11.1",
 		"idb": "8.0.3",

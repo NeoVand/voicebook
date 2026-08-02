@@ -1,4 +1,4 @@
-export type DocumentKind = 'pdf' | 'docx' | 'markdown' | 'text';
+export type DocumentKind = 'pdf' | 'docx' | 'markdown' | 'text' | 'web';
 /** How the spoken layer adapts a document for listening. */
 export type ListeningMode = 'verbatim' | 'natural' | 'focused';
 export type BlockKind =
@@ -298,6 +298,8 @@ export interface NormalizedDocument {
 	listeningMode?: ListeningMode;
 	sourcePath?: string;
 	sourceBlob?: Blob;
+	/** The page address a 'web' document was imported from. */
+	sourceUrl?: string;
 	/** Present for PDF sources parsed since normalization v13. */
 	pages?: DocumentPageInfo[];
 }

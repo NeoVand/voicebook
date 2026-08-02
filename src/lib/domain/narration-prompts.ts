@@ -96,7 +96,7 @@ export interface NarrationGenerationParams {
 	/** Equation meanings: 'sentence' keeps only the first sentence (default);
 	 * 'explanation' (the educational preset) allows a few sentences up to
 	 * maxChars. */
-	mathProse?: 'sentence' | 'explanation';
+	mathProse?: 'sentence' | 'explanation' | 'reading';
 }
 
 export const NARRATION_GENERATION_PARAMS: Record<
@@ -376,7 +376,12 @@ export function sanitizeNarration(
 	// narration. Vacuous compliance ("Here we discuss the symbols") rejects
 	// too; the rewriter additionally verifies that any symbol the sentence
 	// names actually occurs in the reading.
-	if (kind === 'math-block') {
+	// Full spoken readings ('reading', the cloud path for equations the
+	// deterministic reader cannot voice) are judged as ordinary prose by the
+	// generic trim below: the contracts here exist for the symbol-meaning
+	// sentence that gets appended to a deterministic reading, and would
+	// reject any reading that opens with the equation itself.
+	if (kind === 'math-block' && params.mathProse !== 'reading') {
 		if (/^skip\b/i.test(text)) return null;
 		if (!/^here\b/i.test(text)) return null;
 		if (/^here (?:we|the symbols|are the)\b/i.test(text)) return null;
@@ -398,6 +403,7 @@ export function sanitizeNarration(
 		}
 		return text.trim();
 	}
+	if (kind === 'math-block' && /^skip\b/i.test(text)) return null;
 
 	const cap = params.maxChars;
 	if (cap > 0 && text.length > cap) {

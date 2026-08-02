@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	buildNarrationMessages,
 	DEFAULT_NARRATION_PROMPTS,
+	NARRATION_GENERATION_PARAMS,
 	narrationPromptHashes,
 	resolveNarrationPrompts,
 	sanitizeNarration
@@ -174,6 +175,26 @@ describe('sanitizeNarration', () => {
 		expect(sanitizeNarration('skip', 'math-block')).toBeNull();
 		expect(sanitizeNarration('Here we discuss the symbols used.', 'math-block')).toBeNull();
 		expect(sanitizeNarration('The equation describes a model.', 'math-block')).toBeNull();
+	});
+
+	it("judges full equation readings as prose — no 'Here …' contract", () => {
+		// The cloud path speaks equations the deterministic reader cannot
+		// voice; its output opens with the equation itself, which the
+		// symbol-sentence contract would reject.
+		const reading =
+			'i times the reduced Planck constant times the partial derivative of psi with ' +
+			'respect to time equals H times psi of t. This equation governs how quantum ' +
+			'states change over time.';
+		const params = {
+			...NARRATION_GENERATION_PARAMS['math-block'],
+			mathProse: 'reading' as const,
+			maxChars: 480
+		};
+		expect(sanitizeNarration(reading, 'math-block', params)).toBe(reading);
+		// The same output still rejects under the default symbol-sentence mode…
+		expect(sanitizeNarration(reading, 'math-block')).toBeNull();
+		// …and a bare "skip" refusal stays rejected in reading mode.
+		expect(sanitizeNarration('skip', 'math-block', params)).toBeNull();
 	});
 
 	it('shapes inline math output as a spliceable phrase', () => {

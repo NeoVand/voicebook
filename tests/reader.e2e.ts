@@ -1,4 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { completeModelSetup, installFakeTts, openReadyLibrary } from './helpers';
@@ -287,6 +289,43 @@ test('detects and renders pasted Markdown as structured document content', async
 	await expect(readingCanvas.locator('ol.document-list')).toContainText('First step');
 	await expect(readingCanvas.locator('figure.code-block')).toContainText('const local = true;');
 	await expect(readingCanvas).not.toContainText('```ts');
+});
+
+test('imports a web page from a URL as a readable article', async ({ page }) => {
+	await openReadyLibrary(page);
+	// A trimmed slice of the real Wikipedia REST (Parsoid) payload — the
+	// extractor's behavior depends on realistic document scale and markup, so
+	// a synthetic mini-page would not exercise the math or figure paths.
+	const article = readFileSync(
+		fileURLToPath(new URL('./fixtures/wikipedia-article.html', import.meta.url)),
+		'utf8'
+	);
+	await page.route('https://en.wikipedia.org/api/rest_v1/page/html/**', (route) =>
+		route.fulfill({ contentType: 'text/html', body: article })
+	);
+
+	await page.getByRole('button', { name: 'From URL', exact: true }).click();
+	await page
+		.getByRole('textbox', { name: 'Web address' })
+		.fill('https://en.wikipedia.org/wiki/Quantum_mechanics');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+
+	const readingCanvas = page.getByRole('article', { name: 'Quantum mechanics' });
+	await expect(
+		readingCanvas.getByRole('heading', { name: 'Quantum mechanics', level: 1 })
+	).toBeVisible();
+	// The byline paragraph credits the source host, and the kind reads WEB.
+	await expect(readingCanvas).toContainText('en.wikipedia.org');
+	await expect(page.getByText('WEB · Local library')).toBeVisible();
+	// TeX annotations became rendered display equations with construct panels.
+	await expect(readingCanvas.locator('figure.math-block .katex').first()).toBeVisible();
+	// Figures kept their remote images, and a figcaption was folded into the
+	// image alt by the import prepass (empty alts leave the narrator mute).
+	const figureImage = readingCanvas.locator('img[src*="upload.wikimedia.org"]').first();
+	await expect(figureImage).toBeVisible();
+	await expect(figureImage).not.toHaveAttribute('alt', '');
+	// Citation superscripts became footnote links rather than spoken noise.
+	await expect(readingCanvas.locator('sup').first()).toBeVisible();
 });
 
 test('fills a rolling three-passage buffer while the current passage is playing', async ({

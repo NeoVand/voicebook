@@ -2,9 +2,11 @@ import { MODEL_CATALOG, getModel } from '$lib/domain/model-catalog';
 import {
 	DOCUMENT_NORMALIZATION_VERSION,
 	documentFromText,
+	documentFromWebArticle,
 	fingerprint,
 	importFile
 } from '$lib/domain/importers';
+import { WEB_ARTICLE_MIME } from '$lib/domain/web-article';
 import { DEFAULT_LISTENING_MODE, spokenRulesFor } from '$lib/domain/listening-modes';
 import { refreshDocumentSegments, segmentBlocks } from '$lib/domain/segmenter';
 import { DEFAULT_GENERATION_STEPS, normalizeGenerationSteps } from '$lib/domain/synthesis';
@@ -106,11 +108,11 @@ async function migrateDocumentNormalization(
 	document: NormalizedDocument
 ): Promise<NormalizedDocument> {
 	if (document.normalizationVersion === DOCUMENT_NORMALIZATION_VERSION) return document;
-	// Markdown, DOCX, and PDF re-parse from the stored original so
-	// normalization improvements (v9: Word tables, equations, diagrams;
+	// Markdown, DOCX, PDF, and web articles re-parse from the stored original
+	// so normalization improvements (v9: Word tables, equations, diagrams;
 	// v13: PDF pages, images, bookmarks) reach existing documents; other
 	// kinds only re-stamp.
-	const reparseKinds = ['markdown', 'docx', 'pdf'];
+	const reparseKinds = ['markdown', 'docx', 'pdf', 'web'];
 	if (!reparseKinds.includes(document.sourceKind)) {
 		return { ...document, normalizationVersion: DOCUMENT_NORMALIZATION_VERSION };
 	}
@@ -152,6 +154,7 @@ async function migrateDocumentNormalization(
 		reparsed.updatedAt = document.updatedAt;
 		reparsed.sourcePath = document.sourcePath;
 		reparsed.sourceBlob = document.sourceBlob;
+		reparsed.sourceUrl = document.sourceUrl;
 		if (document.playback) {
 			const segment = findMigratedSegment(document, reparsed, document.playback.segmentId);
 			reparsed.playback = segment
@@ -371,6 +374,45 @@ export class VoicebookState {
 		} catch (error) {
 			this.errorMessage =
 				error instanceof Error ? error.message : 'The duplicate could not be imported.';
+			return null;
+		} finally {
+			this.importing = false;
+		}
+	}
+
+	/**
+	 * Import a web page as a readable document. Returns the existing document
+	 * when the same address is already in the library (the caller can open it
+	 * directly), and null on failure with the message in `errorMessage`.
+	 */
+	async addWebArticle(input: string): Promise<NormalizedDocument | null> {
+		this.importing = true;
+		this.errorMessage = '';
+		this.statusMessage = 'Fetching the page…';
+		try {
+			const { fetchWebArticle } = await import('$lib/services/article-fetch');
+			const article = await fetchWebArticle(input, {
+				onStage: (stage) => {
+					this.statusMessage =
+						stage === 'extracting' ? 'Reading the article…' : 'Fetching the page…';
+				}
+			});
+			const document = documentFromWebArticle(article.url, article.markdown, article.title);
+			const existing = await getDocumentByFingerprint(document.fingerprint);
+			if (existing) {
+				this.statusMessage = '';
+				return existing;
+			}
+			const saved = await this.addImportedDocument(
+				document,
+				new Blob([article.markdown], { type: WEB_ARTICLE_MIME })
+			);
+			this.statusMessage = '';
+			return saved;
+		} catch (error) {
+			this.errorMessage =
+				error instanceof Error ? error.message : 'The page could not be imported.';
+			this.statusMessage = '';
 			return null;
 		} finally {
 			this.importing = false;

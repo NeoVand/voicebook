@@ -8,6 +8,7 @@
 		Clock3,
 		FileText,
 		FileUp,
+		Link2,
 		Plus,
 		Search,
 		Trash2,
@@ -29,6 +30,10 @@
 	let pasteOpen = $state(false);
 	let pasteTitle = $state('');
 	let pasteText = $state('');
+	let urlOpen = $state(false);
+	let urlValue = $state('');
+	let urlError = $state('');
+	let urlBusy = $state(false);
 	let searchQuery = $state('');
 	let sortOrder = $state('recent');
 	const sortOptions = [
@@ -112,7 +117,8 @@
 			pdf: 'PDF',
 			docx: 'DOCX',
 			markdown: 'MD',
-			text: 'TXT'
+			text: 'TXT',
+			web: 'WEB'
 		}[kind];
 	}
 
@@ -164,6 +170,26 @@
 		await goto(resolve(`/read?document=${encodeURIComponent(document.id)}`));
 	}
 
+	function openUrlDialog(): void {
+		urlError = '';
+		urlOpen = true;
+	}
+
+	async function saveUrl(): Promise<void> {
+		if (!urlValue.trim() || urlBusy) return;
+		urlBusy = true;
+		urlError = '';
+		const document = await appState.addWebArticle(urlValue);
+		urlBusy = false;
+		if (!document) {
+			urlError = appState.errorMessage || 'The page could not be imported.';
+			return;
+		}
+		urlOpen = false;
+		urlValue = '';
+		await goto(resolve(`/read?document=${encodeURIComponent(document.id)}`));
+	}
+
 	async function removeDocument(document: NormalizedDocument): Promise<void> {
 		if (confirm('Remove “' + document.title + '” and its generated audio from this browser?'))
 			await appState.deleteDocument(document.id);
@@ -204,6 +230,14 @@
 						onclick={() => (pasteOpen = true)}
 					>
 						<FileText size={16} /> Paste text
+					</button>
+					<button
+						class="button library-action"
+						type="button"
+						data-tour="from-url"
+						onclick={openUrlDialog}
+					>
+						<Link2 size={16} /> From URL
 					</button>
 					<button
 						class="button primary library-action"
@@ -360,9 +394,18 @@
 						>
 							<FileText size={16} /> Paste text
 						</button>
+						<button
+							class="button library-action"
+							type="button"
+							data-tour="from-url"
+							disabled={appState.importing}
+							onclick={openUrlDialog}
+						>
+							<Link2 size={16} /> From URL
+						</button>
 					</div>
 					<div class="empty-library-note">
-						<span>PDF · DOCX · MD · TXT</span>
+						<span>PDF · DOCX · MD · TXT · URL</span>
 						<span aria-hidden="true">·</span>
 						<span>Never uploaded</span>
 					</div>
@@ -418,6 +461,70 @@
 							onclick={savePaste}
 						>
 							Add to library
+						</button>
+					</div>
+				</footer>
+			</div>
+		</div>
+	{/if}
+
+	{#if urlOpen}
+		<div class="modal-scrim" role="presentation">
+			<div
+				class="paste-dialog url-dialog"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="url-title"
+			>
+				<header>
+					<div>
+						<p class="eyebrow">Quick import</p>
+						<h2 id="url-title">Read a web page</h2>
+					</div>
+					<button
+						class="icon-button"
+						type="button"
+						aria-label="Close"
+						onclick={() => (urlOpen = false)}
+					>
+						<X size={18} />
+					</button>
+				</header>
+				<label class="form-field">
+					<span>Web address</span>
+					<input
+						type="url"
+						bind:value={urlValue}
+						placeholder="https://en.wikipedia.org/wiki/…"
+						disabled={urlBusy}
+						onkeydown={(event) => {
+							if (event.key === 'Enter') {
+								event.preventDefault();
+								void saveUrl();
+							}
+						}}
+					/>
+				</label>
+				<p class="url-hint">
+					Articles and reference pages work best — equations and pictures come along. Pages that
+					refuse direct access are fetched through a public relay.
+				</p>
+				{#if urlError}
+					<p class="url-error" role="alert">{urlError}</p>
+				{/if}
+				<footer>
+					<small aria-live="polite">{urlBusy ? appState.statusMessage : ''}</small>
+					<div>
+						<button class="button ghost" type="button" onclick={() => (urlOpen = false)}
+							>Cancel</button
+						>
+						<button
+							class="button primary"
+							type="button"
+							disabled={!urlValue.trim() || urlBusy}
+							onclick={saveUrl}
+						>
+							{urlBusy ? 'Adding…' : 'Add to library'}
 						</button>
 					</div>
 				</footer>
@@ -936,6 +1043,20 @@
 	.paste-dialog footer small {
 		color: var(--faint);
 		font-size: 9px;
+	}
+
+	.url-dialog .url-hint {
+		margin: -8px 0 0;
+		color: var(--muted);
+		font-size: 11px;
+		line-height: 1.5;
+	}
+
+	.url-dialog .url-error {
+		margin: -6px 0 0;
+		color: var(--danger, #e5484d);
+		font-size: 11px;
+		line-height: 1.5;
 	}
 
 	.duplicate-icon {

@@ -44,24 +44,65 @@ function sentenceParts(text: string): Array<{ text: string; index: number }> {
 	return parts;
 }
 
+/**
+ * A segment boundary inside an inline construct span (raw TeX, an image alt)
+ * splits the construct across segments: the display slice bisects the run
+ * into two invalid fragments, and the spoken layer reads the leftover tail as
+ * raw source. Sentence punctuation is common inside TeX (`\!`, trailing
+ * periods, commas), so both splitters route their boundaries around spans.
+ */
+function mergePartsAcrossSpans(
+	parts: Array<{ text: string; index: number }>,
+	spans: TextRange[]
+): Array<{ text: string; index: number }> {
+	if (!spans.length || parts.length < 2) return parts;
+	const inside = (offset: number) => spans.some((span) => offset > span.start && offset < span.end);
+	const merged: Array<{ text: string; index: number }> = [];
+	for (const part of parts) {
+		const previous = merged.at(-1);
+		if (previous && previous.index + previous.text.length === part.index && inside(part.index)) {
+			previous.text += part.text;
+		} else {
+			merged.push({ ...part });
+		}
+	}
+	return merged;
+}
+
 function splitLongSentence(
 	text: string,
-	absoluteStart: number
+	absoluteStart: number,
+	spans: TextRange[] = []
 ): Array<{ text: string; index: number }> {
 	if (text.length <= MAX_SEGMENT_CHARS) return [{ text, index: absoluteStart }];
 	const output: Array<{ text: string; index: number }> = [];
+	const spanAt = (absolute: number) =>
+		spans.find((span) => absolute > span.start && absolute < span.end);
 	let cursor = 0;
 
 	while (cursor < text.length) {
 		let end = Math.min(cursor + MAX_SEGMENT_CHARS, text.length);
 		if (end < text.length) {
 			const candidate = text.slice(cursor, end);
-			const breakAt = Math.max(
-				candidate.lastIndexOf('; '),
-				candidate.lastIndexOf(', '),
-				candidate.lastIndexOf(' — ')
-			);
-			if (breakAt > MAX_SEGMENT_CHARS * 0.55) end = cursor + breakAt + 1;
+			let breakAt = -1;
+			for (const token of ['; ', ', ', ' — ']) {
+				let index = candidate.lastIndexOf(token);
+				while (index >= 0 && spanAt(absoluteStart + cursor + index + 1)) {
+					index = candidate.lastIndexOf(token, index - 1);
+				}
+				breakAt = Math.max(breakAt, index);
+			}
+			if (breakAt > MAX_SEGMENT_CHARS * 0.55) {
+				end = cursor + breakAt + 1;
+			} else {
+				// The hard cut must not bisect a span either: back up to its
+				// start, or swallow a span longer than the budget whole.
+				const blocking = spanAt(absoluteStart + end);
+				if (blocking) {
+					const before = blocking.start - absoluteStart;
+					end = before > cursor ? before : Math.min(blocking.end - absoluteStart, text.length);
+				}
+			}
 		}
 		const piece = text.slice(cursor, end);
 		output.push({ text: piece, index: absoluteStart + cursor });
@@ -260,14 +301,15 @@ export function segmentBlocks(
 		if (!block.speak && block.kind !== 'code') continue;
 
 		const spans = inlineConstructSpans(block);
+		const spanRanges = spans.map((span) => ({ start: span.start, end: span.end }));
 		let blockSegmentIndex = 0;
 		const sourceParts =
 			block.kind === 'heading' || block.kind === 'list-item'
 				? [{ text: block.text, index: 0 }]
-				: sentenceParts(block.text);
+				: mergePartsAcrossSpans(sentenceParts(block.text), spanRanges);
 
 		for (const part of sourceParts) {
-			for (const piece of splitLongSentence(part.text, part.index)) {
+			for (const piece of splitLongSentence(part.text, part.index, spanRanges)) {
 				const leading = piece.text.length - piece.text.trimStart().length;
 				const text = piece.text.trim();
 				if (!text) continue;

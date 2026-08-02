@@ -21,6 +21,7 @@ import {
 	DOCUMENT_NORMALIZATION_VERSION,
 	ImportError,
 	documentFromText,
+	documentFromWebArticle,
 	fingerprint,
 	importFile,
 	kindForFile,
@@ -30,6 +31,7 @@ import {
 	repeatedEdgeLines,
 	stripCitationArtifacts
 } from './importers';
+import { WEB_ARTICLE_MIME } from './web-article';
 
 beforeAll(() => {
 	Object.defineProperty(globalThis, 'DOMParser', { value: DOMParser, configurable: true });
@@ -799,6 +801,73 @@ describe('document importers', () => {
 			expect.arrayContaining(['heading', 'list', 'list-item', 'code'])
 		);
 		expect(pasted.blocks.some((block) => block.text.includes('```'))).toBe(false);
+	});
+
+	it('builds web-article documents whose stored markdown re-imports as the web kind', async () => {
+		const markdown = [
+			'# Quantum mechanics',
+			'',
+			'*en.wikipedia.org*',
+			'',
+			'The time evolution is described by the Schrödinger equation:',
+			'$$',
+			'{\\displaystyle i\\hbar {\\frac {\\partial }{\\partial t}}\\psi (t)=H\\psi (t).}',
+			'$$',
+			'Here ${\\displaystyle H}$ denotes the Hamiltonian.',
+			'',
+			'![Wave functions of the electron.](https://upload.wikimedia.org/hydrogen.png)'
+		].join('\n');
+		const document = documentFromWebArticle(
+			'https://en.wikipedia.org/wiki/Quantum_mechanics',
+			markdown
+		);
+		expect(document).toMatchObject({
+			title: 'Quantum mechanics',
+			sourceKind: 'web',
+			sourceName: 'Quantum_mechanics.md',
+			mimeType: WEB_ARTICLE_MIME,
+			sourceUrl: 'https://en.wikipedia.org/wiki/Quantum_mechanics',
+			fingerprint: 'web:en.wikipedia.org/wiki/Quantum_mechanics'
+		});
+		expect(document.blocks.map((block) => block.kind)).toEqual(
+			expect.arrayContaining(['heading', 'paragraph', 'math'])
+		);
+		const math = document.blocks.find((block) => block.kind === 'math');
+		expect(math?.text).toContain('\\psi (t)=H\\psi (t)');
+		expect(document.blocks.some((block) => block.inlines?.some((run) => run.math))).toBe(true);
+		expect(
+			document.blocks.some((block) =>
+				block.inlines?.some((run) => run.image?.src === 'https://upload.wikimedia.org/hydrogen.png')
+			)
+		).toBe(true);
+
+		// Normalization migrations rebuild the document from the stored blob;
+		// the marker mime type must land it back in the web/markdown pipeline.
+		const file = new File([markdown], document.sourceName, { type: document.mimeType });
+		expect(kindForFile(file)).toBe('web');
+		const reparsed = await importFile(file);
+		expect(reparsed.sourceKind).toBe('web');
+		expect(reparsed.blocks.map((block) => block.kind)).toEqual(
+			document.blocks.map((block) => block.kind)
+		);
+	});
+
+	it('prefers the extraction title over parsed headings for web articles', () => {
+		const document = documentFromWebArticle(
+			'https://plato.stanford.edu/entries/consciousness/',
+			'## Consciousness\n\nPerhaps no aspect of mind is more familiar.',
+			'Consciousness (Stanford Encyclopedia of Philosophy)'
+		);
+		expect(document.title).toBe('Consciousness (Stanford Encyclopedia of Philosophy)');
+		const untitled = documentFromWebArticle(
+			'https://plato.stanford.edu/entries/consciousness/',
+			'Perhaps no aspect of mind is more familiar.'
+		);
+		expect(untitled.title).toBe('plato.stanford.edu');
+	});
+
+	it('rejects web pages with no readable text', () => {
+		expect(() => documentFromWebArticle('https://example.com/x', '   ')).toThrow(ImportError);
 	});
 });
 
