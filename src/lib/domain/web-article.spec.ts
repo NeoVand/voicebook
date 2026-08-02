@@ -64,6 +64,40 @@ describe('wikipediaRestUrl', () => {
 });
 
 describe('prepareArticleDom', () => {
+	it('restores truncated TeX annotations from the alttext attribute', () => {
+		// Parsoid nests <span typeof="mw:DisplaySpace">&#160;</span> inside
+		// annotations, and browser HTML parsing foster-parents the span OUT of
+		// the MathML tree with everything after it — the annotation keeps only
+		// the leading text. alttext carries the complete TeX.
+		const tex = '{\\displaystyle {\\begin{aligned}&\\pi :{\\mathcal {S}}\\to [0,1]\\end{aligned}}}';
+		const document = dom(
+			`<math alttext="${tex.replace(/&/g, '&amp;')}"><semantics>` +
+				'<annotation encoding="application/x-tex">{\\displaystyle {\\begin{aligned}&amp;\\pi</annotation>' +
+				'</semantics></math>'
+		);
+		prepareArticleDom(document);
+		expect(document.querySelector('annotation')?.textContent).toBe(tex);
+	});
+
+	it('flattens markers a lenient parser keeps inline when alttext is absent', () => {
+		const document = dom(
+			'<math><semantics><annotation encoding="application/x-tex">' +
+				'{\\displaystyle a<span typeof="mw:DisplaySpace">&#160;</span>=b}</annotation></semantics></math>'
+		);
+		prepareArticleDom(document);
+		const annotation = document.querySelector('annotation');
+		expect(annotation?.firstElementChild).toBeNull();
+		expect(annotation?.textContent).toBe('{\\displaystyle a =b}');
+	});
+
+	it('leaves plain-text annotations untouched', () => {
+		const document = dom(
+			'<math><semantics><annotation encoding="application/x-tex">E=mc^{2}</annotation></semantics></math>'
+		);
+		prepareArticleDom(document);
+		expect(document.querySelector('annotation')?.textContent).toBe('E=mc^{2}');
+	});
+
 	it('drops citation superscripts inside figure captions', () => {
 		const document = dom(
 			'<figure><img src="a.png" alt=""><figcaption>Wave functions.<sup class="mw-ref reference">[5]</sup></figcaption></figure>'
