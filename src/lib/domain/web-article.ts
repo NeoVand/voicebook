@@ -47,6 +47,15 @@ function normalizedText(value: string | null | undefined): string {
 /**
  * DOM fixes before extraction, for structures the extractor keeps but
  * mishandles:
+ * - TeX annotations are not always intact: Parsoid nests markers inside
+ *   them (`<span typeof="mw:DisplaySpace">&nbsp;</span>` for explicit
+ *   spaces), and the browser's HTML parser foster-parents such spans OUT of
+ *   the MathML tree together with everything after them — a multi-line
+ *   `aligned` equation loses its tail at the first marker. The math
+ *   element's `alttext` attribute carries the complete TeX and survives
+ *   parsing untouched, so annotations are restored from it (falling back to
+ *   flattening whatever a lenient parser kept inline), with non-breaking
+ *   spaces as ordinary spaces;
  * - citation superscripts inside figure captions survive as bare digits in
  *   the caption text (the footnote pass only reaches body refs) — drop them;
  * - images whose alt is empty adopt their figcaption, so the narration layer
@@ -54,6 +63,16 @@ function normalizedText(value: string | null | undefined): string {
  *   see) while the visible caption paragraph reads as usual.
  */
 export function prepareArticleDom(document: Document): void {
+	for (const math of Array.from(document.querySelectorAll('math'))) {
+		const annotation = math.querySelector('annotation');
+		if (!annotation) continue;
+		const alttext = (math.getAttribute('alttext') ?? '').replace(/\u00a0/g, ' ').trim();
+		const flattened = (annotation.textContent ?? '').replace(/\u00a0/g, ' ');
+		const restored = alttext || flattened;
+		if (annotation.firstElementChild || annotation.textContent !== restored) {
+			annotation.textContent = restored;
+		}
+	}
 	for (const sup of Array.from(
 		document.querySelectorAll('figcaption sup.mw-ref, figcaption sup.reference')
 	)) {
