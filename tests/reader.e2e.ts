@@ -341,6 +341,80 @@ test('opens the typed-chat panel from the assistant menu', async ({ page }) => {
 	await expect(panel).toHaveCount(0);
 });
 
+test('keeps highlights and margin notes across reloads', async ({ page }) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByLabel('Title').fill('Field notes');
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill(
+			'Whales sing across ocean basins. Their songs travel far.\n\nHumpbacks migrate toward the poles each summer.'
+		);
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+
+	// Select the first passage and surface the selection actions.
+	await expect(page.locator('[data-segment-id]').first()).toBeVisible();
+	await page.evaluate(() => {
+		const element = document.querySelector('[data-segment-id]');
+		if (!element) return;
+		const range = document.createRange();
+		range.selectNodeContents(element);
+		const selection = window.getSelection();
+		selection?.removeAllRanges();
+		selection?.addRange(range);
+	});
+	await page.locator('.reading-canvas').dispatchEvent('pointerup');
+
+	await page.getByRole('button', { name: /Highlight the selected text/ }).click();
+	await expect(page.locator('.speech-segment.annotated')).toHaveCount(1);
+	const marker = page.locator('.annotation-marker');
+	await expect(marker).toHaveCount(1);
+
+	// The margin marker opens the card; a typed note upgrades the highlight.
+	await marker.click();
+	await page.getByRole('textbox', { name: 'Margin note text' }).fill('Listen for the chorus');
+	await page.locator('.annotation-editor').getByRole('button', { name: 'Done' }).click();
+	await expect(page.locator('.annotation-marker.has-note')).toHaveCount(1);
+
+	// The save is fire-and-forget — wait until the note reaches IndexedDB
+	// before reloading, then confirm the ink survives.
+	await expect
+		.poll(() =>
+			page.evaluate(async () => {
+				const db = await new Promise<IDBDatabase>((resolve, reject) => {
+					const request = indexedDB.open('voicebook-v1');
+					request.onsuccess = () => resolve(request.result);
+					request.onerror = () => reject(request.error);
+				});
+				try {
+					const documents = await new Promise<{ annotations?: { note?: string }[] }[]>(
+						(resolve, reject) => {
+							const request = db.transaction('documents').objectStore('documents').getAll();
+							request.onsuccess = () => resolve(request.result);
+							request.onerror = () => reject(request.error);
+						}
+					);
+					return documents
+						.flatMap((document) => document.annotations ?? [])
+						.filter((annotation) => annotation.note).length;
+				} finally {
+					db.close();
+				}
+			})
+		)
+		.toBe(1);
+	await page.reload();
+	await expect(page.locator('.speech-segment.annotated')).toHaveCount(1);
+	await expect(page.locator('.annotation-marker.has-note')).toHaveCount(1);
+
+	// Remove deletes the annotation, its paint, and its marker.
+	await page.locator('.annotation-marker').click();
+	await page.locator('.annotation-editor').getByRole('button', { name: 'Remove' }).click();
+	await expect(page.locator('.speech-segment.annotated')).toHaveCount(0);
+	await expect(page.locator('.annotation-marker')).toHaveCount(0);
+});
+
 test("Space stays the reader's key even when the play button holds focus", async ({ page }) => {
 	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text', exact: true }).click();

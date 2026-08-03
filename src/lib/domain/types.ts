@@ -262,6 +262,35 @@ export interface DocumentPageInfo {
 	ocr?: boolean;
 }
 
+/** One endpoint of an annotation: a character offset into a block's text.
+ * Start offsets are inclusive, end offsets exclusive. */
+export interface AnnotationAnchor {
+	blockId: string;
+	offset: number;
+}
+
+/** A mark the reader (or the assistant, on their behalf) keeps with the
+ * document: a gold highlight over a passage, optionally carrying a margin
+ * note. Block-text anchors survive listening-mode re-segmentation untouched;
+ * normalization re-parses re-anchor by the stored excerpt
+ * (domain/annotations.ts). */
+export interface DocumentAnnotation {
+	id: string;
+	start: AnnotationAnchor;
+	end: AnnotationAnchor;
+	/** Normalized text of the anchored range, clamped — shown in the note card
+	 * and used to re-locate the range after a re-parse. */
+	excerpt: string;
+	/** Margin note body; absent for a plain highlight. */
+	note?: string;
+	createdBy: 'reader' | 'assistant';
+	/** Set when a re-parse could not re-anchor this annotation. It is kept but
+	 * not painted; a later re-parse may bring the text (and the mark) back. */
+	orphaned?: boolean;
+	createdAt: number;
+	updatedAt: number;
+}
+
 export interface PlaybackPosition {
 	segmentId: string;
 	wordIndex: number;
@@ -291,6 +320,8 @@ export interface NormalizedDocument {
 	playback?: PlaybackPosition;
 	listened?: Record<string, ListenedRange[]>;
 	narrations?: Record<string, NarrationEntry>;
+	/** Reader highlights and margin notes, in creation order. */
+	annotations?: DocumentAnnotation[];
 	warnings: string[];
 	includeCode: boolean;
 	/** How the spoken layer adapts this document; absent means the app default

@@ -140,6 +140,8 @@ describe('assistantTools', () => {
 			'get_reader_focus',
 			'plan_tour',
 			'continue_tour',
+			'add_highlight',
+			'add_note',
 			'play_section'
 		]);
 		expect(assistantTools(true).map((tool) => tool.name)).toEqual([
@@ -149,6 +151,8 @@ describe('assistantTools', () => {
 			'get_reader_focus',
 			'plan_tour',
 			'continue_tour',
+			'add_highlight',
+			'add_note',
 			'play_section',
 			'read_passage'
 		]);
@@ -173,6 +177,34 @@ describe('parseAssistantToolCall', () => {
 	it('parses play_section like a passage range', () => {
 		const result = parseAssistantToolCall(doc(), 'play_section', '{"start_segment":1}');
 		expect(result.call).toEqual({ name: 'play_section', range: { startIndex: 1, endIndex: 1 } });
+	});
+
+	it('parses add_highlight like a passage range', () => {
+		const result = parseAssistantToolCall(
+			doc(),
+			'add_highlight',
+			'{"start_segment":4,"end_segment":2}'
+		);
+		expect(result.call).toEqual({ name: 'add_highlight', range: { startIndex: 2, endIndex: 4 } });
+	});
+
+	it('parses add_note with its text, and rejects a missing note', () => {
+		const result = parseAssistantToolCall(
+			doc(),
+			'add_note',
+			'{"start_segment":1,"note":"  Ask about sonar interference  "}'
+		);
+		expect(result.call).toEqual({
+			name: 'add_note',
+			range: { startIndex: 1, endIndex: 1 },
+			text: 'Ask about sonar interference'
+		});
+		expect(parseAssistantToolCall(doc(), 'add_note', '{"start_segment":1}').error).toContain(
+			'note'
+		);
+		expect(
+			parseAssistantToolCall(doc(), 'add_note', '{"start_segment":1,"note":"   "}').error
+		).toContain('note');
 	});
 
 	it('parses clear_highlight regardless of arguments', () => {

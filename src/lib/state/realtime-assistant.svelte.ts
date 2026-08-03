@@ -104,6 +104,9 @@ export class RealtimeAssistantState {
 	onGetReaderFocus?: () => ReaderFocus;
 	/** Strong per-segment emphasis inside the highlighted passage. */
 	onPointAt?: (segment: number) => void;
+	/** Persist a highlight (or, with note text, a margin note) over a passage.
+	 * Returns false when the range could not be anchored. */
+	onAddAnnotation?: (range: PassageRange, note?: string) => boolean;
 
 	private channel?: RealtimeChannel;
 	private microphone?: MediaStream;
@@ -680,6 +683,17 @@ export class RealtimeAssistantState {
 				return { note: 'The reader is not pointing at anything right now.' };
 			}
 			return output;
+		}
+		if (call.name === 'add_highlight' || call.name === 'add_note') {
+			const note = call.name === 'add_note' ? call.text : undefined;
+			const added = this.onAddAnnotation?.(call.range, note) ?? false;
+			if (!added) return { error: 'That passage could not be annotated.' };
+			const location = describePassageLocation(doc, call.range);
+			return {
+				ok: true,
+				note: note ? 'The margin note is saved.' : 'The passage is highlighted for keeps.',
+				...(location ? { under_heading: location } : {})
+			};
 		}
 		if (call.name === 'play_section') {
 			this.pauseTour();

@@ -7,6 +7,7 @@
 		Check,
 		ChevronLeft,
 		ChevronRight,
+		Highlighter,
 		LoaderCircle,
 		EyeOff,
 		LocateFixed,
@@ -17,6 +18,7 @@
 		RotateCw,
 		Sparkles,
 		Square,
+		StickyNote,
 		Volume2,
 		X
 	} from '@lucide/svelte';
@@ -48,6 +50,11 @@
 		SpeechSegment,
 		TableCell
 	} from '$lib/domain/types';
+	import {
+		ANNOTATION_NOTE_LIMIT,
+		annotationForRange,
+		annotationSegments
+	} from '$lib/domain/annotations';
 	import { tableMarkdown } from '$lib/domain/narration';
 	import { assembleExplainContext } from '$lib/domain/explain-prompts';
 	import { breadcrumbFor, outlineText } from '$lib/domain/document-lens';
@@ -157,6 +164,180 @@
 				.map((segment) => segment.blockId)
 		);
 	});
+	/* ── Persistent annotations: gold highlights and margin notes ────────── */
+	let annotationPaint = $derived.by(() => {
+		const segmentIds = new SvelteSet<string>();
+		const blockIds = new SvelteSet<string>();
+		const firstSegmentIds = new SvelteMap<string, string>();
+		const current = book;
+		if (current) {
+			for (const annotation of current.annotations ?? []) {
+				const covered = annotationSegments(current, annotation);
+				if (covered.length) firstSegmentIds.set(annotation.id, covered[0].id);
+				for (const segment of covered) {
+					segmentIds.add(segment.id);
+					blockIds.add(segment.blockId);
+				}
+			}
+		}
+		return { segmentIds, blockIds, firstSegmentIds };
+	});
+
+	interface AnnotationMarker {
+		id: string;
+		top: number;
+		left: number;
+		hasNote: boolean;
+		label: string;
+	}
+	let annotationMarkers = $state<AnnotationMarker[]>([]);
+	let annotationMeasureFrame = 0;
+	let documentBody = $state<HTMLElement>();
+
+	const trackDocumentBody: Attachment<HTMLElement> = (element) => {
+		documentBody = element;
+		// Any reflow (images decoding, math rendering, width settings) moves the
+		// margin markers; the body's size is the one signal that covers them all.
+		const observer = new ResizeObserver(() => scheduleAnnotationMeasure());
+		observer.observe(element);
+		return () => {
+			observer.disconnect();
+			if (documentBody === element) documentBody = undefined;
+		};
+	};
+
+	function scheduleAnnotationMeasure(): void {
+		cancelAnimationFrame(annotationMeasureFrame);
+		annotationMeasureFrame = requestAnimationFrame(measureAnnotationMarkers);
+	}
+
+	/** Place one marker per annotation in the right margin, level with its
+	 * first painted segment, in canvas content coordinates (scroll-stable). */
+	function measureAnnotationMarkers(): void {
+		annotationMeasureFrame = 0;
+		const canvas = readingCanvas;
+		const body = documentBody;
+		const annotations = book?.annotations ?? [];
+		if (!canvas || !body || !annotations.length) {
+			if (annotationMarkers.length) annotationMarkers = [];
+			return;
+		}
+		const canvasRect = canvas.getBoundingClientRect();
+		const bodyRect = body.getBoundingClientRect();
+		const left = canvas.scrollLeft + bodyRect.right - canvasRect.left + 8;
+		const markers: AnnotationMarker[] = [];
+		for (const annotation of annotations) {
+			const firstId = annotationPaint.firstSegmentIds.get(annotation.id);
+			const element = firstId ? segmentElements.get(firstId) : undefined;
+			if (!element) continue;
+			const rect = element.getBoundingClientRect();
+			let top = canvas.scrollTop + rect.top - canvasRect.top;
+			// Two annotations starting on the same line stack downward.
+			while (markers.some((marker) => Math.abs(marker.top - top) < 16)) top += 18;
+			const summary = (annotation.note ?? annotation.excerpt).slice(0, 120);
+			markers.push({
+				id: annotation.id,
+				top,
+				left,
+				hasNote: Boolean(annotation.note),
+				label: `${annotation.note ? 'Margin note' : 'Highlight'}: ${summary}`
+			});
+		}
+		annotationMarkers = markers;
+	}
+
+	$effect(() => {
+		void book?.annotations;
+		void annotationPaint;
+		scheduleAnnotationMeasure();
+	});
+
+	interface AnnotationEditorState {
+		id: string;
+		left: number;
+		top: number;
+		placement: 'above' | 'below';
+	}
+	let annotationEditor = $state<AnnotationEditorState>();
+	let annotationDraft = $state('');
+	let annotationEditorExcerpt = $derived(
+		book?.annotations?.find((candidate) => candidate.id === annotationEditor?.id)?.excerpt ?? ''
+	);
+
+	function openAnnotationEditor(id: string, anchorRect: DOMRect): void {
+		const canvas = readingCanvas;
+		const annotation = book?.annotations?.find((candidate) => candidate.id === id);
+		if (!canvas || !annotation) return;
+		const canvasRect = canvas.getBoundingClientRect();
+		const placement: 'above' | 'below' = anchorRect.top - canvasRect.top >= 150 ? 'above' : 'below';
+		const unclampedLeft =
+			canvas.scrollLeft + anchorRect.left + anchorRect.width / 2 - canvasRect.left;
+		const left = Math.max(160, Math.min(canvas.clientWidth - 160, unclampedLeft));
+		const top =
+			canvas.scrollTop +
+			(placement === 'above'
+				? anchorRect.top - canvasRect.top - 8
+				: anchorRect.bottom - canvasRect.top + 8);
+		annotationDraft = annotation.note ?? '';
+		annotationEditor = { id, left, top, placement };
+	}
+
+	/** Closing always keeps note edits — the card behaves like paper margins,
+	 * not a form with a discard path. The entry is replaced (not mutated) so
+	 * the marker overlay, which watches the array, re-measures. */
+	function closeAnnotationEditor(): void {
+		const editor = annotationEditor;
+		annotationEditor = undefined;
+		const current = book;
+		if (!editor || !current) return;
+		const annotation = current.annotations?.find((candidate) => candidate.id === editor.id);
+		if (!annotation) return;
+		const note = annotationDraft.trim().slice(0, ANNOTATION_NOTE_LIMIT);
+		if ((annotation.note ?? '') === note) return;
+		const updated = { ...$state.snapshot(annotation), updatedAt: Date.now() };
+		if (note) updated.note = note;
+		else delete updated.note;
+		current.annotations = (current.annotations ?? []).map((candidate) =>
+			candidate.id === editor.id ? updated : candidate
+		);
+		void appState.saveDocument(current).catch(() => undefined);
+	}
+
+	function deleteAnnotation(id: string): void {
+		const current = book;
+		if (!current) return;
+		annotationEditor = undefined;
+		current.annotations = (current.annotations ?? []).filter((candidate) => candidate.id !== id);
+		void appState.saveDocument(current).catch(() => undefined);
+	}
+
+	/** Turn the current selection into persistent ink; with a note, the margin
+	 * card opens ready to type. */
+	function annotateSelection(withNote: boolean): void {
+		const action = narrationStartAction;
+		const current = book;
+		if (!action || !current) return;
+		const start = segmentIndexes.get(action.segmentId);
+		const end = segmentIndexes.get(action.endSegmentId);
+		if (start === undefined || end === undefined) return;
+		const annotation = annotationForRange(
+			current,
+			{ startIndex: Math.min(start, end), endIndex: Math.max(start, end) },
+			{ createdBy: 'reader' }
+		);
+		if (!annotation) return;
+		current.annotations = [...(current.annotations ?? []), annotation];
+		void appState.saveDocument(current).catch(() => undefined);
+		narrationStartAction = undefined;
+		window.getSelection()?.removeAllRanges();
+		if (!withNote) return;
+		requestAnimationFrame(() => {
+			const firstId = annotationPaint.firstSegmentIds.get(annotation.id);
+			const element = firstId ? segmentElements.get(firstId) : undefined;
+			if (element) openAnnotationEditor(annotation.id, element.getBoundingClientRect());
+		});
+	}
+
 	let narrationOutlineBlockId = $derived.by(() => {
 		const currentBlockId = player.currentSegment?.blockId;
 		if (!currentBlockId || !book?.outline.length) return undefined;
@@ -254,6 +435,20 @@
 			hovered: hoveredSegmentId ? segmentIndexes.get(hoveredSegmentId) : undefined,
 			playhead: player.currentSegmentIndex
 		});
+		realtimeAssistant.onAddAnnotation = (range, note) => {
+			const current = book;
+			if (!current) return false;
+			const annotation = annotationForRange(current, range, { createdBy: 'assistant', note });
+			if (!annotation) return false;
+			current.annotations = [...(current.annotations ?? []), annotation];
+			void appState.saveDocument(current).catch(() => undefined);
+			requestAnimationFrame(() => {
+				const segment = current.segments[range.startIndex];
+				const element = segment ? segmentElements.get(segment.id) : undefined;
+				if (element) scrollNarrationIntoView(element);
+			});
+			return true;
+		};
 		realtimeAssistant.onPlayPassage = (range) => {
 			const endSegment = book?.segments[range.endIndex];
 			if (!book || !endSegment) return;
@@ -273,6 +468,7 @@
 		});
 		return () => {
 			cancelAnimationFrame(readerScrollFrame);
+			cancelAnimationFrame(annotationMeasureFrame);
 			if (scrollbarTimer) clearTimeout(scrollbarTimer);
 			if (spaceHoldTimer) clearTimeout(spaceHoldTimer);
 			player.onSegmentChange = undefined;
@@ -282,6 +478,7 @@
 			realtimeAssistant.onPlayPassage = undefined;
 			realtimeAssistant.onGetReaderFocus = undefined;
 			realtimeAssistant.onPointAt = undefined;
+			realtimeAssistant.onAddAnnotation = undefined;
 			narrationState.stop();
 			void releasePdfRenderer();
 		};
@@ -308,6 +505,7 @@
 		narrationState.stop();
 		realtimeAssistant.stop();
 		narrationStartAction = undefined;
+		annotationEditor = undefined;
 		closeExplainBox();
 		outlineNavigationBlockId = undefined;
 		activeOutlineBlockId = undefined;
@@ -1030,10 +1228,11 @@
 		// Escape stops a speaking answer or closes the explain box from
 		// anywhere — its textarea handles its own keys, but focus may sit on a
 		// button (or nowhere) by then.
-		if (event.key === 'Escape' && (explainBox || player.asideActive)) {
+		if (event.key === 'Escape' && (explainBox || annotationEditor || player.asideActive)) {
 			event.preventDefault();
 			player.stopAside();
 			if (explainBox) closeExplainBox();
+			if (annotationEditor) closeAnnotationEditor();
 			return;
 		}
 		const target = event.target as HTMLElement | null;
@@ -1114,6 +1313,7 @@
 	<span
 		class="speech-segment"
 		class:active={isActive}
+		class:annotated={annotationPaint.segmentIds.has(segment.id)}
 		class:assistant-point={assistantPointId === segment.id}
 		class:explaining={(explainingBlockIds.has(block.id) || assistantSegmentIds.has(segment.id)) &&
 			assistantPointId !== segment.id}
@@ -1207,6 +1407,7 @@
 		{@const segs = segmentsByBlock.get(block.id) ?? []}
 		<div
 			class="construct-segment diagram-construct"
+			class:annotated={annotationPaint.blockIds.has(block.id)}
 			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
 			class:narration-pending={segs[0]?.narration?.pending}
@@ -1240,6 +1441,7 @@
 		{@const segs = segmentsByBlock.get(block.id) ?? []}
 		<div
 			class="construct-segment code-construct"
+			class:annotated={annotationPaint.blockIds.has(block.id)}
 			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
 			class:narration-pending={segs[0]?.narration?.pending}
@@ -1272,6 +1474,7 @@
 		{@const segs = segmentsByBlock.get(block.id) ?? []}
 		<div
 			class="construct-segment math-construct"
+			class:annotated={annotationPaint.blockIds.has(block.id)}
 			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
 			class:narration-pending={segs[0]?.narration?.pending}
@@ -1365,6 +1568,7 @@
 		{@const headerSegs = constructSegments(block.id, `${block.id}:rh`)}
 		<div
 			class="table-region"
+			class:annotated={annotationPaint.blockIds.has(block.id)}
 			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			id={block.id}
 			role="region"
@@ -1437,6 +1641,7 @@
 		)}
 		<div
 			class="construct-segment media-construct"
+			class:annotated={annotationPaint.blockIds.has(block.id)}
 			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			id={block.id}
 			class:active={activeConstructIds.includes(imageId)}
@@ -1602,7 +1807,7 @@
 					</p>
 				</header>
 
-				<div class="document-body">
+				<div class="document-body" {@attach trackDocumentBody}>
 					{#each rootBlocks as block (block.id)}
 						{@const markerPage = pageStartsById.get(block.id)}
 						<!-- The document's start needs no separator above it. -->
@@ -1651,8 +1856,94 @@
 								<Sparkles size={12} />
 								Explain
 							</button>
+							<span class="selection-actions-divider" aria-hidden="true"></span>
+							<button
+								class="selection-action"
+								type="button"
+								aria-label={`Highlight the selected text: ${narrationStartAction.excerpt}`}
+								onpointerdown={(event) => event.preventDefault()}
+								onclick={() => annotateSelection(false)}
+							>
+								<Highlighter size={12} />
+								Highlight
+							</button>
+							<span class="selection-actions-divider" aria-hidden="true"></span>
+							<button
+								class="selection-action"
+								type="button"
+								aria-label={`Add a margin note to the selected text: ${narrationStartAction.excerpt}`}
+								onpointerdown={(event) => event.preventDefault()}
+								onclick={() => annotateSelection(true)}
+							>
+								<StickyNote size={12} />
+								Note
+							</button>
 						</div>
 					{/if}
+				{/if}
+
+				{#each annotationMarkers as marker (marker.id)}
+					<button
+						class="annotation-marker"
+						class:has-note={marker.hasNote}
+						style:left={`${marker.left}px`}
+						style:top={`${marker.top}px`}
+						type="button"
+						aria-label={marker.label}
+						onclick={(event) =>
+							annotationEditor?.id === marker.id
+								? closeAnnotationEditor()
+								: openAnnotationEditor(marker.id, event.currentTarget.getBoundingClientRect())}
+					>
+						{#if marker.hasNote}
+							<StickyNote size={12} aria-hidden="true" />
+						{:else}
+							<span class="annotation-dot" aria-hidden="true"></span>
+						{/if}
+					</button>
+				{/each}
+
+				{#if annotationEditor}
+					{@const editor = annotationEditor}
+					<div
+						class="annotation-editor"
+						class:below={editor.placement === 'below'}
+						style:left={`${editor.left}px`}
+						style:top={`${editor.top}px`}
+						role="dialog"
+						aria-label="Edit the annotation"
+					>
+						<div class="annotation-editor-head">
+							<Highlighter size={12} aria-hidden="true" />
+							<span class="annotation-excerpt">{annotationEditorExcerpt}</span>
+							<button
+								class="annotation-editor-close"
+								type="button"
+								aria-label="Close the annotation card"
+								onclick={() => closeAnnotationEditor()}
+							>
+								<X size={13} />
+							</button>
+						</div>
+						<textarea
+							rows="2"
+							placeholder="Add a margin note…"
+							aria-label="Margin note text"
+							bind:value={annotationDraft}
+							{@attach focusExplainInput}></textarea>
+						<footer>
+							<button
+								class="annotation-remove"
+								type="button"
+								onclick={() => deleteAnnotation(editor.id)}
+							>
+								Remove
+							</button>
+							<button class="annotation-done" type="button" onclick={() => closeAnnotationEditor()}>
+								Done
+							</button>
+						</footer>
+					</div>
 				{/if}
 
 				{#if explainBox}
@@ -2953,6 +3244,19 @@
 		content: ' ';
 	}
 
+	/* Persistent reader ink: bookmark gold under the anchored passages.
+	   Declared before .active/.assistant-point so live emphasis wins ties. */
+	.speech-segment.annotated {
+		background: color-mix(in srgb, var(--bookmark) 17%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--bookmark) 17%, transparent);
+	}
+
+	.construct-segment.annotated,
+	.table-region.annotated {
+		background: color-mix(in srgb, var(--bookmark) 9%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--bookmark) 9%, transparent);
+	}
+
 	.speech-segment.active {
 		background: color-mix(in srgb, var(--primary) 13%, transparent);
 		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
@@ -3077,6 +3381,153 @@
 		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38);
 		color: var(--text);
 		backdrop-filter: blur(14px);
+	}
+
+	/* One marker per annotation in the right margin, level with its first
+	   painted line: a gold dot for a plain highlight, a note glyph when the
+	   annotation carries text. */
+	.annotation-marker {
+		position: absolute;
+		z-index: 15;
+		display: grid;
+		width: 20px;
+		height: 20px;
+		padding: 0;
+		border: 0;
+		border-radius: 6px;
+		background: transparent;
+		color: var(--bookmark);
+		cursor: pointer;
+		place-items: center;
+		transition:
+			background 150ms var(--ease),
+			transform 150ms var(--ease);
+	}
+
+	.annotation-marker:hover {
+		background: var(--bookmark-soft);
+		transform: scale(1.15);
+	}
+
+	.annotation-marker:focus-visible {
+		outline: 2px solid var(--bookmark);
+		outline-offset: 2px;
+	}
+
+	.annotation-dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 999px;
+		background: var(--bookmark);
+		box-shadow: 0 0 0 2px var(--bookmark-soft);
+	}
+
+	.annotation-editor {
+		position: absolute;
+		z-index: 30;
+		display: grid;
+		width: min(300px, 80%);
+		gap: 6px;
+		padding: 8px;
+		border: 1px solid var(--line-strong);
+		border-radius: 10px;
+		background: var(--surface-overlay);
+		box-shadow: 0 14px 42px rgba(0, 0, 0, 0.4);
+		font-family: var(--font-ui);
+		transform: translate(-50%, -100%);
+	}
+
+	.annotation-editor.below {
+		transform: translate(-50%, 0);
+	}
+
+	.annotation-editor-head {
+		display: grid;
+		align-items: center;
+		gap: 7px;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		color: var(--bookmark);
+	}
+
+	.annotation-excerpt {
+		overflow: hidden;
+		color: var(--muted);
+		font-size: 11px;
+		font-style: italic;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.annotation-editor-close {
+		display: grid;
+		width: 24px;
+		height: 24px;
+		border: 0;
+		border-radius: 5px;
+		background: transparent;
+		color: var(--muted);
+		cursor: pointer;
+		place-items: center;
+	}
+
+	.annotation-editor-close:hover {
+		background: var(--hover);
+		color: var(--text);
+	}
+
+	.annotation-editor textarea {
+		width: 100%;
+		min-height: 30px;
+		max-height: 76px;
+		padding: 6px 8px;
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		background: transparent;
+		color: var(--text);
+		field-sizing: content;
+		font-family: var(--font-ui);
+		font-size: 12px;
+		line-height: 1.4;
+		resize: none;
+	}
+
+	.annotation-editor textarea:focus-visible {
+		border-color: var(--bookmark);
+		outline: none;
+	}
+
+	.annotation-editor footer {
+		display: flex;
+		justify-content: space-between;
+	}
+
+	.annotation-remove,
+	.annotation-done {
+		padding: 5px 10px;
+		border: 0;
+		border-radius: 6px;
+		background: transparent;
+		cursor: pointer;
+		font-family: var(--font-ui);
+		font-size: 10.5px;
+		font-weight: 650;
+	}
+
+	.annotation-remove {
+		color: var(--danger);
+	}
+
+	.annotation-remove:hover {
+		background: color-mix(in srgb, var(--danger) 12%, transparent);
+	}
+
+	.annotation-done {
+		background: color-mix(in srgb, var(--bookmark) 16%, transparent);
+		color: var(--text);
+	}
+
+	.annotation-done:hover {
+		background: color-mix(in srgb, var(--bookmark) 26%, transparent);
 	}
 
 	/* The assistant speaks from a bubble anchored above its mic chip, hugging
