@@ -9,6 +9,8 @@
 import {
 	abstractNeeded,
 	abstractSourceHash,
+	languageName,
+	looksLikeLanguage,
 	reconcileStudy,
 	studyAbstractMessages,
 	studySectionMessages,
@@ -150,16 +152,36 @@ export class StudyState {
 
 	private async summarize(section: StudySection, token: number): Promise<string> {
 		const book = player.book;
-		const messages = studySectionMessages(book?.title ?? '', section);
+		const language = book?.language ?? 'en';
+		const messages = studySectionMessages(book?.title ?? '', section, language);
+		let text: string;
 		try {
-			return await this.generate(messages, SECTION_MAX_TOKENS);
+			text = await this.generate(messages, SECTION_MAX_TOKENS);
 		} catch (cause) {
 			// One retry, honoring a server-requested backoff (rate limits).
 			if (token !== this.runToken || !(cause instanceof CloudLlmError)) throw cause;
 			await delay(Math.min(cause.retryAfterMs ?? 1_500, MAX_RETRY_AFTER_MS));
 			if (token !== this.runToken) throw cause;
-			return await this.generate(messages, SECTION_MAX_TOKENS);
+			text = await this.generate(messages, SECTION_MAX_TOKENS);
 		}
+		if (looksLikeLanguage(text, language)) return text;
+		// Naming the language in the system prompt is not quite enough: the
+		// model still drifts on the occasional technical section. Say it again
+		// where it carries most weight — last — and check the answer again.
+		if (token !== this.runToken) return text;
+		const insisted = await this.generate(
+			[
+				messages[0],
+				{
+					role: 'user' as const,
+					content: `${messages[1].content}\n\nWrite the notes in ${languageName(language)}.`
+				}
+			],
+			SECTION_MAX_TOKENS
+		);
+		if (looksLikeLanguage(insisted, language)) return insisted;
+		// Better an honest gap the reader can rebuild than a note they cannot read.
+		throw new CloudLlmError(`The study model answered outside ${languageName(language)}.`);
 	}
 
 	private async generate(
@@ -210,7 +232,7 @@ export class StudyState {
 		this.phase = 'running';
 		try {
 			const text = await this.generate(
-				studyAbstractMessages(book.title, book.study.nodes),
+				studyAbstractMessages(book.title, book.study.nodes, book.language),
 				ABSTRACT_MAX_TOKENS
 			);
 			if (token !== this.runToken || !book.study) return;
