@@ -8,14 +8,19 @@
 	import {
 		CircleHelp,
 		Cpu,
+		FileText,
+		FileUp,
 		Library,
+		Link2,
 		List,
 		Fullscreen,
 		Menu,
 		PanelLeftClose,
 		PanelLeftOpen,
+		Plus,
 		BrainCircuit,
 		RefreshCw,
+		Search,
 		Settings2,
 		Palette,
 		Shrink,
@@ -29,8 +34,10 @@
 	import GitHubOutline from '$lib/components/GitHubOutline.svelte';
 	import { recordRuntimeEvent } from '$lib/services/runtime-diagnostics';
 	import { startTour, type TourContext } from '$lib/services/tours';
+	import LibraryAddOverlays from '$lib/components/LibraryAddOverlays.svelte';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { appearanceState } from '$lib/state/appearance.svelte';
+	import { libraryAdd } from '$lib/state/library-add.svelte';
 	import { player } from '$lib/state/player.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 	import './layout.css';
@@ -176,13 +183,36 @@
 
 	let zoomOpen = $state(false);
 	let zoomRoot = $state<HTMLDivElement>();
+	let sidebarQuery = $state('');
+	let sidebarAddOpen = $state(false);
+	let sidebarAddRoot = $state<HTMLDivElement>();
+
+	/** The sidebar list: recents, or every matching title while searching. */
+	let sidebarDocuments = $derived.by(() => {
+		const query = sidebarQuery.trim().toLocaleLowerCase();
+		if (!query) return appState.documents;
+		return appState.documents.filter((document) =>
+			document.title.toLocaleLowerCase().includes(query)
+		);
+	});
 
 	function handleZoomPointerDown(event: PointerEvent): void {
 		if (zoomOpen && zoomRoot && !zoomRoot.contains(event.target as Node)) zoomOpen = false;
+		if (sidebarAddOpen && sidebarAddRoot && !sidebarAddRoot.contains(event.target as Node)) {
+			sidebarAddOpen = false;
+		}
 	}
 
 	function handleZoomKeydown(event: KeyboardEvent): void {
 		if (zoomOpen && event.key === 'Escape') zoomOpen = false;
+		if (sidebarAddOpen && event.key === 'Escape') sidebarAddOpen = false;
+	}
+
+	function sidebarAdd(action: 'files' | 'paste' | 'url'): void {
+		sidebarAddOpen = false;
+		if (action === 'files') libraryAdd.pickFiles();
+		else if (action === 'paste') libraryAdd.openPaste();
+		else libraryAdd.openUrl();
 	}
 
 	async function toggleFullscreen(): Promise<void> {
@@ -400,20 +430,45 @@
 					<span>Library</span>
 				</a>
 
-				{#if sidebarCollapsed && !mobileSidebarOpen && appState.documents.length}
-					<div class="library-flyout" aria-label="Recent documents">
-						<strong>Recent documents</strong>
-						{#each appState.documents.slice(0, 7) as document (document.id)}
-							<a
-								class:active={activeReaderDocumentId === document.id}
-								href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
-								aria-current={activeReaderDocumentId === document.id ? 'page' : undefined}
-								onclick={closeNavigation}
-							>
-								<DocumentKindIcon kind={document.sourceKind} size={14} />
-								<span>{document.title}</span>
-							</a>
-						{/each}
+				{#if sidebarCollapsed && !mobileSidebarOpen}
+					<div class="library-flyout" aria-label="Library">
+						<label class="flyout-search">
+							<Search size={12} aria-hidden="true" />
+							<input
+								type="search"
+								placeholder="Search library…"
+								aria-label="Search the library"
+								bind:value={sidebarQuery}
+							/>
+						</label>
+						<button class="flyout-action" type="button" onclick={() => sidebarAdd('files')}>
+							<FileUp size={14} />
+							<span>Add document</span>
+						</button>
+						<button class="flyout-action" type="button" onclick={() => sidebarAdd('paste')}>
+							<FileText size={14} />
+							<span>Paste text</span>
+						</button>
+						<button class="flyout-action" type="button" onclick={() => sidebarAdd('url')}>
+							<Link2 size={14} />
+							<span>From URL</span>
+						</button>
+						{#if appState.documents.length}
+							<strong>{sidebarQuery.trim() ? 'Results' : 'Recent documents'}</strong>
+							{#each sidebarDocuments.slice(0, 7) as document (document.id)}
+								<a
+									class:active={activeReaderDocumentId === document.id}
+									href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
+									aria-current={activeReaderDocumentId === document.id ? 'page' : undefined}
+									onclick={closeNavigation}
+								>
+									<DocumentKindIcon kind={document.sourceKind} size={14} />
+									<span>{document.title}</span>
+								</a>
+							{:else}
+								<p class="flyout-empty">No matches for “{sidebarQuery.trim()}”.</p>
+							{/each}
+						{/if}
 					</div>
 				{/if}
 			</div>
@@ -436,11 +491,56 @@
 
 		<div id="primary-navigation" class="sidebar-main">
 			{#if !sidebarCollapsed || mobileSidebarOpen}
+				<div class="sidebar-quick">
+					<label class="sidebar-search">
+						<Search size={12} aria-hidden="true" />
+						<input
+							type="search"
+							placeholder="Search…"
+							aria-label="Search the library"
+							bind:value={sidebarQuery}
+						/>
+					</label>
+					<div class="sidebar-add" bind:this={sidebarAddRoot}>
+						<button
+							class="sidebar-add-button"
+							type="button"
+							aria-label="Quick add"
+							aria-haspopup="menu"
+							aria-expanded={sidebarAddOpen}
+							title="Quick add"
+							onclick={() => (sidebarAddOpen = !sidebarAddOpen)}
+						>
+							<Plus size={15} />
+						</button>
+						{#if sidebarAddOpen}
+							<div
+								class="sidebar-add-menu"
+								role="menu"
+								aria-label="Add to library"
+								in:fly={{ y: 4, duration: 120 }}
+							>
+								<button role="menuitem" type="button" onclick={() => sidebarAdd('files')}>
+									<FileUp size={14} />
+									<span>Add document</span>
+								</button>
+								<button role="menuitem" type="button" onclick={() => sidebarAdd('paste')}>
+									<FileText size={14} />
+									<span>Paste text</span>
+								</button>
+								<button role="menuitem" type="button" onclick={() => sidebarAdd('url')}>
+									<Link2 size={14} />
+									<span>From URL</span>
+								</button>
+							</div>
+						{/if}
+					</div>
+				</div>
 				<div class="sidebar-documents">
-					<span class="sidebar-section-label">Recent</span>
+					<span class="sidebar-section-label">{sidebarQuery.trim() ? 'Results' : 'Recent'}</span>
 					{#if appState.documents.length}
-						<nav aria-label="Recent documents">
-							{#each appState.documents as document (document.id)}
+						<nav aria-label={sidebarQuery.trim() ? 'Search results' : 'Recent documents'}>
+							{#each sidebarDocuments as document (document.id)}
 								<a
 									class:active={activeReaderDocumentId === document.id}
 									href={resolve(`/read?document=${encodeURIComponent(document.id)}`)}
@@ -451,6 +551,8 @@
 									<DocumentKindIcon kind={document.sourceKind} size={14} />
 									<span>{document.title}</span>
 								</a>
+							{:else}
+								<p>No matches for “{sidebarQuery.trim()}”.</p>
 							{/each}
 						</nav>
 					{:else}
@@ -527,6 +629,8 @@
 		</main>
 	</div>
 </div>
+
+<LibraryAddOverlays />
 
 {#if updateAvailable && !updateDismissed}
 	<div class="toast update-toast" class:stacked={Boolean(appState.errorMessage)} role="status">
