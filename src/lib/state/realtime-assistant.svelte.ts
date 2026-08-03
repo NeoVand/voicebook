@@ -116,6 +116,10 @@ export class RealtimeAssistantState {
 	private audio?: HTMLAudioElement;
 	private abort?: AbortController;
 	private document?: NormalizedDocument;
+	/** What the assistant is doing between the reader's turn and its reply, so
+	 * a silent wait never reads as a freeze. Cleared the moment text streams. */
+	activity = $state<'' | 'thinking' | 'searching'>('');
+
 	/** Blocks this session showed, read, or toured — flushed into the
 	 * document's conversation footprint when the session ends. */
 	private sessionBlocks = new SvelteSet<string>();
@@ -234,6 +238,9 @@ export class RealtimeAssistantState {
 	/** response.create on the current turn's channel: typed turns ask for
 	 * text-only output; spoken turns leave the session's voice default. */
 	private createResponse(): void {
+		// Every path that asks for a reply — a typed turn, a tool-output nudge,
+		// a tour prompt — starts the wait indicator here.
+		this.activity = 'thinking';
 		this.channel?.send(
 			this.turnChannel === 'text'
 				? { type: 'response.create', response: { output_modalities: ['text'] } }
@@ -417,6 +424,7 @@ export class RealtimeAssistantState {
 		this.textItemId = '';
 		this.turnChannel = 'voice';
 		this.settleTranscript();
+		this.activity = '';
 		this.caption = '';
 		this.speaking = false;
 		this.listening = false;
@@ -496,6 +504,8 @@ export class RealtimeAssistantState {
 	 * response item, voice transcripts and typed replies alike. */
 	private streamAssistantText(itemId: string, delta: string, channel: 'voice' | 'text'): void {
 		if (!delta) return;
+		// Words are arriving: the wait is over, whatever it was for.
+		this.activity = '';
 		const last = this.messages.at(-1);
 		if (last?.role === 'assistant' && last.pending && itemId === this.textItemId) {
 			last.text += delta;
@@ -566,6 +576,7 @@ export class RealtimeAssistantState {
 				this.speaking = false;
 				this.advanceAfterAudio = false;
 				this.pendingPlayback = undefined;
+				this.activity = '';
 				// A cut-off answer stays truncated in the transcript — accurate.
 				this.settleTranscript();
 				break;
@@ -596,6 +607,9 @@ export class RealtimeAssistantState {
 				// the queued playback here instead of waiting for a drain that
 				// will never come.
 				if (!this.speaking) this.startPendingPlayback();
+				// A response that only called web_research completes while the
+				// search is still running — the indicator must survive it.
+				if (this.activity !== 'searching') this.activity = '';
 				this.settleTranscript();
 				break;
 			}
@@ -775,6 +789,7 @@ export class RealtimeAssistantState {
 		query: string,
 		engine: { model: string; apiKey: string }
 	): Promise<Record<string, unknown>> {
+		this.activity = 'searching';
 		try {
 			const finding = await performWebResearch(engine.model, engine.apiKey, query);
 			const now = Date.now();
@@ -798,6 +813,10 @@ export class RealtimeAssistantState {
 			return {
 				error: error instanceof Error ? error.message : 'The web search failed.'
 			};
+		} finally {
+			// The nudge that follows re-arms 'thinking'; leaving 'searching' up
+			// would outlive the search on any path.
+			if (this.activity === 'searching') this.activity = '';
 		}
 	}
 
