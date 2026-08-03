@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import {
 		ArrowLeft,
+		ArrowUpRight,
 		BookOpenText,
 		Check,
 		ChevronLeft,
@@ -1849,6 +1850,21 @@
 												{memory.text}
 											</button>
 										{/if}
+										{#if memory.sourceUrl}
+											<!-- Always an external https citation, never an app route. -->
+											<!-- eslint-disable svelte/no-navigation-without-resolve -->
+											<a
+												class="study-memory-source"
+												href={memory.sourceUrl}
+												target="_blank"
+												rel="noreferrer"
+												aria-label="Open this note’s web source"
+												title={memory.sourceUrl}
+											>
+												<ArrowUpRight size={11} />
+											</a>
+											<!-- eslint-enable svelte/no-navigation-without-resolve -->
+										{/if}
 										<button
 											type="button"
 											class="study-memory-delete"
@@ -2721,7 +2737,25 @@
 		display: grid;
 		align-items: start;
 		gap: 4px;
+		grid-template-columns: minmax(0, 1fr) auto auto;
+	}
+
+	.study-memory:not(:has(.study-memory-source)) {
 		grid-template-columns: minmax(0, 1fr) auto;
+	}
+
+	.study-memory-source {
+		display: grid;
+		width: 18px;
+		height: 18px;
+		border-radius: 4px;
+		color: var(--faint);
+		place-items: center;
+	}
+
+	.study-memory-source:hover {
+		background: var(--hover);
+		color: var(--primary);
 	}
 
 	.study-memory-text {

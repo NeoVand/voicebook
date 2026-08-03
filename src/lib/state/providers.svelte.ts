@@ -238,6 +238,15 @@ export class ProvidersState {
 		return { provider, model: this.studyModelFor(provider), apiKey };
 	}
 
+	/** Web research runs on OpenAI's built-in search regardless of the study
+	 * provider — the voice assistant already requires that key. Uses the
+	 * OpenAI study-model pick so the tier stays user-selectable. */
+	get webResearchEngine(): { model: string; apiKey: string } | null {
+		const apiKey = this.keyFor('openai');
+		if (!apiKey) return null;
+		return { model: this.studyModelFor('openai'), apiKey };
+	}
+
 	/* ── Speech engine ───────────────────────────────────────────────────── */
 
 	get elevenLabsReady(): boolean {

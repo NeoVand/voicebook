@@ -23,8 +23,10 @@ import {
 	type ReaderFocus,
 	type TourStop
 } from '$lib/domain/assistant-context';
+import { MEMORY_TEXT_LIMIT } from '$lib/domain/study-tree';
 import type { NormalizedDocument, StudyMemory } from '$lib/domain/types';
 import { playChime } from '$lib/services/assistant-chimes';
+import { performWebResearch } from '$lib/services/web-research';
 import { appState } from './app-state.svelte';
 import {
 	connectRealtime,
@@ -615,15 +617,35 @@ export class RealtimeAssistantState {
 		if (!callId || this.seenCalls.has(callId)) return;
 		this.seenCalls.add(callId);
 		const output = this.runTool(item.name ?? '', item.arguments ?? '');
+		if (output instanceof Promise) {
+			// A slow tool (web research) sends its output when it lands — the
+			// model waits on the open call. A session that ended or reconnected
+			// meanwhile drops the result on the floor.
+			const channel = this.channel;
+			void output.then((resolved) => {
+				if (!channel || this.channel !== channel) return;
+				this.sendToolOutput(callId, resolved);
+				this.scheduleResponseNudge();
+			});
+			return;
+		}
+		this.sendToolOutput(callId, output);
+		// After play_section the narration voice has the stage — a follow-up
+		// response would talk over it. The output alone closes the call.
+		if (item.name === 'play_section') return;
+		this.scheduleResponseNudge();
+	}
+
+	private sendToolOutput(callId: string, output: Record<string, unknown>): void {
 		this.channel?.send({
 			type: 'conversation.item.create',
 			item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(output) }
 		});
-		// After play_section the narration voice has the stage — a follow-up
-		// response would talk over it. The output alone closes the call.
-		if (item.name === 'play_section') return;
-		// One response even when a turn made several calls: nudge after the
-		// last output instead of answering each one.
+	}
+
+	/** One response even when a turn made several calls: nudge after the last
+	 * output instead of answering each one. */
+	private scheduleResponseNudge(): void {
 		if (this.respondTimer) clearTimeout(this.respondTimer);
 		this.respondTimer = setTimeout(() => {
 			this.respondTimer = undefined;
@@ -631,7 +653,10 @@ export class RealtimeAssistantState {
 		}, 120);
 	}
 
-	private runTool(name: string, argumentsJson: string): Record<string, unknown> {
+	private runTool(
+		name: string,
+		argumentsJson: string
+	): Record<string, unknown> | Promise<Record<string, unknown>> {
 		const doc = this.document;
 		if (!doc) return { error: 'No document is open.' };
 		const { call, error } = parseAssistantToolCall(doc, name, argumentsJson);
@@ -691,6 +716,11 @@ export class RealtimeAssistantState {
 			}
 			return output;
 		}
+		if (call.name === 'web_research') {
+			const engine = providersState.webResearchEngine;
+			if (!engine) return { error: 'Web research needs an OpenAI key (Settings → LLM).' };
+			return this.performWebResearchCall(doc, call.query, engine);
+		}
 		if (call.name === 'save_memory') {
 			const now = Date.now();
 			const blockId = call.segment === undefined ? undefined : doc.segments[call.segment]?.blockId;
@@ -736,6 +766,39 @@ export class RealtimeAssistantState {
 		this.onShowPassage?.(call.range);
 		const location = describePassageLocation(doc, call.range);
 		return location ? { ok: true, under_heading: location } : { ok: true };
+	}
+
+	/** Run a web search and persist the finding as a sourced web memory — the
+	 * document keeps it even if the session ends before the answer lands. */
+	private async performWebResearchCall(
+		doc: NormalizedDocument,
+		query: string,
+		engine: { model: string; apiKey: string }
+	): Promise<Record<string, unknown>> {
+		try {
+			const finding = await performWebResearch(engine.model, engine.apiKey, query);
+			const now = Date.now();
+			const memory: StudyMemory = {
+				id: crypto.randomUUID(),
+				text: finding.text.slice(0, MEMORY_TEXT_LIMIT),
+				origin: 'web',
+				...(finding.citations[0] ? { sourceUrl: finding.citations[0].url } : {}),
+				createdAt: now,
+				updatedAt: now
+			};
+			doc.memories = [...(doc.memories ?? []), memory];
+			void appState.saveDocument(doc).catch(() => undefined);
+			return {
+				ok: true,
+				finding: finding.text,
+				sources: finding.citations.slice(0, 3).map((c) => `${c.title} — ${c.url}`),
+				note: 'The finding is saved to the study notes.'
+			};
+		} catch (error) {
+			return {
+				error: error instanceof Error ? error.message : 'The web search failed.'
+			};
+		}
 	}
 
 	/** Record the blocks a range touches for the session footprint. */
