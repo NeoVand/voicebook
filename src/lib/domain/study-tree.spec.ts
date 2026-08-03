@@ -5,6 +5,7 @@ import {
 	STUDY_PROMPT_VERSION,
 	abstractNeeded,
 	abstractSourceHash,
+	composeReaderState,
 	composeStudyBlock,
 	reconcileStudy,
 	studyAbstractMessages,
@@ -294,5 +295,82 @@ describe('prompts and instruction block', () => {
 		const sections = studySections(book);
 		book.study = reconcileStudy(sections, undefined).study;
 		expect(composeStudyBlock(book)).toBe('');
+	});
+});
+
+describe('composeReaderState', () => {
+	const withStudy = () => {
+		const book = doc();
+		const { study } = reconcileStudy(studySections(book), undefined);
+		book.study = {
+			...study,
+			nodes: study.nodes.map((node) => ({
+				...node,
+				status: 'ready' as const,
+				summary: `About ${node.title}.`
+			}))
+		};
+		return book;
+	};
+
+	it('is empty without any history', () => {
+		expect(composeReaderState(doc())).toBe('');
+		expect(composeReaderState(withStudy())).toBe('');
+	});
+
+	it('reports the last session, saved notes, and section coverage', () => {
+		const now = 1_700_000_000_000;
+		const book = withStudy();
+		book.memories = [
+			{
+				id: 'm1',
+				text: 'Reader wants to revisit how themes repeat.',
+				blockId: 'b2',
+				origin: 'assistant',
+				createdAt: 1,
+				updatedAt: 1
+			},
+			{
+				id: 'm2',
+				text: 'A note whose anchor no longer exists.',
+				blockId: 'gone',
+				origin: 'assistant',
+				createdAt: 2,
+				updatedAt: 2
+			}
+		];
+		book.conversation = {
+			discussedBlockIds: ['h2', 'b2'],
+			lastBlockId: 'b2',
+			lastSessionAt: now - 86_400_000
+		};
+		book.listened = {
+			'h1:s0': [{ start: 0, end: 2 }],
+			'b1:s0': [{ start: 0, end: 3 }]
+		};
+		const state = composeReaderState(book, now);
+		expect(state).toContain('Last conversation: yesterday, leaving off around "Structure" ⟦5⟧.');
+		expect(state).toContain('- ⟦5⟧ Reader wants to revisit how themes repeat.');
+		expect(state).toContain('- A note whose anchor no longer exists.');
+		expect(state).toContain('Heard in playback: Songs.');
+		expect(state).toContain('Discussed with you: Structure.');
+		expect(state).toContain('Not yet visited:');
+		expect(state).toContain('Migration ⟦6⟧');
+	});
+
+	it('still reports memories when there is no study tree', () => {
+		const book = doc();
+		book.memories = [
+			{
+				id: 'm1',
+				text: 'Songs evolve seasonally.',
+				origin: 'assistant',
+				createdAt: 1,
+				updatedAt: 1
+			}
+		];
+		const state = composeReaderState(book, 10);
+		expect(state).toContain('Songs evolve seasonally.');
+		expect(state).not.toContain('Not yet visited');
 	});
 });

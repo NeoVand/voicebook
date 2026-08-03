@@ -55,6 +55,7 @@
 		annotationForRange,
 		annotationSegments
 	} from '$lib/domain/annotations';
+	import { MEMORY_TEXT_LIMIT } from '$lib/domain/study-tree';
 	import { tableMarkdown } from '$lib/domain/narration';
 	import { assembleExplainContext } from '$lib/domain/explain-prompts';
 	import { breadcrumbFor, outlineText } from '$lib/domain/document-lens';
@@ -75,6 +76,40 @@
 	let book = $state<NormalizedDocument | null>(null);
 	let activeOutlineBlockId = $state<string>();
 	let outlinePanelTab = $state<'contents' | 'study'>('contents');
+	let memoryEditId = $state<string>();
+	let memoryDraft = $state('');
+
+	function beginMemoryEdit(id: string, text: string): void {
+		memoryEditId = id;
+		memoryDraft = text;
+	}
+
+	/** Blur (or Enter) keeps the edit; emptying the text deletes the note. */
+	function commitMemoryEdit(): void {
+		const current = book;
+		const id = memoryEditId;
+		memoryEditId = undefined;
+		if (!current || !id) return;
+		const text = memoryDraft.trim().slice(0, MEMORY_TEXT_LIMIT);
+		const existing = current.memories?.find((memory) => memory.id === id);
+		if (!existing || existing.text === text) return;
+		if (!text) {
+			deleteMemory(id);
+			return;
+		}
+		current.memories = (current.memories ?? []).map((memory) =>
+			memory.id === id ? { ...$state.snapshot(memory), text, updatedAt: Date.now() } : memory
+		);
+		void appState.saveDocument(current).catch(() => undefined);
+	}
+
+	function deleteMemory(id: string): void {
+		const current = book;
+		if (!current) return;
+		memoryEditId = undefined;
+		current.memories = (current.memories ?? []).filter((memory) => memory.id !== id);
+		void appState.saveDocument(current).catch(() => undefined);
+	}
 	let outlineAnnouncement = $state('');
 	let readingCanvas = $state<HTMLElement>();
 	let scrollbarActive = $state(false);
@@ -1786,6 +1821,46 @@
 								</button>
 							</div>
 						{/if}
+						{#if book.memories?.length}
+							<div class="study-memories">
+								<span class="study-memories-label">Conversation notes</span>
+								{#each book.memories as memory (memory.id)}
+									<div class="study-memory">
+										{#if memoryEditId === memory.id}
+											<textarea
+												rows="2"
+												aria-label="Edit the note"
+												bind:value={memoryDraft}
+												onblur={commitMemoryEdit}
+												onkeydown={(event) => {
+													if (event.key === 'Enter' && !event.shiftKey) {
+														event.preventDefault();
+														commitMemoryEdit();
+													}
+												}}
+												{@attach focusExplainInput}></textarea>
+										{:else}
+											<button
+												type="button"
+												class="study-memory-text"
+												title="Edit this note"
+												onclick={() => beginMemoryEdit(memory.id, memory.text)}
+											>
+												{memory.text}
+											</button>
+										{/if}
+										<button
+											type="button"
+											class="study-memory-delete"
+											aria-label="Delete this note"
+											onclick={() => deleteMemory(memory.id)}
+										>
+											<X size={12} />
+										</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
 					</div>
 				{:else}
 					<nav aria-label="Table of contents">
@@ -2623,6 +2698,88 @@
 	.study-actions button:disabled {
 		cursor: default;
 		opacity: 0.4;
+	}
+
+	.study-memories {
+		display: grid;
+		gap: 5px;
+		padding-top: 10px;
+		border-top: 1px solid var(--line);
+		margin-top: 6px;
+	}
+
+	.study-memories-label {
+		color: var(--faint);
+		font-family: var(--font-ui);
+		font-size: 8.5px;
+		font-weight: 660;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+	}
+
+	.study-memory {
+		display: grid;
+		align-items: start;
+		gap: 4px;
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+
+	.study-memory-text {
+		padding: 4px 6px;
+		border: 0;
+		border-radius: 6px;
+		margin: -4px -6px;
+		background: transparent;
+		color: var(--muted);
+		cursor: text;
+		font-family: var(--font-ui);
+		font-size: 10.5px;
+		line-height: 1.5;
+		text-align: left;
+		transition: background 150ms var(--ease);
+	}
+
+	.study-memory-text:hover {
+		background: var(--hover);
+		color: var(--text-soft);
+	}
+
+	.study-memory textarea {
+		width: 100%;
+		min-height: 28px;
+		padding: 5px 7px;
+		border: 1px solid var(--line);
+		border-radius: 6px;
+		background: transparent;
+		color: var(--text);
+		field-sizing: content;
+		font-family: var(--font-ui);
+		font-size: 10.5px;
+		line-height: 1.5;
+		resize: none;
+	}
+
+	.study-memory textarea:focus-visible {
+		border-color: var(--primary);
+		outline: none;
+	}
+
+	.study-memory-delete {
+		display: grid;
+		width: 18px;
+		height: 18px;
+		padding: 0;
+		border: 0;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--faint);
+		cursor: pointer;
+		place-items: center;
+	}
+
+	.study-memory-delete:hover {
+		background: var(--hover);
+		color: var(--danger);
 	}
 
 	.outline-legend {

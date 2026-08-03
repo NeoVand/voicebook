@@ -7,7 +7,7 @@
  */
 import { ANNOTATION_NOTE_LIMIT } from './annotations';
 import { tableMarkdown } from './narration';
-import { composeStudyBlock } from './study-tree';
+import { MEMORY_TEXT_LIMIT, composeReaderState, composeStudyBlock } from './study-tree';
 import type { DocumentBlock, NormalizedDocument } from './types';
 
 export interface PassageRange {
@@ -28,6 +28,7 @@ export type AssistantToolCall =
 	| { name: 'play_section'; range: PassageRange }
 	| { name: 'add_highlight'; range: PassageRange }
 	| { name: 'add_note'; range: PassageRange; text: string }
+	| { name: 'save_memory'; text: string; segment?: number }
 	| { name: 'clear_highlight' }
 	| { name: 'plan_tour'; stops: TourStop[] }
 	| { name: 'continue_tour' }
@@ -159,6 +160,8 @@ When the reader asks to hear part of the document read aloud ("read this section
 
 When the reader asks you to mark something for keeps — "highlight this", "save that definition", "add a note here saying…" — call add_highlight or add_note with the exact marker range. These leave permanent gold marks and margin notes that stay with the document after the conversation; keep note text to a sentence or two, in the reader's own framing. Confirm in a brief word once it is done. For merely drawing attention while you talk, keep using show_passage — its highlight fades; add_highlight and add_note are for ink the reader asked to keep.
 
+You also keep notes across conversations: when an exchange reaches something worth carrying forward — a question resolved, a connection the reader made, or "remember this for next time" — call save_memory with one or two sentences (and the passage's marker when it is about a specific place). A READER STATE section, when present, holds these notes plus what the reader has already heard or discussed and where the last conversation left off. Lean on it when they ask what you covered last time (recap from the notes), to continue where they left off (show_passage the left-off spot and pick up from there), or what is left (walk the not-yet-visited sections).
+
 Ground everything you say in the document; when it does not contain the answer, say so plainly. Match the language the reader speaks to you (start in the document's language). Keep replies short and conversational — a few sentences unless the reader asks for depth.`;
 
 const STUDY_PREAMBLE = `A STUDY NOTES section below carries a background-generated abstract and per-section notes, each tagged with its first ⟦n⟧ marker. Lean on it for overview, review, and "what should I read next" questions, and jump to the noted sections with show_passage or plan_tour. It is a map, not the text — ground quotes and details in the document itself.`;
@@ -170,10 +173,12 @@ export function buildAssistantInstructions(
 	const { body, cutAt } = serializeBody(doc, charBudget);
 	const outline = serializeOutline(doc);
 	const study = composeStudyBlock(doc);
+	const readerState = composeReaderState(doc);
 	const sections = [PREAMBLE];
 	if (study) sections.push(STUDY_PREAMBLE);
 	if (outline) sections.push(`=== OUTLINE ===\n${outline}`);
 	if (study) sections.push(`=== STUDY NOTES ===\n${study}`);
+	if (readerState) sections.push(`=== READER STATE ===\n${readerState}`);
 	sections.push(`=== DOCUMENT: ${doc.title} ===\n${body}`);
 	if (cutAt >= 0) {
 		sections.push(
@@ -301,6 +306,22 @@ export function assistantTools(includeReadPassage: boolean): RealtimeToolSpec[] 
 		},
 		{
 			type: 'function',
+			name: 'save_memory',
+			description:
+				'Keep a takeaway from this conversation with the document for future sessions — a resolved question, a connection the reader made, or something they asked to remember. One or two sentences.',
+			parameters: {
+				type: 'object',
+				properties: {
+					note: { type: 'string', description: 'The takeaway, in the reader’s framing.' },
+					segment: segmentParameter(
+						'Optional ⟦n⟧ marker of the passage the note is about, when there is one.'
+					)
+				},
+				required: ['note']
+			}
+		},
+		{
+			type: 'function',
 			name: 'play_section',
 			description:
 				"Start the app's reading voice on a passage — for requests like 'read this section to me'. After calling it, stay silent: the narrator has the stage until the reader speaks to you again.",
@@ -354,6 +375,22 @@ export function parseAssistantToolCall(
 		return { call: { name } };
 	}
 	if (name === 'plan_tour') return parsePlanTour(doc, parsed);
+	if (name === 'save_memory') {
+		const record = (parsed ?? {}) as Record<string, unknown>;
+		const text = typeof record.note === 'string' ? record.note.trim() : '';
+		if (!text) return { error: 'save_memory needs a non-empty note string.' };
+		// An out-of-range anchor is dropped rather than failing the save — the
+		// note itself is the point.
+		const segment = toSegmentIndex(record.segment);
+		const anchored = segment !== undefined && segment < doc.segments.length ? segment : undefined;
+		return {
+			call: {
+				name: 'save_memory',
+				text: text.slice(0, MEMORY_TEXT_LIMIT),
+				...(anchored === undefined ? {} : { segment: anchored })
+			}
+		};
+	}
 	if (name === 'point_at') {
 		const segment = toSegmentIndex((parsed as { segment?: unknown })?.segment);
 		const last = doc.segments.length - 1;
