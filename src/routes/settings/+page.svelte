@@ -17,6 +17,7 @@
 		Mic2,
 		PencilLine,
 		Play,
+		ListTree,
 		RefreshCw,
 		ShieldCheck,
 		BrainCircuit,
@@ -38,7 +39,9 @@
 		type DescriptionEngine,
 		type ElevenLabsVoice,
 		type RealtimeEffort,
-		type SpeechEngine
+		type SpeechEngine,
+		type StudyEngine,
+		getCloudLlmProvider
 	} from '$lib/domain/provider-catalog';
 	import ApiKeyField from '$lib/components/ApiKeyField.svelte';
 	import { verifyCloudLlmKey } from '$lib/services/cloud-llm';
@@ -467,6 +470,14 @@
 	async function chooseCloudModel(provider: CloudLlmProvider, modelId: string): Promise<void> {
 		await providersState.setCloudLlmModel(provider, modelId);
 		reopenNarrations();
+	}
+
+	async function chooseStudyEngine(engine: StudyEngine): Promise<void> {
+		await providersState.setStudyEngine(engine);
+	}
+
+	async function chooseStudyModel(provider: CloudLlmProvider, modelId: string): Promise<void> {
+		await providersState.setStudyModel(provider, modelId);
 	}
 
 	async function saveProviderKey(provider: ApiProvider, value: string): Promise<void> {
@@ -1076,6 +1087,92 @@
 									onClear={() => saveProviderKey(spec.id, '')}
 									onTest={() => verifyCloudLlmKey(spec.id, providersState.keyFor(spec.id) ?? '')}
 								/>
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		</section>
+
+		<section class="settings-section" aria-labelledby="study-title">
+			<header class="section-title">
+				<div>
+					<h2 id="study-title">Study model</h2>
+					<p>
+						Builds each document’s study layer in the background — short section notes and an
+						abstract the voice assistant leans on for reviews and overviews. Summaries are stored
+						with the document and only change when its text does.
+					</p>
+				</div>
+				<span class="runtime-state" class:ready={Boolean(providersState.cloudStudyEngine)}>
+					<span></span>{providersState.cloudStudyEngine ? 'Ready' : 'API key required'}
+				</span>
+			</header>
+
+			<div class="engine-list" role="radiogroup" aria-label="Study model">
+				<div class="engine-option" class:selected={providersState.studyEngine === 'auto'}>
+					<button
+						class="engine-row"
+						type="button"
+						role="radio"
+						aria-checked={providersState.studyEngine === 'auto'}
+						onclick={() => void chooseStudyEngine('auto')}
+					>
+						<span class="engine-radio" aria-hidden="true"></span>
+						<span class="engine-icon"><ListTree size={16} /></span>
+						<span class="engine-copy">
+							<strong>Automatic</strong>
+							<small>
+								{#if providersState.autoStudyProvider}
+									Fast tier of your first keyed provider — now {getCloudLlmProvider(
+										providersState.autoStudyProvider
+									)?.label}
+								{:else}
+									Picks the fast tier of whichever provider you add a key for
+								{/if}
+							</small>
+						</span>
+						<span class="engine-state" class:ok={Boolean(providersState.autoStudyProvider)}>
+							{providersState.autoStudyProvider ? 'Ready' : 'No key yet'}
+						</span>
+					</button>
+				</div>
+				{#each CLOUD_LLM_PROVIDERS as spec (spec.id)}
+					{@const active = providersState.studyEngine === spec.id}
+					<div class="engine-option" class:selected={active}>
+						<button
+							class="engine-row"
+							type="button"
+							role="radio"
+							aria-checked={active}
+							onclick={() => void chooseStudyEngine(spec.id)}
+						>
+							<span class="engine-radio" aria-hidden="true"></span>
+							<span class="engine-icon cloud"><ProviderLogo provider={spec.id} size={16} /></span>
+							<span class="engine-copy">
+								<strong>{spec.label} <em>· {spec.vendor}</em></strong>
+								<small>Uses the {spec.vendor} key saved above</small>
+							</span>
+							<span class="engine-state" class:ok={providersState.hasKey(spec.id)}>
+								{providersState.hasKey(spec.id) ? 'Key saved' : 'Add a key above'}
+							</span>
+						</button>
+						{#if active}
+							<div class="engine-config">
+								<div class="engine-models" role="group" aria-label={`${spec.label} study model`}>
+									{#each spec.models as model (model.id)}
+										<button
+											type="button"
+											class="engine-model"
+											class:selected={providersState.studyModelFor(spec.id) === model.id}
+											aria-pressed={providersState.studyModelFor(spec.id) === model.id}
+											onclick={() => void chooseStudyModel(spec.id, model.id)}
+										>
+											<strong>{model.label}</strong>
+											<small>{model.tagline}</small>
+										</button>
+									{/each}
+								</div>
 							</div>
 						{/if}
 					</div>

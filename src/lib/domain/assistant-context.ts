@@ -7,6 +7,7 @@
  */
 import { ANNOTATION_NOTE_LIMIT } from './annotations';
 import { tableMarkdown } from './narration';
+import { composeStudyBlock } from './study-tree';
 import type { DocumentBlock, NormalizedDocument } from './types';
 
 export interface PassageRange {
@@ -160,14 +161,19 @@ When the reader asks you to mark something for keeps — "highlight this", "save
 
 Ground everything you say in the document; when it does not contain the answer, say so plainly. Match the language the reader speaks to you (start in the document's language). Keep replies short and conversational — a few sentences unless the reader asks for depth.`;
 
+const STUDY_PREAMBLE = `A STUDY NOTES section below carries a background-generated abstract and per-section notes, each tagged with its first ⟦n⟧ marker. Lean on it for overview, review, and "what should I read next" questions, and jump to the noted sections with show_passage or plan_tour. It is a map, not the text — ground quotes and details in the document itself.`;
+
 export function buildAssistantInstructions(
 	doc: NormalizedDocument,
 	charBudget = ASSISTANT_CONTEXT_CHAR_BUDGET
 ): AssistantInstructions {
 	const { body, cutAt } = serializeBody(doc, charBudget);
 	const outline = serializeOutline(doc);
+	const study = composeStudyBlock(doc);
 	const sections = [PREAMBLE];
+	if (study) sections.push(STUDY_PREAMBLE);
 	if (outline) sections.push(`=== OUTLINE ===\n${outline}`);
+	if (study) sections.push(`=== STUDY NOTES ===\n${study}`);
 	sections.push(`=== DOCUMENT: ${doc.title} ===\n${body}`);
 	if (cutAt >= 0) {
 		sections.push(

@@ -69,10 +69,12 @@
 	import { providersState } from '$lib/state/providers.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
+	import { studyState } from '$lib/state/study.svelte';
 	import type { PassageRange } from '$lib/domain/assistant-context';
 
 	let book = $state<NormalizedDocument | null>(null);
 	let activeOutlineBlockId = $state<string>();
+	let outlinePanelTab = $state<'contents' | 'study'>('contents');
 	let outlineAnnouncement = $state('');
 	let readingCanvas = $state<HTMLElement>();
 	let scrollbarActive = $state(false);
@@ -529,6 +531,7 @@
 			next.outline[0]?.blockId;
 		void player.warmEngine();
 		void narrationState.open(next);
+		void studyState.open();
 		requestAnimationFrame(() => {
 			openingTitle = undefined;
 			const element = player.currentSegment
@@ -1700,72 +1703,153 @@
 		{#if readerChrome.outlineOpen}
 			<aside id="document-outline" class="outline-panel" aria-label="Document outline">
 				<header>
-					<div class="outline-heading">
-						<strong>Contents</strong>
+					<div class="outline-tabs" role="group" aria-label="Panel view">
+						<button
+							type="button"
+							class="outline-tab"
+							class:active={outlinePanelTab === 'contents'}
+							aria-pressed={outlinePanelTab === 'contents'}
+							onclick={() => (outlinePanelTab = 'contents')}
+						>
+							Contents
+						</button>
+						<button
+							type="button"
+							class="outline-tab"
+							class:active={outlinePanelTab === 'study'}
+							aria-pressed={outlinePanelTab === 'study'}
+							onclick={() => (outlinePanelTab = 'study')}
+						>
+							Study
+						</button>
 					</div>
-					<div class="outline-legend" aria-label="Contents indicators">
-						<span><i class="view-key"></i>View</span>
-						<span><i class="voice-key"></i>Voice</span>
-					</div>
+					{#if outlinePanelTab === 'contents'}
+						<div class="outline-legend" aria-label="Contents indicators">
+							<span><i class="view-key"></i>View</span>
+							<span><i class="voice-key"></i>Voice</span>
+						</div>
+					{/if}
 				</header>
 				<span class="sr-only" aria-live="polite">{outlineAnnouncement}</span>
-				<nav aria-label="Table of contents">
-					{#if book.outline.length}
-						<!-- Keyed by entry id: PDF bookmarks may resolve several
-						     entries to the same block, and duplicate keys throw. -->
-						{#each book.outline as item (item.id)}
-							{@const outlineBlock = blockFor(item.blockId)}
-							<button
-								type="button"
-								class:scroll-current={activeOutlineBlockId === item.blockId}
-								class:narration-current={narrationOutlineBlockId === item.blockId}
-								aria-current={activeOutlineBlockId === item.blockId ? 'location' : undefined}
-								aria-label={item.title}
-								title={item.title}
-								data-narration-current={narrationOutlineBlockId === item.blockId
-									? 'true'
-									: undefined}
-								data-level={Math.min(3, item.level)}
-								style={'--outline-level:' + Math.max(0, item.level - 1)}
-								onclick={() => outlineBlock && navigateToOutlineBlock(outlineBlock)}
-							>
-								{#if item.page}
-									<span class="outline-label has-page">
-										<span class="outline-title">{compactOutlineTitle(item.title)}</span>
-										<span class="outline-page" aria-hidden="true">{item.page}</span>
-									</span>
-								{:else}
-									<span class="outline-label">{compactOutlineTitle(item.title)}</span>
-								{/if}
-								<span class="outline-state" aria-hidden="true">
-									{#if narrationOutlineBlockId === item.blockId}
-										<span class="narration-indicator"><Volume2 size={12} strokeWidth={2.2} /></span>
-									{/if}
-								</span>
-							</button>
-						{/each}
-					{:else}
-						{#each book.segments.filter((_, index) => index % 8 === 0) as segment (segment.id)}
-							<button
-								type="button"
-								class:narration-current={segment.id === player.currentSegment?.id}
-								data-narration-current={segment.id === player.currentSegment?.id
-									? 'true'
-									: undefined}
-								onclick={() => navigateToSegment(segment)}
-							>
-								<span class="outline-label"
-									>{segment.text.slice(0, 54)}{segment.text.length > 54 ? '…' : ''}</span
+				{#if outlinePanelTab === 'study'}
+					<div class="study-panel">
+						{#if !studyState.available && !book.study}
+							<p class="study-hint">
+								Study notes need a cloud model. Add an API key under Settings → LLM and reopen the
+								document — short section summaries and an abstract will build here in the
+								background.
+							</p>
+						{:else}
+							{#if studyState.working}
+								<p class="study-progress" role="status">
+									Summarizing sections… {Math.min(
+										studyState.done,
+										studyState.total
+									)}/{studyState.total}
+								</p>
+							{:else if studyState.error && !book.study?.abstract}
+								<p class="study-progress failed" role="status">{studyState.error}</p>
+							{/if}
+							{#if book.study?.abstract}
+								<p class="study-abstract">{book.study.abstract}</p>
+							{/if}
+							<div class="study-nodes">
+								{#each book.study?.nodes ?? [] as node (node.id)}
+									{@const nodeBlock = blockFor(node.blockId)}
+									<button
+										type="button"
+										class="study-node"
+										style={'--outline-level:' + Math.max(0, node.level - 1)}
+										onclick={() => nodeBlock && navigateToOutlineBlock(nodeBlock)}
+									>
+										<span class="study-node-title">{node.title}</span>
+										{#if node.status === 'ready' && node.summary}
+											<span class="study-node-summary">{node.summary}</span>
+										{:else if node.status === 'pending'}
+											<span class="study-node-summary pending">Summarizing…</span>
+										{:else}
+											<span class="study-node-summary failed">Not summarized yet</span>
+										{/if}
+									</button>
+								{/each}
+							</div>
+							<div class="study-actions">
+								<button
+									type="button"
+									onclick={() => void studyState.rebuild()}
+									disabled={!studyState.available || studyState.working}
 								>
-								<span class="outline-state" aria-hidden="true">
-									{#if segment.id === player.currentSegment?.id}
-										<span class="narration-indicator"><Volume2 size={12} strokeWidth={2.2} /></span>
+									Rebuild
+								</button>
+								<button type="button" onclick={() => studyState.clear()} disabled={!book.study}>
+									Clear
+								</button>
+							</div>
+						{/if}
+					</div>
+				{:else}
+					<nav aria-label="Table of contents">
+						{#if book.outline.length}
+							<!-- Keyed by entry id: PDF bookmarks may resolve several
+						     entries to the same block, and duplicate keys throw. -->
+							{#each book.outline as item (item.id)}
+								{@const outlineBlock = blockFor(item.blockId)}
+								<button
+									type="button"
+									class:scroll-current={activeOutlineBlockId === item.blockId}
+									class:narration-current={narrationOutlineBlockId === item.blockId}
+									aria-current={activeOutlineBlockId === item.blockId ? 'location' : undefined}
+									aria-label={item.title}
+									title={item.title}
+									data-narration-current={narrationOutlineBlockId === item.blockId
+										? 'true'
+										: undefined}
+									data-level={Math.min(3, item.level)}
+									style={'--outline-level:' + Math.max(0, item.level - 1)}
+									onclick={() => outlineBlock && navigateToOutlineBlock(outlineBlock)}
+								>
+									{#if item.page}
+										<span class="outline-label has-page">
+											<span class="outline-title">{compactOutlineTitle(item.title)}</span>
+											<span class="outline-page" aria-hidden="true">{item.page}</span>
+										</span>
+									{:else}
+										<span class="outline-label">{compactOutlineTitle(item.title)}</span>
 									{/if}
-								</span>
-							</button>
-						{/each}
-					{/if}
-				</nav>
+									<span class="outline-state" aria-hidden="true">
+										{#if narrationOutlineBlockId === item.blockId}
+											<span class="narration-indicator"
+												><Volume2 size={12} strokeWidth={2.2} /></span
+											>
+										{/if}
+									</span>
+								</button>
+							{/each}
+						{:else}
+							{#each book.segments.filter((_, index) => index % 8 === 0) as segment (segment.id)}
+								<button
+									type="button"
+									class:narration-current={segment.id === player.currentSegment?.id}
+									data-narration-current={segment.id === player.currentSegment?.id
+										? 'true'
+										: undefined}
+									onclick={() => navigateToSegment(segment)}
+								>
+									<span class="outline-label"
+										>{segment.text.slice(0, 54)}{segment.text.length > 54 ? '…' : ''}</span
+									>
+									<span class="outline-state" aria-hidden="true">
+										{#if segment.id === player.currentSegment?.id}
+											<span class="narration-indicator"
+												><Volume2 size={12} strokeWidth={2.2} /></span
+											>
+										{/if}
+									</span>
+								</button>
+							{/each}
+						{/if}
+					</nav>
+				{/if}
 			</aside>
 		{/if}
 
@@ -2399,13 +2483,146 @@
 		min-height: 50px;
 	}
 
-	.outline-heading strong {
-		display: block;
+	.outline-tabs {
+		display: inline-flex;
+		gap: 12px;
+	}
+
+	.outline-tab {
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: var(--faint);
+		cursor: pointer;
 		font-family: var(--font-display);
 		font-size: 15px;
 		font-variation-settings: 'opsz' 18;
 		font-weight: 680;
 		letter-spacing: -0.015em;
+		transition: color 150ms var(--ease);
+	}
+
+	.outline-tab:hover {
+		color: var(--text-soft);
+	}
+
+	.outline-tab.active {
+		color: var(--text);
+	}
+
+	.study-panel {
+		display: grid;
+		min-height: 0;
+		align-content: start;
+		overflow-y: auto;
+		gap: 10px;
+		padding: 2px 14px 16px;
+		scrollbar-width: thin;
+	}
+
+	.study-hint,
+	.study-progress {
+		margin: 0;
+		color: var(--faint);
+		font-family: var(--font-ui);
+		font-size: 11px;
+		line-height: 1.55;
+	}
+
+	.study-progress {
+		color: var(--muted);
+	}
+
+	.study-progress.failed {
+		color: var(--danger);
+	}
+
+	.study-abstract {
+		margin: 0;
+		padding: 9px 11px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--primary) 5%, transparent);
+		color: var(--text-soft);
+		font-family: var(--font-ui);
+		font-size: 11px;
+		line-height: 1.6;
+	}
+
+	.study-nodes {
+		display: grid;
+		gap: 2px;
+	}
+
+	.study-node {
+		display: grid;
+		gap: 2px;
+		padding: 6px 8px 7px;
+		padding-left: calc(8px + var(--outline-level, 0) * 12px);
+		border: 0;
+		border-radius: 7px;
+		background: transparent;
+		cursor: pointer;
+		text-align: left;
+		transition: background 150ms var(--ease);
+	}
+
+	.study-node:hover {
+		background: var(--hover);
+	}
+
+	.study-node-title {
+		color: var(--text-soft);
+		font-family: var(--font-ui);
+		font-size: 11px;
+		font-weight: 650;
+		line-height: 1.35;
+	}
+
+	.study-node-summary {
+		color: var(--muted);
+		font-family: var(--font-ui);
+		font-size: 10.5px;
+		line-height: 1.5;
+	}
+
+	.study-node-summary.pending {
+		color: var(--faint);
+		font-style: italic;
+	}
+
+	.study-node-summary.failed {
+		color: color-mix(in srgb, var(--danger) 75%, var(--muted));
+		font-style: italic;
+	}
+
+	.study-actions {
+		display: flex;
+		gap: 6px;
+		margin-top: 2px;
+	}
+
+	.study-actions button {
+		padding: 5px 10px;
+		border: 1px solid var(--line-strong);
+		border-radius: 6px;
+		background: transparent;
+		color: var(--text-soft);
+		cursor: pointer;
+		font-family: var(--font-ui);
+		font-size: 10.5px;
+		font-weight: 650;
+		transition: background 150ms var(--ease);
+	}
+
+	.study-actions button:hover:not(:disabled) {
+		background: var(--hover);
+		color: var(--text);
+	}
+
+	.study-actions button:disabled {
+		cursor: default;
+		opacity: 0.4;
 	}
 
 	.outline-legend {

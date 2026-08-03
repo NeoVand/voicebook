@@ -129,6 +129,41 @@ describe('buildAssistantInstructions', () => {
 		const built = buildAssistantInstructions(doc({ outline: [] }));
 		expect(built.instructions).not.toContain('=== OUTLINE ===');
 	});
+
+	it('carries the study layer ahead of the document when it is ready', () => {
+		const bare = buildAssistantInstructions(doc());
+		expect(bare.instructions).not.toContain('=== STUDY NOTES ===');
+		const built = buildAssistantInstructions(
+			doc({
+				study: {
+					nodes: [
+						{
+							id: 'study:h2',
+							blockId: 'h2',
+							title: 'Migration',
+							level: 2,
+							status: 'ready',
+							summary: 'Humpbacks head poleward in summer.',
+							sourceHash: 'x',
+							updatedAt: 1
+						}
+					],
+					abstract: 'Songs and journeys of whales.',
+					abstractStatus: 'ready',
+					promptVersion: 1,
+					updatedAt: 1
+				}
+			})
+		);
+		expect(built.instructions).toContain('STUDY NOTES section below carries');
+		expect(built.instructions).toContain(
+			'=== STUDY NOTES ===\nAbstract: Songs and journeys of whales.'
+		);
+		expect(built.instructions).toContain('- ⟦3⟧ Migration — Humpbacks head poleward in summer.');
+		expect(built.instructions.indexOf('=== STUDY NOTES ===')).toBeLessThan(
+			built.instructions.indexOf('=== DOCUMENT:')
+		);
+	});
 });
 
 describe('assistantTools', () => {
