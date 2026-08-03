@@ -141,23 +141,27 @@ export const REALTIME_MODELS: RealtimeModelSpec[] = [
 export interface RealtimeVoiceSpec {
 	id: string;
 	label: string;
-	tagline?: string;
+	/** A short character note, shown under the name in pickers. */
+	tagline: string;
+	/** OpenAI's conversation-tuned picks, shown with a badge. */
+	recommended?: boolean;
 }
 
 /** Every voice the realtime endpoint accepts (probed from the API's own
  * validation error). Marin and cedar are the newest, tuned for
- * conversation. */
+ * conversation. The same ids work on the speech endpoint, which is what
+ * voice previews use. */
 export const REALTIME_VOICES: RealtimeVoiceSpec[] = [
-	{ id: 'marin', label: 'Marin', tagline: 'recommended' },
-	{ id: 'cedar', label: 'Cedar', tagline: 'recommended' },
-	{ id: 'alloy', label: 'Alloy' },
-	{ id: 'ash', label: 'Ash' },
-	{ id: 'ballad', label: 'Ballad' },
-	{ id: 'coral', label: 'Coral' },
-	{ id: 'echo', label: 'Echo' },
-	{ id: 'sage', label: 'Sage' },
-	{ id: 'shimmer', label: 'Shimmer' },
-	{ id: 'verse', label: 'Verse' }
+	{ id: 'marin', label: 'Marin', tagline: 'Warm, natural guide', recommended: true },
+	{ id: 'cedar', label: 'Cedar', tagline: 'Deep and grounded', recommended: true },
+	{ id: 'alloy', label: 'Alloy', tagline: 'Even, neutral read' },
+	{ id: 'ash', label: 'Ash', tagline: 'Warm and steady' },
+	{ id: 'ballad', label: 'Ballad', tagline: 'Soft storyteller' },
+	{ id: 'coral', label: 'Coral', tagline: 'Upbeat energy' },
+	{ id: 'echo', label: 'Echo', tagline: 'Clear and direct' },
+	{ id: 'sage', label: 'Sage', tagline: 'Calm and gentle' },
+	{ id: 'shimmer', label: 'Shimmer', tagline: 'Light and bright' },
+	{ id: 'verse', label: 'Verse', tagline: 'Expressive range' }
 ];
 
 /** Marin — the voice OpenAI recommends for natural conversation. */

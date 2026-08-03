@@ -1036,8 +1036,11 @@
 			return;
 		}
 		const target = event.target as HTMLElement | null;
-		if (target?.matches('input,textarea,select,button,[data-segment-id]')) return;
+		if (spaceOwnedElsewhere(target)) return;
 		if (event.code === 'Space') {
+			// Space belongs to the reader everywhere else — including focused
+			// buttons, so clicking Play never leaves a control that steals the
+			// next press (Enter still activates any focused control).
 			event.preventDefault();
 			if (event.repeat) return;
 			// Hold-to-talk from anywhere: a held Space opens the assistant's
@@ -1047,17 +1050,30 @@
 				spaceHolding = true;
 				if (book) void realtimeAssistant.beginTalking(book);
 			}, 250);
-		} else if (event.key.toLowerCase() === 'j') void player.seekBy(-10);
+		} else if (target?.matches('button,[data-segment-id]')) return;
+		else if (event.key.toLowerCase() === 'j') void player.seekBy(-10);
 		else if (event.key.toLowerCase() === 'l') void player.seekBy(10);
 		else if (event.key === '[') void player.setRate(player.rate - 0.25);
 		else if (event.key === ']') void player.setRate(player.rate + 0.25);
+	}
+
+	/** Contexts where Space keeps its native meaning: typing and expanding
+	 * controls, open menus and dialogs (their items activate with Space), and
+	 * the assistant chip, which runs its own immediate hold-to-talk. */
+	function spaceOwnedElsewhere(target: HTMLElement | null): boolean {
+		if (!target?.closest) return false;
+		return Boolean(
+			target.closest(
+				'input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="menu"],[role="dialog"],[data-tour="assistant"]'
+			)
+		);
 	}
 
 	function handleKeyup(event: KeyboardEvent): void {
 		if (event.code !== 'Space') return;
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
 		const target = event.target as HTMLElement | null;
-		if (target?.matches('input,textarea,select,button,[data-segment-id]')) return;
+		if (spaceOwnedElsewhere(target)) return;
 		if (!book) return;
 		event.preventDefault();
 		clearTimeout(spaceHoldTimer);

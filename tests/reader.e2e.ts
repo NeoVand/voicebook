@@ -291,6 +291,39 @@ test('detects and renders pasted Markdown as structured document content', async
 	await expect(readingCanvas).not.toContainText('```ts');
 });
 
+test("Space stays the reader's key even when the play button holds focus", async ({ page }) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill('One steady paragraph to drive with the space bar. A second sentence keeps it going.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+
+	// Clicking Play leaves focus on the transport button — the old steal
+	// setup, where the next Space re-clicked the button instead of reaching
+	// the global handler.
+	await page.getByRole('button', { name: 'Play', exact: true }).click();
+	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+
+	// A quick tap toggles playback exactly once: the global handler pauses,
+	// and the focused button's native Space activation is suppressed (a
+	// double fire would flip it straight back to playing).
+	await page.keyboard.down('Space');
+	await page.waitForTimeout(80);
+	await page.keyboard.up('Space');
+	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Pause' })).toHaveCount(0);
+
+	// A hold reaches for the assistant, never the transport: the paused
+	// player must stay paused through hold-and-release.
+	await page.keyboard.down('Space');
+	await page.waitForTimeout(450);
+	await page.keyboard.up('Space');
+	await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Pause' })).toHaveCount(0);
+});
+
 test('imports a web page from a URL as a readable article', async ({ page }) => {
 	await openReadyLibrary(page);
 	// A trimmed slice of the real Wikipedia REST (Parsoid) payload — the
