@@ -407,19 +407,24 @@ export function sanitizeNarration(
 
 	const cap = params.maxChars;
 	if (cap > 0 && text.length > cap) {
-		const slice = text.slice(0, cap);
-		const sentenceEnd = Math.max(
-			slice.lastIndexOf('. '),
-			slice.lastIndexOf('! '),
-			slice.lastIndexOf('? ')
-		);
-		if (sentenceEnd > cap * 0.4) {
-			text = slice.slice(0, sentenceEnd + 1);
-		} else {
-			const wordEnd = slice.lastIndexOf(' ');
-			text = wordEnd > 0 ? slice.slice(0, wordEnd) : slice;
+		// Whole sentences only. Cutting at a word boundary used to leave the
+		// narrator speaking half a clause — "…leading to breakthroughs like" —
+		// and then moving on to the next row, which is how a table read aloud
+		// sounded like it kept losing its place. A description that overruns the
+		// budget by one sentence is far better than one that stops mid-thought.
+		const sentences = text.match(/[^.!?]+[.!?]+/g);
+		if (sentences?.length) {
+			let kept = '';
+			for (const sentence of sentences) {
+				if (kept && kept.length + sentence.length > cap) break;
+				kept += sentence;
+			}
+			// Even one sentence can exceed the cap; keep it whole regardless.
+			text = (kept || sentences[0]).trim();
 		}
-		text = text.trim();
+		// No sentence boundary anywhere means the model wrote a single run-on.
+		// Speak it as it stands — maxNewTokens already bounds how long it runs,
+		// and there is no honest place to cut.
 	}
 	return text || null;
 }

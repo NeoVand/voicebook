@@ -210,10 +210,33 @@ describe('sanitizeNarration', () => {
 		expect(out!.endsWith('.')).toBe(true);
 	});
 
-	it('truncates capless-sentence output at a word boundary', () => {
-		const out = sanitizeNarration(`${'word '.repeat(80)}end`, 'image');
-		expect(out).not.toBeNull();
-		expect(out!.length).toBeLessThanOrEqual(200);
-		expect(out!.endsWith(' ')).toBe(false);
+	it('keeps a single over-long sentence whole rather than cutting mid-clause', () => {
+		// The real failure: one long table-row sentence has no boundary inside
+		// the cap, so it used to be cut at a word — "…leading to breakthroughs
+		// like" — and the narrator moved to the next row mid-thought.
+		const row =
+			'This row covers deep reinforcement learning, where neural networks approximate ' +
+			'value functions over high-dimensional observations, leading to breakthroughs like ' +
+			'deep Q-networks on Atari and AlphaGo on the game of Go.';
+		expect(row.length).toBeGreaterThan(200);
+		const out = sanitizeNarration(row, 'table-row');
+		expect(out).toBe(row);
+		expect(out!.endsWith('.')).toBe(true);
+	});
+
+	it('never returns a fragment when the output has no sentence boundary', () => {
+		// A run-on carries no honest cut point; maxNewTokens already bounds it.
+		const runOn = `${'word '.repeat(80)}end`;
+		const out = sanitizeNarration(runOn, 'image');
+		expect(out).toBe(runOn.trim());
+	});
+
+	it('drops whole trailing sentences that do not fit, keeping the rest intact', () => {
+		const first = 'The first sentence explains the row in reasonable detail and ends here. ';
+		const second = 'The second sentence would push the description past its budget entirely. ';
+		// Two fit inside the 200-character budget; the third is dropped whole.
+		const out = sanitizeNarration(first + second + second, 'table-row');
+		expect(out).toBe((first + second).trim());
+		expect(out!.endsWith('.')).toBe(true);
 	});
 });
