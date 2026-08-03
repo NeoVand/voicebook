@@ -60,6 +60,15 @@
 			content="Voicebook turns documents into private, on-device speech with browser AI."
 		/>
 		<link rel="manifest" href="%sveltekit.assets%/manifest.webmanifest" />
+		<!-- The tab icon: the scalable mark first, with the PWA raster as the
+		     fallback for browsers that will not take an SVG. -->
+		<link rel="icon" type="image/svg+xml" href="%sveltekit.assets%/voicebook-mark.svg" />
+		<link
+			rel="icon"
+			type="image/png"
+			sizes="192x192"
+			href="%sveltekit.assets%/voicebook-mark-192.png"
+		/>
 		<link rel="apple-touch-icon" href="%sveltekit.assets%/voicebook-mark-192.png" />
 		%sveltekit.head%
 	</head>

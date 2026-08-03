@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { HugeiconsIcon } from '@hugeicons/svelte';
-	import { AiBookIcon } from '@hugeicons/core-free-icons';
+	import Icon from '$lib/components/Icon.svelte';
+	import { BookOpen } from '$lib/icons';
 
 	let { active = false, size = 25 }: { active?: boolean; size?: number } = $props();
 </script>
 
 <span class="brand-logo" class:active aria-hidden="true">
-	<HugeiconsIcon icon={AiBookIcon} {size} color="currentColor" strokeWidth={1.8} />
+	<Icon icon={BookOpen} {size} strokeWidth={1.8} />
 </span>
 
 <style>
