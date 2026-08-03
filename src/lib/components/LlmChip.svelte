@@ -4,6 +4,7 @@
 	import { tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
+	import { LISTENING_MODES, type ListeningMode } from '$lib/domain/listening-modes';
 
 	interface Props {
 		working: boolean;
@@ -13,8 +14,11 @@
 		/** Override copy while generateAll drives its own stage label. */
 		stageLabel?: string;
 		enabled: boolean;
+		/** The open document's listening mode, shown as the checked radio. */
+		listeningMode: ListeningMode;
 		onToggleEnabled: (value: boolean) => void | Promise<void>;
 		onRegenerate: () => void | Promise<void>;
+		onListeningMode: (mode: ListeningMode) => void | Promise<void>;
 	}
 
 	let {
@@ -23,8 +27,10 @@
 		progress,
 		stageLabel = '',
 		enabled,
+		listeningMode,
 		onToggleEnabled,
-		onRegenerate
+		onRegenerate,
+		onListeningMode
 	}: Props = $props();
 
 	const uid = $props.id();
@@ -194,6 +200,24 @@
 					<small>{working ? 'Already rewriting…' : 'This document'}</small>
 				</span>
 			</button>
+			<div class="menu-heading" role="presentation">Listening mode</div>
+			{#each LISTENING_MODES as mode (mode.id)}
+				<button
+					class="menu-item"
+					type="button"
+					role="menuitemradio"
+					aria-checked={listeningMode === mode.id}
+					onclick={() => void onListeningMode(mode.id)}
+				>
+					<span class="menu-check radio" class:on={listeningMode === mode.id} aria-hidden="true">
+						{#if listeningMode === mode.id}<Check size={12} strokeWidth={2.6} />{/if}
+					</span>
+					<span>
+						<strong>{mode.label}</strong>
+						<small>{mode.description}</small>
+					</span>
+				</button>
+			{/each}
 			<a
 				class="menu-item"
 				role="menuitem"
@@ -382,5 +406,20 @@
 	.menu-check.on {
 		border-color: var(--primary);
 		background: var(--primary);
+	}
+
+	.menu-check.radio {
+		border-radius: 50%;
+	}
+
+	.menu-heading {
+		margin-top: 4px;
+		padding: 7px 9px 3px;
+		border-top: 1px solid var(--line-strong);
+		color: var(--faint);
+		font-size: 8px;
+		font-weight: 640;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
 	}
 </style>

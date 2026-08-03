@@ -30,7 +30,7 @@ const TOURS: Record<TourContext, DriveStep[]> = {
 			popover: {
 				title: 'Spoken descriptions',
 				description:
-					'The brain rewrites equations, tables, and diagrams into words the voice can speak. Click it to pause, regenerate, or tune the style.',
+					'The brain rewrites equations, tables, and diagrams into words the voice can speak — and holds the listening mode: verbatim, natural, or focused reading.',
 				side: 'top',
 				align: 'start'
 			}

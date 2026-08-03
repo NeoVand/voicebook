@@ -1582,17 +1582,24 @@ test('listening modes change how a document is spoken and skip back matter', asy
 	});
 	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
 
-	const modeSelect = page.getByRole('combobox', { name: 'Listening mode' });
-	// New documents open in Natural, which skips the references (a muted band
-	// shows on the transport rail).
-	await expect(modeSelect).toContainText('Natural');
+	// The listening mode lives in the brain menu. New documents open in
+	// Natural, which skips the references (a muted band shows on the rail).
+	const chip = page.locator('[data-tour="llm-chip"]');
+	await chip.click();
+	await expect(page.getByRole('menuitemradio', { name: /^Natural/ })).toHaveAttribute(
+		'aria-checked',
+		'true'
+	);
 	await expect(page.locator('.timeline-band.back-matter').first()).toBeVisible();
 
 	// Verbatim turns the spoken layer off — references are read, so their band
 	// disappears from the rail.
-	await modeSelect.click();
-	await page.getByRole('option', { name: 'Verbatim', exact: true }).click();
-	await expect(modeSelect).toContainText('Verbatim');
+	await page.getByRole('menuitemradio', { name: /^Verbatim/ }).click();
+	await expect(page.getByRole('menuitemradio', { name: /^Verbatim/ })).toHaveAttribute(
+		'aria-checked',
+		'true'
+	);
+	await page.keyboard.press('Escape');
 	await expect(page.locator('.timeline-band.back-matter')).toHaveCount(0);
 
 	// The choice persists with the document across a reload. Both assertions
@@ -1618,5 +1625,9 @@ test('listening modes change how a document is spoken and skip back matter', asy
 		)
 		.toBe('verbatim');
 	await page.reload();
-	await expect(page.getByRole('combobox', { name: 'Listening mode' })).toContainText('Verbatim');
+	await page.locator('[data-tour="llm-chip"]').click();
+	await expect(page.getByRole('menuitemradio', { name: /^Verbatim/ })).toHaveAttribute(
+		'aria-checked',
+		'true'
+	);
 });

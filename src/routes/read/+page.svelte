@@ -435,11 +435,10 @@
 		void narrationState.regenerateConstruct(constructId);
 	}
 
-	let llmChipVisible = $derived(
-		Boolean(player.narrationStage) ||
-			narrationState.working ||
-			(llmAvailable && Boolean(book && Object.keys(book.narrations ?? {}).length))
-	);
+	// The brain menu hosts the listening-mode picker as well as description
+	// controls, so it shows for every open document — plain-prose documents
+	// still choose how citations and asides are spoken.
+	let llmChipVisible = $derived(Boolean(book));
 
 	async function toggleDescriptions(value: boolean): Promise<void> {
 		await llmState.setNarrationEnabled(value);
@@ -1770,8 +1769,10 @@
 						progress={narrationState.total ? narrationState.done / narrationState.total : 0}
 						stageLabel={player.narrationStage}
 						enabled={llmState.narrationEnabled}
+						listeningMode={player.listeningMode}
 						onToggleEnabled={toggleDescriptions}
 						onRegenerate={regenerateDocumentDescriptions}
+						onListeningMode={(mode) => void player.setListeningMode(mode)}
 					/>
 				{/if}
 				<AssistantChip {book} />
