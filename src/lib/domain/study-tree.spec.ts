@@ -7,6 +7,7 @@ import {
 	abstractSourceHash,
 	composeReaderState,
 	composeStudyBlock,
+	looksLikeLanguage,
 	reconcileStudy,
 	studyAbstractMessages,
 	studySections,
@@ -41,9 +42,12 @@ function doc(overrides: Partial<NormalizedDocument> = {}): NormalizedDocument {
 		block('h1', 'Songs', 'heading'),
 		block('b1', 'Males sing in winter. Songs evolve every season.'),
 		block('h2', 'Structure', 'heading'),
-		block('b2', 'Themes repeat in order.'),
+		block('b2', 'Themes repeat in a fixed order, and singers hold each phrase for minutes.'),
 		block('h3', 'Migration', 'heading'),
-		block('b3', 'Humpbacks travel to polar waters.')
+		block(
+			'b3',
+			'Humpbacks travel to polar waters each summer, then return to warm breeding grounds.'
+		)
 	];
 	const segments = [
 		segment('b0:s0', 'b0', 'Whale song carries context before any heading.'),
@@ -51,9 +55,17 @@ function doc(overrides: Partial<NormalizedDocument> = {}): NormalizedDocument {
 		segment('b1:s0', 'b1', 'Males sing in winter.'),
 		segment('b1:s1', 'b1', 'Songs evolve every season.'),
 		segment('h2:s0', 'h2', 'Structure'),
-		segment('b2:s0', 'b2', 'Themes repeat in order.'),
+		segment(
+			'b2:s0',
+			'b2',
+			'Themes repeat in a fixed order, and singers hold each phrase for minutes.'
+		),
 		segment('h3:s0', 'h3', 'Migration'),
-		segment('b3:s0', 'b3', 'Humpbacks travel to polar waters.')
+		segment(
+			'b3:s0',
+			'b3',
+			'Humpbacks travel to polar waters each summer, then return to warm breeding grounds.'
+		)
 	];
 	return {
 		id: 'doc',
@@ -97,7 +109,7 @@ describe('studySections', () => {
 		const sections = studySections(doc(), 3);
 		// Level 2 folds into its parent; the lead section stays.
 		expect(sections.map((section) => section.title)).toEqual(['Whale Song', 'Songs', 'Migration']);
-		expect(sections[1].text).toContain('Themes repeat in order.');
+		expect(sections[1].text).toContain('Themes repeat in a fixed order');
 	});
 
 	it('summarizes the whole document as one node when there is no outline', () => {
@@ -170,6 +182,29 @@ describe('reconcileStudy', () => {
 		const again = reconcileStudy(sections, filled);
 		expect(again.queue).toHaveLength(0);
 		expect(again.study.nodes.every((node) => node.status === 'ready')).toBe(true);
+	});
+
+	it('settles a heading-only section instead of asking a model about it', () => {
+		// The QM article's bare "Examples" heading produced a summary — in German —
+		// explaining that the section had no content. Nothing to read, nothing to ask.
+		const book = doc({
+			blocks: [block('h1', 'Examples', 'heading'), block('h2', 'Free particle', 'heading')],
+			segments: [
+				segment('h1:s0', 'h1', 'Examples'),
+				segment('h2:s0', 'h2', 'Free particle'),
+				segment(
+					'h2:s1',
+					'h2',
+					'A free particle has only kinetic energy and a spreading wave packet.'
+				)
+			],
+			outline: [outlineEntry('h1', 'Examples', 1), outlineEntry('h2', 'Free particle', 2)]
+		});
+		const { study, queue } = reconcileStudy(studySections(book), undefined);
+		const examples = study.nodes.find((node) => node.title === 'Examples');
+		expect(examples?.status).toBe('ready');
+		expect(examples?.summary).toBeUndefined();
+		expect(queue.map((section) => section.title)).toEqual(['Free particle']);
 	});
 
 	it('rescues summaries by content hash when section ids shift', () => {
@@ -254,7 +289,7 @@ describe('abstractNeeded', () => {
 describe('prompts and instruction block', () => {
 	it('builds section and abstract messages around the content', () => {
 		const sections = studySections(doc());
-		const messages = studySectionMessages('Whale Song', sections[1]);
+		const messages = studySectionMessages('Whale Song', sections[1], 'en');
 		expect(messages[0].role).toBe('system');
 		expect(messages[1].content).toContain('Section: Songs');
 		expect(messages[1].content).toContain('Males sing in winter.');
@@ -265,8 +300,25 @@ describe('prompts and instruction block', () => {
 			status: 'ready' as const,
 			summary: `About ${node.title}.`
 		}));
-		const abstract = studyAbstractMessages('Whale Song', nodes);
+		const abstract = studyAbstractMessages('Whale Song', nodes, 'en');
 		expect(abstract[1].content).toContain('- Songs: About Songs.');
+	});
+
+	it('names the document language so a section cannot pick its own', () => {
+		// Sections quoting other languages (or carrying almost no prose) used to
+		// let the model answer in German, Russian, or Bulgarian.
+		const sections = studySections(doc());
+		expect(studySectionMessages('Whale Song', sections[1], 'en')[0].content).toContain(
+			'Write the notes in English'
+		);
+		expect(studySectionMessages('Whale Song', sections[1], 'de')[0].content).toContain(
+			'Write the notes in German'
+		);
+		expect(studyAbstractMessages('Whale Song', [], 'fr')[0].content).toContain('in French');
+		// An unrecognized tag still pins one language rather than leaving it open.
+		expect(studySectionMessages('T', sections[1], 'zz')[0].content).toMatch(
+			/Write the notes in \S/
+		);
 	});
 
 	it('composes the study block with markers and indentation', () => {
@@ -372,5 +424,64 @@ describe('composeReaderState', () => {
 		const state = composeReaderState(book, 10);
 		expect(state).toContain('Songs evolve seasonally.');
 		expect(state).not.toContain('Not yet visited');
+	});
+});
+
+describe('looksLikeLanguage', () => {
+	// Every "wrong" sample below is a real summary this app generated for an
+	// English document before the language was pinned and verified.
+	it('rejects the wrong-script notes the study tree actually produced', () => {
+		expect(
+			looksLikeLanguage(
+				'Этот раздел объясняет свободную частицу в одном измерении: её гамильтониан содержит только кинетическую энергию.',
+				'en'
+			)
+		).toBe(false);
+		expect(
+			looksLikeLanguage(
+				'Маш–Цендеров интерферометр описва фотона като суперпозиция на две възможни пътеки.',
+				'en'
+			)
+		).toBe(false);
+	});
+
+	it('rejects same-script drift into German', () => {
+		expect(
+			looksLikeLanguage(
+				'Dieser Abschnitt behandelt Algorithmen des Kontrolllernens bei beobachtbaren Zuständen, wobei das Explorationsproblem zunächst ausgeklammert wird.',
+				'en'
+			)
+		).toBe(false);
+	});
+
+	it('accepts ordinary English notes, including heavy technical prose', () => {
+		expect(
+			looksLikeLanguage(
+				'A free particle has only kinetic energy, and its wavefunction evolves as a superposition of momentum eigenstates.',
+				'en'
+			)
+		).toBe(true);
+		expect(
+			looksLikeLanguage(
+				'The section derives the Hamiltonian H = p²/2m and shows that ⟨x⟩ spreads with time.',
+				'en'
+			)
+		).toBe(true);
+	});
+
+	it('does not second-guess languages it cannot judge', () => {
+		// Russian notes for a Russian document are correct.
+		expect(
+			looksLikeLanguage('Этот раздел объясняет свободную частицу в одном измерении.', 'ru')
+		).toBe(true);
+		// A Latin-script language whose function words we do not model passes.
+		expect(
+			looksLikeLanguage(
+				'Dieser Abschnitt behandelt Algorithmen des Kontrolllernens bei beobachtbaren Zuständen.',
+				'de'
+			)
+		).toBe(true);
+		// Too short to judge at all.
+		expect(looksLikeLanguage('Kurz.', 'en')).toBe(true);
 	});
 });

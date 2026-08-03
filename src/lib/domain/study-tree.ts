@@ -10,7 +10,74 @@ import { fnv64 } from './narration';
 import type { LlmChatMessage } from '$lib/services/llm/llm-client';
 import type { DocumentStudy, NormalizedDocument, OutlineEntry, StudyNode } from './types';
 
-export const STUDY_PROMPT_VERSION = 1;
+/** Bumped to 2 when summaries began naming their language explicitly — the
+ * mismatch discards every note written under the old prompt, which is how
+ * documents summarized into the wrong language repair themselves. */
+export const STUDY_PROMPT_VERSION = 2;
+
+/**
+ * How much text a section must carry BEYOND its own heading to be worth
+ * summarizing. A parent whose prose lives entirely in its subsections (a bare
+ * "Examples") gives the model nothing to read, and asking anyway invites
+ * invention — one early note explained, in German, that the section was only a
+ * heading. Measured after removing the title so genuinely short sections still
+ * get summarized.
+ */
+const MIN_SECTION_PROSE_CHARS = 40;
+
+function proseBeyondTitle(section: StudySection): string {
+	return section.text.replace(section.title, '').trim();
+}
+
+/** The document's language, named for the prompt: 'en' → 'English'. Falls
+ * back to the raw tag, which still pins the model to one language. */
+export function languageName(code: string | undefined): string {
+	const tag = (code || 'en').trim() || 'en';
+	try {
+		return new Intl.DisplayNames(['en'], { type: 'language' }).of(tag) ?? tag;
+	} catch {
+		return tag;
+	}
+}
+
+/**
+ * Whether a generated note actually came back in the document's language.
+ *
+ * A named language in the prompt cut wrong-language notes sharply but not to
+ * zero — the model still drifts into German or Russian on the occasional
+ * technical section, so results are checked rather than trusted.
+ *
+ * Two signals, both deliberately conservative: a script check that catches any
+ * Latin/non-Latin mismatch in either direction, and — only when the target is
+ * English, the one language whose function words are safe to assume here — a
+ * check that the text contains ordinary English connective words. Anything
+ * unclear passes, because rejecting a good summary is worse than keeping one.
+ */
+const ENGLISH_FUNCTION_WORDS =
+	/\b(the|and|of|to|in|is|that|with|for|as|are|by|this|it|from|its)\b/gi;
+const NON_LATIN_LETTER =
+	/\p{Script=Cyrillic}|\p{Script=Greek}|\p{Script=Hebrew}|\p{Script=Arabic}|\p{Script=Devanagari}|\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/gu;
+const LATIN_LETTER = /\p{Script=Latin}/gu;
+
+export function looksLikeLanguage(text: string, code: string | undefined): boolean {
+	const body = text.trim();
+	if (body.length < 24) return true;
+	const tag = (code || 'en').toLowerCase();
+	const latinScript = !/^(ru|bg|uk|sr|el|he|ar|fa|hi|zh|ja|ko|th)\b/.test(tag);
+	const nonLatin = (body.match(NON_LATIN_LETTER) ?? []).length;
+	const latin = (body.match(LATIN_LETTER) ?? []).length;
+	const total = nonLatin + latin;
+	if (total >= 20) {
+		const nonLatinShare = nonLatin / total;
+		if (latinScript && nonLatinShare > 0.2) return false;
+		if (!latinScript && nonLatinShare < 0.5) return false;
+	}
+	if (!tag.startsWith('en')) return true;
+	// Two or more distinct connectives: any real English sentence clears this,
+	// while German or Dutch prose of the same length does not.
+	const hits = new Set((body.match(ENGLISH_FUNCTION_WORDS) ?? []).map((w) => w.toLowerCase()));
+	return hits.size >= 2;
+}
 
 /** Hard ceiling on tree size: deepest outline levels drop first, so a
  * 400-heading textbook still yields a readable (and affordable) tree. */
@@ -177,13 +244,16 @@ export function reconcileStudy(
 				level: section.level
 			};
 		}
-		queue.push(section);
+		// A heading with no prose of its own settles immediately: there is
+		// nothing to summarize, and asking anyway invites invention.
+		const thin = proseBeyondTitle(section).length < MIN_SECTION_PROSE_CHARS;
+		if (!thin) queue.push(section);
 		return {
 			id: section.id,
 			blockId: section.blockId,
 			title: section.title,
 			level: section.level,
-			status: 'pending' as const,
+			status: thin ? ('ready' as const) : ('pending' as const),
 			sourceHash: section.sourceHash,
 			updatedAt: Date.now()
 		};
@@ -228,15 +298,21 @@ export function abstractNeeded(study: DocumentStudy): boolean {
 
 /* ── Prompts ─────────────────────────────────────────────────────────────── */
 
-export function studySectionMessages(docTitle: string, section: StudySection): LlmChatMessage[] {
+export function studySectionMessages(
+	docTitle: string,
+	section: StudySection,
+	language: string
+): LlmChatMessage[] {
+	const named = languageName(language);
 	return [
 		{
 			role: 'system',
 			content:
 				'You prepare concise study notes for a reading companion. Summarize the given ' +
 				'section in two or three plain sentences: what it covers, and the one or two ideas ' +
-				'a learner must retain. Write in the language of the section. No headings, no ' +
-				'bullets, no preamble — only the sentences.'
+				`a learner must retain. Write the notes in ${named}, whatever language the ` +
+				'section itself quotes or cites. No headings, no bullets, no preamble — only the ' +
+				'sentences.'
 		},
 		{
 			role: 'user',
@@ -245,7 +321,11 @@ export function studySectionMessages(docTitle: string, section: StudySection): L
 	];
 }
 
-export function studyAbstractMessages(docTitle: string, nodes: StudyNode[]): LlmChatMessage[] {
+export function studyAbstractMessages(
+	docTitle: string,
+	nodes: StudyNode[],
+	language: string
+): LlmChatMessage[] {
 	const tree = nodes
 		.filter((node) => node.status === 'ready' && node.summary)
 		.map((node) => `${'  '.repeat(Math.max(0, node.level - 1))}- ${node.title}: ${node.summary}`)
@@ -255,7 +335,7 @@ export function studyAbstractMessages(docTitle: string, nodes: StudyNode[]): Llm
 			role: 'system',
 			content:
 				'You prepare a one-paragraph abstract of a document from its section notes. Write ' +
-				'three to five plain sentences in the language of the notes: what the document is ' +
+				`three to five plain sentences in ${languageName(language)}: what the document is ` +
 				'about, how it unfolds, and what a reader gets from it. No meta-commentary.'
 		},
 		{ role: 'user', content: `Document: ${docTitle}\n\nSection notes:\n${tree}` }

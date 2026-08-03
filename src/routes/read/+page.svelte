@@ -1883,6 +1883,8 @@
 														<p>{node.summary}</p>
 													{:else if node.status === 'pending'}
 														<p class="quiet">Summarizing…</p>
+													{:else if node.status === 'ready'}
+														<p class="quiet">No prose of its own — open the section to read it.</p>
 													{:else}
 														<p class="quiet">Not summarized yet.</p>
 													{/if}
