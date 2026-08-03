@@ -1,3 +1,4 @@
+import { rescueAnnotations } from '$lib/domain/annotations';
 import { MODEL_CATALOG, getModel } from '$lib/domain/model-catalog';
 import {
 	DOCUMENT_NORMALIZATION_VERSION,
@@ -138,6 +139,9 @@ async function migrateDocumentNormalization(
 		// Narrations survive re-parsing; block-id shifts are healed by the
 		// content-hash rescue in reconcileNarrations on the next document open.
 		reparsed.narrations = document.narrations;
+		// Annotations re-anchor immediately: shifted block ids or offsets are
+		// re-located by their stored excerpts, unmatchable ones kept orphaned.
+		reparsed.annotations = rescueAnnotations(document.annotations, reparsed.blocks);
 		// A re-parse must preserve the reader's per-document listening mode, and
 		// segment with that mode's rules — otherwise a future normalization bump
 		// would silently revert a Verbatim/Focused document to Natural.

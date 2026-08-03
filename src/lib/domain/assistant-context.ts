@@ -5,6 +5,7 @@
  * services/openai-realtime.ts and the orchestration in
  * state/realtime-assistant.svelte.ts.
  */
+import { ANNOTATION_NOTE_LIMIT } from './annotations';
 import { tableMarkdown } from './narration';
 import type { DocumentBlock, NormalizedDocument } from './types';
 
@@ -24,6 +25,8 @@ export type AssistantToolCall =
 	| { name: 'show_passage'; range: PassageRange }
 	| { name: 'read_passage'; range: PassageRange }
 	| { name: 'play_section'; range: PassageRange }
+	| { name: 'add_highlight'; range: PassageRange }
+	| { name: 'add_note'; range: PassageRange; text: string }
 	| { name: 'clear_highlight' }
 	| { name: 'plan_tour'; stops: TourStop[] }
 	| { name: 'continue_tour' }
@@ -153,6 +156,8 @@ When the reader asks for an overview or a walkthrough ("walk me through…", "gi
 
 When the reader asks to hear part of the document read aloud ("read this section to me", "play it from here"), call play_section with that range — the app's reading voice takes over, waiting for you to finish speaking first. A short lead-in ("Here's that section") is fine; after it, stay silent until the reader speaks to you again.
 
+When the reader asks you to mark something for keeps — "highlight this", "save that definition", "add a note here saying…" — call add_highlight or add_note with the exact marker range. These leave permanent gold marks and margin notes that stay with the document after the conversation; keep note text to a sentence or two, in the reader's own framing. Confirm in a brief word once it is done. For merely drawing attention while you talk, keep using show_passage — its highlight fades; add_highlight and add_note are for ink the reader asked to keep.
+
 Ground everything you say in the document; when it does not contain the answer, say so plainly. Match the language the reader speaks to you (start in the document's language). Keep replies short and conversational — a few sentences unless the reader asks for depth.`;
 
 export function buildAssistantInstructions(
@@ -261,6 +266,35 @@ export function assistantTools(includeReadPassage: boolean): RealtimeToolSpec[] 
 		},
 		{
 			type: 'function',
+			name: 'add_highlight',
+			description:
+				'Permanently highlight a passage in gold — ink that stays with the document after the conversation. Only when the reader asks to highlight, mark, or save a passage.',
+			parameters: {
+				type: 'object',
+				properties: {
+					start_segment: segmentParameter('First segment of the passage to highlight.'),
+					end_segment: segmentParameter('Last segment, inclusive. Omit for a single segment.')
+				},
+				required: ['start_segment']
+			}
+		},
+		{
+			type: 'function',
+			name: 'add_note',
+			description:
+				'Attach a permanent margin note to a passage, kept with the document. Only when the reader asks to note, comment, or remember something; keep the note to a sentence or two.',
+			parameters: {
+				type: 'object',
+				properties: {
+					start_segment: segmentParameter('First segment the note refers to.'),
+					end_segment: segmentParameter('Last segment, inclusive. Omit for a single segment.'),
+					note: { type: 'string', description: 'The note text, in the reader’s framing.' }
+				},
+				required: ['start_segment', 'note']
+			}
+		},
+		{
+			type: 'function',
 			name: 'play_section',
 			description:
 				"Start the app's reading voice on a passage — for requests like 'read this section to me'. After calling it, stay silent: the narrator has the stage until the reader speaks to you again.",
@@ -322,7 +356,13 @@ export function parseAssistantToolCall(
 		}
 		return { call: { name: 'point_at', segment } };
 	}
-	if (name !== 'show_passage' && name !== 'read_passage' && name !== 'play_section') {
+	if (
+		name !== 'show_passage' &&
+		name !== 'read_passage' &&
+		name !== 'play_section' &&
+		name !== 'add_highlight' &&
+		name !== 'add_note'
+	) {
 		return { error: `Unknown tool "${name}".` };
 	}
 	const record = (parsed ?? {}) as Record<string, unknown>;
@@ -335,9 +375,13 @@ export function parseAssistantToolCall(
 	if (start > last || end > last) {
 		return { error: `Segment numbers run 0 through ${last}.` };
 	}
-	return {
-		call: { name, range: { startIndex: Math.min(start, end), endIndex: Math.max(start, end) } }
-	};
+	const range = { startIndex: Math.min(start, end), endIndex: Math.max(start, end) };
+	if (name === 'add_note') {
+		const text = typeof record.note === 'string' ? record.note.trim() : '';
+		if (!text) return { error: 'add_note needs a non-empty note string.' };
+		return { call: { name, range, text: text.slice(0, ANNOTATION_NOTE_LIMIT) } };
+	}
+	return { call: { name, range } };
 }
 
 function parsePlanTour(

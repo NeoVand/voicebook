@@ -69,6 +69,7 @@ export default defineConfig({
 			provider: 'v8',
 			reporter: ['text', 'json', 'json-summary', 'html'],
 			include: [
+				'src/lib/domain/annotations.ts',
 				'src/lib/domain/assistant-context.ts',
 				'src/lib/domain/document-lens.ts',
 				'src/lib/domain/docx-extras.ts',
