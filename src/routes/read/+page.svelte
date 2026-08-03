@@ -1310,6 +1310,12 @@
 				spaceHolding = true;
 				if (book) void realtimeAssistant.beginTalking(book);
 			}, 250);
+		} else if (event.key === '/') {
+			// Hold Space to talk, press / to type — the same assistant either
+			// way. Handled before the focused-control guard because "/" does
+			// nothing to a button, and the caret should always land.
+			event.preventDefault();
+			if (book) realtimeAssistant.openChat();
 		} else if (target?.matches('button,[data-segment-id]')) return;
 		else if (event.key.toLowerCase() === 'j') void player.seekBy(-10);
 		else if (event.key.toLowerCase() === 'l') void player.seekBy(10);
@@ -1317,9 +1323,10 @@
 		else if (event.key === ']') void player.setRate(player.rate + 0.25);
 	}
 
-	/** Contexts where Space keeps its native meaning: typing and expanding
-	 * controls, open menus and dialogs (their items activate with Space), and
-	 * the assistant chip, which runs its own immediate hold-to-talk. */
+	/** Contexts that own the keyboard outright — Space keeps its native
+	 * meaning and "/" types a slash: text fields and expanding controls, open
+	 * menus and dialogs (their items activate with Space), and the assistant
+	 * chip, which runs its own immediate hold-to-talk. */
 	function spaceOwnedElsewhere(target: HTMLElement | null): boolean {
 		if (!target?.closest) return false;
 		return Boolean(

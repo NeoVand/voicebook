@@ -1856,6 +1856,14 @@
 						<dt>Speed</dt>
 						<dd><kbd>[</kbd><kbd>]</kbd></dd>
 					</div>
+					<div>
+						<dt>Talk to the assistant</dt>
+						<dd><kbd>Hold Space</kbd></dd>
+					</div>
+					<div>
+						<dt>Type to the assistant</dt>
+						<dd><kbd>/</kbd></dd>
+					</div>
 				</dl>
 			</section>
 		</div>

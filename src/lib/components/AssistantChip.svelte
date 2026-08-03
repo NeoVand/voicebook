@@ -345,7 +345,8 @@
 				aria-checked={realtimeAssistant.chatOpen}
 				onclick={() => {
 					closeMenu();
-					realtimeAssistant.chatOpen = !realtimeAssistant.chatOpen;
+					if (realtimeAssistant.chatOpen) realtimeAssistant.chatOpen = false;
+					else realtimeAssistant.openChat();
 				}}
 			>
 				<Keyboard size={15} strokeWidth={1.8} aria-hidden="true" />
@@ -357,6 +358,7 @@
 							: 'Ask by typing — replies stay silent'}
 					</small>
 				</span>
+				<kbd class="menu-key" aria-hidden="true">/</kbd>
 			</button>
 
 			<button
@@ -643,6 +645,22 @@
 	.menu-item:disabled {
 		cursor: not-allowed;
 		opacity: 0.42;
+	}
+
+	/* A row that advertises its shortcut needs a third column for the cap. */
+	.menu-item:has(.menu-key) {
+		grid-template-columns: 18px minmax(0, 1fr) auto;
+	}
+
+	.menu-key {
+		padding: 1px 5px;
+		border: 1px solid var(--line);
+		border-radius: 4px;
+		color: var(--faint);
+		font-family: var(--font-ui);
+		font-size: 10px;
+		font-weight: 650;
+		line-height: 1.4;
 	}
 
 	.menu-item span,
