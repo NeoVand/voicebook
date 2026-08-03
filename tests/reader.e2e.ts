@@ -415,6 +415,28 @@ test('keeps highlights and margin notes across reloads', async ({ page }) => {
 	await expect(page.locator('.annotation-marker')).toHaveCount(0);
 });
 
+test('offers the Study drawer tab with a setup hint until a cloud model exists', async ({
+	page
+}) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByLabel('Title').fill('Study candidate');
+	await page
+		.getByRole('textbox', { name: 'Text' })
+		.fill('# Study candidate\n\n## One\n\nAlpha body.\n\n## Two\n\nBeta body.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+
+	await page.getByRole('button', { name: 'Open document outline' }).click();
+	const outline = page.getByRole('complementary', { name: 'Document outline' });
+	await outline.getByRole('button', { name: 'Study', exact: true }).click();
+	// Without any cloud key the layer stays off and says how to turn it on.
+	await expect(outline).toContainText('Study notes need a cloud model');
+	await expect(outline.getByRole('navigation', { name: 'Table of contents' })).toHaveCount(0);
+	await outline.getByRole('button', { name: 'Contents', exact: true }).click();
+	await expect(outline.getByRole('navigation', { name: 'Table of contents' })).toBeVisible();
+});
+
 test("Space stays the reader's key even when the play button holds focus", async ({ page }) => {
 	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text', exact: true }).click();

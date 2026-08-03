@@ -79,6 +79,7 @@ export default defineConfig({
 				'src/lib/domain/pages.ts',
 				'src/lib/domain/pdf-markdown.ts',
 				'src/lib/domain/segmenter.ts',
+				'src/lib/domain/study-tree.ts',
 				'src/lib/domain/speech-words.ts',
 				'src/lib/domain/web-article.ts',
 				'src/lib/services/generation-plan.ts',

@@ -20,12 +20,14 @@ import {
 	getCloudLlmProvider,
 	isCloudLlmProvider,
 	isRealtimeEffort,
+	STUDY_PROVIDER_ORDER,
 	type ApiProvider,
 	type CloudLlmProvider,
 	type DescriptionEngine,
 	type ElevenLabsVoice,
 	type RealtimeEffort,
-	type SpeechEngine
+	type SpeechEngine,
+	type StudyEngine
 } from '$lib/domain/provider-catalog';
 import { listElevenLabsVoices } from '$lib/services/elevenlabs';
 import { getSetting, setSetting } from '$lib/services/repository';
@@ -60,6 +62,10 @@ export class ProvidersState {
 	descriptionEngine = $state<DescriptionEngine>('local');
 	private cloudLlmModels = $state<Partial<Record<CloudLlmProvider, string>>>({});
 
+	/** Study-tree engine: 'auto' follows whichever provider has a key. */
+	studyEngine = $state<StudyEngine>('auto');
+	private studyModels = $state<Partial<Record<CloudLlmProvider, string>>>({});
+
 	speechEngine = $state<SpeechEngine>('local');
 	/** Voice-assistant model, voice, and thinking effort (OpenAI key). */
 	realtimeModelId = $state<string>(REALTIME_MODELS[0].id);
@@ -90,7 +96,9 @@ export class ProvidersState {
 				elVoices,
 				realtimeModel,
 				rtVoice,
-				rtEffort
+				rtEffort,
+				studyEngine,
+				studyModels
 			] = await Promise.all([
 				getSetting<KeyMap>('provider-api-keys', {}),
 				getSetting<string>('description-engine', 'local'),
@@ -101,11 +109,16 @@ export class ProvidersState {
 				getSetting<ElevenLabsVoice[]>('elevenlabs-voices-cache', []),
 				getSetting<string>('realtime-model', REALTIME_MODELS[0].id),
 				getSetting<string>('realtime-voice', DEFAULT_REALTIME_VOICE),
-				getSetting<string>('realtime-effort', DEFAULT_REALTIME_EFFORT)
+				getSetting<string>('realtime-effort', DEFAULT_REALTIME_EFFORT),
+				getSetting<string>('study-engine', 'auto'),
+				getSetting<Partial<Record<CloudLlmProvider, string>>>('study-models', {})
 			]);
 			this.userKeys = keys ?? {};
 			this.descriptionEngine = engine === 'local' || isCloudLlmProvider(engine) ? engine : 'local';
 			this.cloudLlmModels = models ?? {};
+			this.studyEngine =
+				studyEngine === 'auto' || isCloudLlmProvider(studyEngine) ? studyEngine : 'auto';
+			this.studyModels = studyModels ?? {};
 			this.speechEngine = speech === 'elevenlabs' ? 'elevenlabs' : 'local';
 			this.elevenLabsModelId = ELEVENLABS_MODELS.some((model) => model.id === elModel)
 				? elModel
@@ -184,6 +197,45 @@ export class ProvidersState {
 			model: this.cloudLlmModelFor(this.descriptionEngine),
 			apiKey
 		};
+	}
+
+	/* ── Study engine ────────────────────────────────────────────────────── */
+
+	studyModelFor(provider: CloudLlmProvider): string {
+		const selected = this.studyModels[provider];
+		const spec = getCloudLlmProvider(provider);
+		return selected && spec?.models.some((model) => model.id === selected)
+			? selected
+			: defaultCloudLlmModel(provider);
+	}
+
+	async setStudyEngine(engine: StudyEngine): Promise<void> {
+		this.studyEngine = engine;
+		await setSetting('study-engine', engine);
+	}
+
+	async setStudyModel(provider: CloudLlmProvider, modelId: string): Promise<void> {
+		this.studyModels = { ...this.studyModels, [provider]: modelId };
+		await setSetting('study-models', { ...this.studyModels });
+	}
+
+	/** The provider 'auto' would resolve to right now, keyed or not. */
+	get autoStudyProvider(): CloudLlmProvider | null {
+		return STUDY_PROVIDER_ORDER.find((provider) => this.hasKey(provider)) ?? null;
+	}
+
+	/** The study engine that can actually run: the explicit pick when its key
+	 * exists, else the first keyed provider on 'auto'. Null disables study. */
+	get cloudStudyEngine(): {
+		provider: CloudLlmProvider;
+		model: string;
+		apiKey: string;
+	} | null {
+		const provider = this.studyEngine === 'auto' ? this.autoStudyProvider : this.studyEngine;
+		if (!provider) return null;
+		const apiKey = this.keyFor(provider);
+		if (!apiKey) return null;
+		return { provider, model: this.studyModelFor(provider), apiKey };
 	}
 
 	/* ── Speech engine ───────────────────────────────────────────────────── */

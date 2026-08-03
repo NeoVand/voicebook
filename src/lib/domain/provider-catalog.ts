@@ -13,6 +13,13 @@ export type ApiProvider = CloudLlmProvider | 'elevenlabs';
 /** Which engine writes the spoken descriptions. */
 export type DescriptionEngine = 'local' | CloudLlmProvider;
 
+/** Which cloud engine builds the study tree; 'auto' follows whichever
+ * provider has a key (OpenAI first — its fast tier is the tuned default). */
+export type StudyEngine = 'auto' | CloudLlmProvider;
+
+/** Auto-pick order for the study engine. */
+export const STUDY_PROVIDER_ORDER: CloudLlmProvider[] = ['openai', 'anthropic', 'gemini'];
+
 /** Which engine synthesizes speech. */
 export type SpeechEngine = 'local' | 'elevenlabs';
 
