@@ -262,6 +262,131 @@ export function studyAbstractMessages(docTitle: string, nodes: StudyNode[]): Llm
 	];
 }
 
+/* ── Reader state (memories + coverage) ──────────────────────────────────── */
+
+export const MEMORY_TEXT_LIMIT = 500;
+/** Newest-first display/instruction cap; older notes stay stored. */
+const READER_STATE_MEMORY_CAP = 20;
+/** A section counts as heard once this share of its segments has audio
+ * listened. */
+const HEARD_FRACTION = 0.6;
+
+function relativeSession(now: number, then: number): string {
+	const days = Math.floor((now - then) / 86_400_000);
+	if (days <= 0) return 'earlier today';
+	if (days === 1) return 'yesterday';
+	return `${days} days ago`;
+}
+
+/**
+ * Serialize what past sessions established — saved notes, where the last
+ * conversation left off, and which sections the reader has heard or
+ * discussed — for the assistant's session instructions. Empty string when
+ * there is no history yet.
+ */
+export function composeReaderState(doc: NormalizedDocument, now = Date.now()): string {
+	const memories = doc.memories ?? [];
+	const footprint = doc.conversation;
+	const listened = doc.listened ?? {};
+	const hasListened = Object.values(listened).some((ranges) => ranges.length);
+	if (!memories.length && !footprint && !hasListened) return '';
+
+	const blockPositions = new Map(doc.blocks.map((block, index) => [block.id, index]));
+	const firstSegmentByBlock = new Map<string, number>();
+	doc.segments.forEach((segment, index) => {
+		if (!firstSegmentByBlock.has(segment.blockId)) firstSegmentByBlock.set(segment.blockId, index);
+	});
+	const markerFor = (blockId: string | undefined): string => {
+		const at = blockId === undefined ? undefined : firstSegmentByBlock.get(blockId);
+		return at === undefined ? '' : ` ⟦${at}⟧`;
+	};
+
+	const lines: string[] = [];
+
+	if (footprint?.lastSessionAt) {
+		const nodes = doc.study?.nodes ?? [];
+		const lastAt =
+			footprint.lastBlockId === undefined ? undefined : blockPositions.get(footprint.lastBlockId);
+		let leftOff = '';
+		if (lastAt !== undefined) {
+			let title = '';
+			for (const node of nodes) {
+				const at = blockPositions.get(node.blockId);
+				if (at !== undefined && at <= lastAt) title = node.title;
+			}
+			leftOff = `, leaving off around ${title ? `"${title}"` : 'this point'}${markerFor(footprint.lastBlockId)}`;
+		}
+		lines.push(`Last conversation: ${relativeSession(now, footprint.lastSessionAt)}${leftOff}.`);
+	}
+
+	if (memories.length) {
+		lines.push('Notes saved from earlier conversations:');
+		for (const memory of memories.slice(-READER_STATE_MEMORY_CAP)) {
+			lines.push(`-${markerFor(memory.blockId)} ${memory.text}`);
+		}
+	}
+
+	const coverage = sectionCoverage(doc);
+	if (coverage.length) {
+		const heardAndDiscussed = coverage.filter((entry) => entry.heard && entry.discussed);
+		const heardOnly = coverage.filter((entry) => entry.heard && !entry.discussed);
+		const discussedOnly = coverage.filter((entry) => !entry.heard && entry.discussed);
+		const untouched = coverage.filter((entry) => !entry.heard && !entry.discussed);
+		const list = (entries: typeof coverage, withMarkers = false) =>
+			entries
+				.map((entry) =>
+					withMarkers ? `${entry.node.title}${markerFor(entry.node.blockId)}` : entry.node.title
+				)
+				.join('; ');
+		if (heardAndDiscussed.length)
+			lines.push(`Heard and discussed with you: ${list(heardAndDiscussed)}.`);
+		if (heardOnly.length) lines.push(`Heard in playback: ${list(heardOnly)}.`);
+		if (discussedOnly.length) lines.push(`Discussed with you: ${list(discussedOnly)}.`);
+		if (untouched.length) lines.push(`Not yet visited: ${list(untouched, true)}.`);
+	}
+
+	return lines.join('\n');
+}
+
+interface SectionCoverageEntry {
+	node: StudyNode;
+	heard: boolean;
+	discussed: boolean;
+}
+
+/** Aggregate playback and conversation coverage up to the study tree's
+ * sections. Empty when there is no study tree (or no history at all). */
+function sectionCoverage(doc: NormalizedDocument): SectionCoverageEntry[] {
+	const nodes = doc.study?.nodes ?? [];
+	if (!nodes.length) return [];
+	const listened = doc.listened ?? {};
+	const discussed = new Set(doc.conversation?.discussedBlockIds ?? []);
+	if (!Object.keys(listened).length && !discussed.size) return [];
+	const blockPositions = new Map(doc.blocks.map((block, index) => [block.id, index]));
+	const ordered = nodes
+		.map((node) => ({ node, from: blockPositions.get(node.blockId) }))
+		.filter((entry): entry is { node: StudyNode; from: number } => entry.from !== undefined)
+		.sort((a, b) => a.from - b.from);
+	return ordered.map((entry, index) => {
+		const to = ordered[index + 1]?.from ?? doc.blocks.length;
+		let total = 0;
+		let heardCount = 0;
+		let discussedHit = false;
+		for (const segment of doc.segments) {
+			const at = blockPositions.get(segment.blockId);
+			if (at === undefined || at < entry.from || at >= to) continue;
+			total += 1;
+			if (listened[segment.id]?.length) heardCount += 1;
+			if (discussed.has(segment.blockId)) discussedHit = true;
+		}
+		return {
+			node: entry.node,
+			heard: total > 0 && heardCount / total >= HEARD_FRACTION,
+			discussed: discussedHit
+		};
+	});
+}
+
 /* ── Assistant instruction block ─────────────────────────────────────────── */
 
 /**

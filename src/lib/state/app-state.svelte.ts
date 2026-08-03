@@ -142,6 +142,13 @@ async function migrateDocumentNormalization(
 		// Annotations re-anchor immediately: shifted block ids or offsets are
 		// re-located by their stored excerpts, unmatchable ones kept orphaned.
 		reparsed.annotations = rescueAnnotations(document.annotations, reparsed.blocks);
+		// Study, memories, and the conversation footprint ride along: the study
+		// tree reconciles by content hash on the next open, memory text stays
+		// valid even when a soft block anchor dangles, and stale coverage ids
+		// are simply skipped when the reader state is composed.
+		reparsed.study = document.study;
+		reparsed.memories = document.memories;
+		reparsed.conversation = document.conversation;
 		// A re-parse must preserve the reader's per-document listening mode, and
 		// segment with that mode's rules — otherwise a future normalization bump
 		// would silently revert a Verbatim/Focused document to Natural.

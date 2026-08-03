@@ -23,8 +23,9 @@ import {
 	type ReaderFocus,
 	type TourStop
 } from '$lib/domain/assistant-context';
-import type { NormalizedDocument } from '$lib/domain/types';
+import type { NormalizedDocument, StudyMemory } from '$lib/domain/types';
 import { playChime } from '$lib/services/assistant-chimes';
+import { appState } from './app-state.svelte';
 import {
 	connectRealtime,
 	mintRealtimeSecret,
@@ -113,6 +114,10 @@ export class RealtimeAssistantState {
 	private audio?: HTMLAudioElement;
 	private abort?: AbortController;
 	private document?: NormalizedDocument;
+	/** Blocks this session showed, read, or toured — flushed into the
+	 * document's conversation footprint when the session ends. */
+	private sessionBlocks = new SvelteSet<string>();
+	private sessionLastBlockId?: string;
 	private context?: AssistantInstructions;
 	private seenCalls = new SvelteSet<string>();
 	private captionItemId = '';
@@ -402,6 +407,7 @@ export class RealtimeAssistantState {
 		this.tourProgress = undefined;
 		this.advanceAfterAudio = false;
 		this.pendingPlayback = undefined;
+		this.flushConversationFootprint();
 		this.document = undefined;
 		this.context = undefined;
 		this.seenCalls.clear();
@@ -658,6 +664,7 @@ export class RealtimeAssistantState {
 			return { ok: true, stop: tour.index + 1, of: tour.stops.length, point: stop.point };
 		}
 		if (call.name === 'point_at') {
+			this.touchRange({ startIndex: call.segment, endIndex: call.segment });
 			this.onPointAt?.(call.segment);
 			return { ok: true };
 		}
@@ -684,6 +691,21 @@ export class RealtimeAssistantState {
 			}
 			return output;
 		}
+		if (call.name === 'save_memory') {
+			const now = Date.now();
+			const blockId = call.segment === undefined ? undefined : doc.segments[call.segment]?.blockId;
+			const memory: StudyMemory = {
+				id: crypto.randomUUID(),
+				text: call.text,
+				...(blockId ? { blockId } : {}),
+				origin: 'assistant',
+				createdAt: now,
+				updatedAt: now
+			};
+			doc.memories = [...(doc.memories ?? []), memory];
+			void appState.saveDocument(doc).catch(() => undefined);
+			return { ok: true, note: 'Saved — it will be waiting next session.' };
+		}
 		if (call.name === 'add_highlight' || call.name === 'add_note') {
 			const note = call.name === 'add_note' ? call.text : undefined;
 			const added = this.onAddAnnotation?.(call.range, note) ?? false;
@@ -703,15 +725,49 @@ export class RealtimeAssistantState {
 			// At tool time there is no telling whether spoken audio follows in
 			// this response — always queue, and start once the assistant's
 			// voice has fully drained.
+			this.touchRange(call.range);
 			this.pendingPlayback = call.range;
 			return {
 				ok: true,
 				note: 'Playback starts when you finish speaking. Stay silent until the reader speaks to you.'
 			};
 		}
+		this.touchRange(call.range);
 		this.onShowPassage?.(call.range);
 		const location = describePassageLocation(doc, call.range);
 		return location ? { ok: true, under_heading: location } : { ok: true };
+	}
+
+	/** Record the blocks a range touches for the session footprint. */
+	private touchRange(range: PassageRange): void {
+		const doc = this.document;
+		if (!doc) return;
+		for (let index = range.startIndex; index <= range.endIndex; index += 1) {
+			const blockId = doc.segments[index]?.blockId;
+			if (!blockId) continue;
+			this.sessionBlocks.add(blockId);
+			this.sessionLastBlockId = blockId;
+		}
+	}
+
+	/** Merge this session's footprint into the document and persist it. Runs
+	 * on stop, before the document reference is dropped. */
+	private flushConversationFootprint(): void {
+		const doc = this.document;
+		const touched = this.sessionBlocks;
+		if (doc && touched.size) {
+			const merged = [...(doc.conversation?.discussedBlockIds ?? [])];
+			for (const blockId of touched) if (!merged.includes(blockId)) merged.push(blockId);
+			doc.conversation = {
+				// Soft cap: coverage is coarse by design; ancient entries age out.
+				discussedBlockIds: merged.slice(-500),
+				lastBlockId: this.sessionLastBlockId ?? doc.conversation?.lastBlockId,
+				lastSessionAt: Date.now()
+			};
+			void appState.saveDocument(doc).catch(() => undefined);
+		}
+		this.sessionBlocks.clear();
+		this.sessionLastBlockId = undefined;
 	}
 
 	/* ── Guided walkthroughs ─────────────────────────────────────────────── */
@@ -731,6 +787,7 @@ export class RealtimeAssistantState {
 	private applyTourStop(): void {
 		const tour = this.tour;
 		if (!tour) return;
+		this.touchRange(tour.stops[tour.index].range);
 		this.onShowPassage?.(tour.stops[tour.index].range);
 		this.tourProgress = { stop: tour.index + 1, of: tour.stops.length };
 	}

@@ -164,6 +164,27 @@ describe('buildAssistantInstructions', () => {
 			built.instructions.indexOf('=== DOCUMENT:')
 		);
 	});
+
+	it('carries reader state when past sessions left notes', () => {
+		const bare = buildAssistantInstructions(doc());
+		expect(bare.instructions).not.toContain('=== READER STATE ===');
+		const built = buildAssistantInstructions(
+			doc({
+				memories: [
+					{
+						id: 'm1',
+						text: 'Reader wants the migration data revisited.',
+						blockId: 'h2',
+						origin: 'assistant',
+						createdAt: 1,
+						updatedAt: 1
+					}
+				]
+			})
+		);
+		expect(built.instructions).toContain('=== READER STATE ===');
+		expect(built.instructions).toContain('- ⟦3⟧ Reader wants the migration data revisited.');
+	});
 });
 
 describe('assistantTools', () => {
@@ -177,6 +198,7 @@ describe('assistantTools', () => {
 			'continue_tour',
 			'add_highlight',
 			'add_note',
+			'save_memory',
 			'play_section'
 		]);
 		expect(assistantTools(true).map((tool) => tool.name)).toEqual([
@@ -188,6 +210,7 @@ describe('assistantTools', () => {
 			'continue_tour',
 			'add_highlight',
 			'add_note',
+			'save_memory',
 			'play_section',
 			'read_passage'
 		]);
@@ -240,6 +263,26 @@ describe('parseAssistantToolCall', () => {
 		expect(
 			parseAssistantToolCall(doc(), 'add_note', '{"start_segment":1,"note":"   "}').error
 		).toContain('note');
+	});
+
+	it('parses save_memory, dropping an out-of-range anchor instead of failing', () => {
+		const anchored = parseAssistantToolCall(
+			doc(),
+			'save_memory',
+			'{"note":"  Reader connected songs to sonar.  ","segment":2}'
+		);
+		expect(anchored.call).toEqual({
+			name: 'save_memory',
+			text: 'Reader connected songs to sonar.',
+			segment: 2
+		});
+		const unanchored = parseAssistantToolCall(
+			doc(),
+			'save_memory',
+			'{"note":"Keep this","segment":99}'
+		);
+		expect(unanchored.call).toEqual({ name: 'save_memory', text: 'Keep this' });
+		expect(parseAssistantToolCall(doc(), 'save_memory', '{"note":"  "}').error).toContain('note');
 	});
 
 	it('parses clear_highlight regardless of arguments', () => {

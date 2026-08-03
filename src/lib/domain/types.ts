@@ -323,6 +323,31 @@ export interface DocumentStudy {
 	updatedAt: number;
 }
 
+/** A conversation takeaway the assistant keeps with the document — saved by
+ * its save_memory tool (origin 'assistant') or, later, by web research
+ * (origin 'web'). Editable and deletable in the Study drawer. */
+export interface StudyMemory {
+	id: string;
+	/** One or two sentences, in the reader's framing. */
+	text: string;
+	/** Soft anchor to the block the memory is about; may dangle after a
+	 * re-parse, in which case the memory simply loses its marker. */
+	blockId?: string;
+	origin: 'assistant' | 'web';
+	/** Where a web-research memory came from. */
+	sourceUrl?: string;
+	createdAt: number;
+	updatedAt: number;
+}
+
+/** Footprint of past assistant conversations: which blocks were shown, read,
+ * or toured, and where the last session left off. */
+export interface ConversationFootprint {
+	discussedBlockIds: string[];
+	lastBlockId?: string;
+	lastSessionAt?: number;
+}
+
 export interface PlaybackPosition {
 	segmentId: string;
 	wordIndex: number;
@@ -356,6 +381,10 @@ export interface NormalizedDocument {
 	annotations?: DocumentAnnotation[];
 	/** Background-computed section summaries and abstract. */
 	study?: DocumentStudy;
+	/** Conversation takeaways kept with the document (Study drawer). */
+	memories?: StudyMemory[];
+	/** What past assistant conversations touched, and where they left off. */
+	conversation?: ConversationFootprint;
 	warnings: string[];
 	includeCode: boolean;
 	/** How the spoken layer adapts this document; absent means the app default
