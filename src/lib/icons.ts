@@ -13,6 +13,7 @@ import {
 	AudioLinesIcon,
 	GoBackward10SecIcon,
 	GoForward10SecIcon,
+	BookOpen02Icon,
 	BookOpenTextIcon,
 	BrainCircuitIcon,
 	BubbleChatIcon,
@@ -103,6 +104,9 @@ export const ArrowRight = ArrowRightIcon;
 export const ArrowUp = ArrowUpIcon;
 export const ArrowUpRight = ArrowUpRightIcon;
 export const AudioLines = AudioLinesIcon;
+/** The app mark: an open book, used in the header, the loading screen,
+ * and the favicon/PWA icons in static/. */
+export const BookOpen = BookOpen02Icon;
 export const BookOpenText = BookOpenTextIcon;
 export const BrainCircuit = BrainCircuitIcon;
 export const Bug = BugIcon;

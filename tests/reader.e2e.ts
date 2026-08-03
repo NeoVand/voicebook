@@ -353,6 +353,9 @@ test('opens the typed chat with the / shortcut and keeps / typable inside it', a
 
 	const panel = page.getByRole('dialog', { name: 'Type to the assistant' });
 	await expect(panel).toHaveCount(0);
+	// The window key handler only exists once the reader has mounted — pressing
+	// before that races the shortcut against the page.
+	await expect(page.locator('[data-segment-id]').first()).toBeVisible();
 	await page.keyboard.press('/');
 	await expect(panel).toBeVisible();
 	const composer = panel.getByRole('textbox', { name: 'Message the assistant' });
