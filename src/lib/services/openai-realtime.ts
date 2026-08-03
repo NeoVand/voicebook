@@ -82,7 +82,9 @@ export interface RealtimeChannel {
 export interface RealtimeConnectOptions {
 	secret: string;
 	model: string;
-	microphone: MediaStream;
+	/** Absent for microphone-less (typed chat) sessions: the call still
+	 * receives assistant audio, it just sends none. */
+	microphone?: MediaStream;
 	/** Receives the assistant's audio track. */
 	audio: HTMLAudioElement;
 	onEvent(event: Record<string, unknown>): void;
@@ -109,7 +111,13 @@ export async function connectRealtime(options: RealtimeConnectOptions): Promise<
 		if (wasOpen) options.onClosed();
 	};
 
-	for (const track of options.microphone.getTracks()) peer.addTrack(track, options.microphone);
+	if (options.microphone) {
+		for (const track of options.microphone.getTracks()) peer.addTrack(track, options.microphone);
+	} else {
+		// No microphone: negotiate a receive-only audio leg so the assistant's
+		// voice still arrives.
+		peer.addTransceiver('audio', { direction: 'recvonly' });
+	}
 	peer.ontrack = (event) => {
 		options.audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
 	};

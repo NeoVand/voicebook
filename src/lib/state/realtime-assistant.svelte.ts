@@ -37,6 +37,19 @@ import { providersState } from './providers.svelte';
 export type AssistantStatus = 'idle' | 'connecting' | 'live' | 'error';
 export type AssistantMode = 'ptt' | 'handsFree';
 
+/** One turn in the conversation transcript, spoken or typed. */
+export interface AssistantChatMessage {
+	id: string;
+	role: 'user' | 'assistant';
+	/** How the words traveled: 'voice' turns come from audio (assistant voice
+	 * transcripts; user turns as a spoken-question marker), 'text' turns from
+	 * the typed chat. */
+	channel: 'voice' | 'text';
+	text: string;
+	/** Still streaming in. */
+	pending?: boolean;
+}
+
 interface FunctionCallItem {
 	type?: string;
 	call_id?: string;
@@ -76,6 +89,11 @@ export class RealtimeAssistantState {
 	errorMessage = $state('');
 	/** Progress of a guided walkthrough, for the caption pill. */
 	tourProgress = $state<{ stop: number; of: number }>();
+	/** The typed-chat panel, for when speaking aloud is not an option. */
+	chatOpen = $state(false);
+	/** The running transcript: typed turns verbatim, voice turns as they are
+	 * transcribed. Kept across reconnects; cleared when the document changes. */
+	messages = $state<AssistantChatMessage[]>([]);
 
 	/** Assigned by the reader page (and cleared on unmount). */
 	onShowPassage?: (range: PassageRange) => void;
@@ -95,6 +113,12 @@ export class RealtimeAssistantState {
 	private context?: AssistantInstructions;
 	private seenCalls = new SvelteSet<string>();
 	private captionItemId = '';
+	private textItemId = '';
+	private transcriptDocumentId = '';
+	/** How the reader last addressed the assistant. Internally-issued
+	 * responses (tool follow-ups, tour nudges) answer on the same channel, so
+	 * a typed conversation stays silent end to end. */
+	private turnChannel: 'voice' | 'text' = 'voice';
 	private respondTimer: ReturnType<typeof setTimeout> | undefined;
 	private settingsTimer: ReturnType<typeof setTimeout> | undefined;
 	private holdActive = false;
@@ -127,7 +151,22 @@ export class RealtimeAssistantState {
 			await this.start(doc);
 			return;
 		}
-		if (this.status === 'live') this.openHeldMicrophone();
+		if (this.status === 'live') {
+			if (!this.microphone) {
+				// A typed-chat session has no ears — rebuild it with one. The
+				// transcript stays; the conversation memory starts fresh.
+				await this.restartWithMicrophone(doc);
+				return;
+			}
+			this.openHeldMicrophone();
+		}
+	}
+
+	private async restartWithMicrophone(doc: NormalizedDocument): Promise<void> {
+		const mode = this.mode;
+		this.stop();
+		this.mode = mode;
+		await this.start(doc, false);
 	}
 
 	/** Quiet the assistant without opening the microphone: cut the current
@@ -150,6 +189,48 @@ export class RealtimeAssistantState {
 		this.channel?.send({ type: 'response.create' });
 	}
 
+	/**
+	 * Send a typed message into the same conversation the voice uses — same
+	 * session, same tools, same context. The reply comes back as text only
+	 * (shown in the chat panel), so typing works where speaking cannot. A
+	 * first typed message starts the session without a microphone and without
+	 * the spoken greeting.
+	 */
+	async sendTyped(doc: NormalizedDocument, rawText: string): Promise<void> {
+		const text = rawText.trim();
+		if (!text || this.status === 'connecting') return;
+		if (!this.active) {
+			this.mode = 'ptt';
+			await this.start(doc, false, false);
+			if (this.status !== 'live') return;
+		}
+		// Typing is a barge-in, like speaking over the assistant: cut the
+		// current answer and pause any walkthrough.
+		this.pauseTour();
+		this.pendingPlayback = undefined;
+		if (this.speaking) {
+			this.channel?.send({ type: 'response.cancel' });
+			this.channel?.send({ type: 'output_audio_buffer.clear' });
+		}
+		this.turnChannel = 'text';
+		this.messages.push({ id: crypto.randomUUID(), role: 'user', channel: 'text', text });
+		this.channel?.send({
+			type: 'conversation.item.create',
+			item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
+		});
+		this.createResponse();
+	}
+
+	/** response.create on the current turn's channel: typed turns ask for
+	 * text-only output; spoken turns leave the session's voice default. */
+	private createResponse(): void {
+		this.channel?.send(
+			this.turnChannel === 'text'
+				? { type: 'response.create', response: { output_modalities: ['text'] } }
+				: { type: 'response.create' }
+		);
+	}
+
 	/** Double-tap or the menu row: lock or unlock hands-free listening. */
 	toggleHandsFree(doc: NormalizedDocument): void {
 		if (this.status === 'idle' || this.status === 'error') {
@@ -157,8 +238,14 @@ export class RealtimeAssistantState {
 			void this.start(doc);
 			return;
 		}
-		if (this.status === 'live') this.setHandsFree(this.mode !== 'handsFree');
-		else this.mode = 'handsFree';
+		if (this.status === 'live') {
+			if (!this.microphone) {
+				this.mode = 'handsFree';
+				void this.restartWithMicrophone(doc);
+				return;
+			}
+			this.setHandsFree(this.mode !== 'handsFree');
+		} else this.mode = 'handsFree';
 	}
 
 	/** Voice, model, and effort are fixed at mint time — a live session picks
@@ -179,10 +266,18 @@ export class RealtimeAssistantState {
 		}, 600);
 	}
 
-	private async start(doc: NormalizedDocument, greet = true): Promise<void> {
+	private async start(
+		doc: NormalizedDocument,
+		greet = true,
+		requireMicrophone = true
+	): Promise<void> {
 		if (this.active) return;
 		this.errorMessage = '';
 		this.status = 'connecting';
+		if (this.transcriptDocumentId !== doc.id) {
+			this.transcriptDocumentId = doc.id;
+			this.messages = [];
+		}
 		const abort = new AbortController();
 		this.abort = abort;
 		try {
@@ -193,22 +288,24 @@ export class RealtimeAssistantState {
 					'Add an OpenAI API key under Settings → LLM to talk with your documents.'
 				);
 			}
-			let microphone: MediaStream;
+			let microphone: MediaStream | undefined;
 			try {
 				microphone = await navigator.mediaDevices.getUserMedia({
 					audio: { echoCancellation: true, noiseSuppression: true }
 				});
 			} catch (error) {
-				throw new RealtimeError(microphoneErrorMessage(error));
+				// A typed-chat session runs fine without ears; holding to talk
+				// later surfaces the microphone problem where it matters.
+				if (requireMicrophone) throw new RealtimeError(microphoneErrorMessage(error));
 			}
 			if (abort.signal.aborted) {
-				for (const track of microphone.getTracks()) track.stop();
+				for (const track of microphone?.getTracks() ?? []) track.stop();
 				return;
 			}
 			this.microphone = microphone;
 			// Closed until the reader holds the chip (or hands-free engages).
 			this.setMicrophoneOpen(false);
-			this.startVoiceDetector(microphone);
+			if (microphone) this.startVoiceDetector(microphone);
 
 			// The assistant and the narration voice cannot share the stage —
 			// the microphone would hear the narrator.
@@ -306,6 +403,9 @@ export class RealtimeAssistantState {
 		this.context = undefined;
 		this.seenCalls.clear();
 		this.captionItemId = '';
+		this.textItemId = '';
+		this.turnChannel = 'voice';
+		this.settleTranscript();
 		this.caption = '';
 		this.speaking = false;
 		this.listening = false;
@@ -381,6 +481,31 @@ export class RealtimeAssistantState {
 		this.listening = open && Boolean(this.microphone);
 	}
 
+	/** Append streamed assistant output to the transcript, one message per
+	 * response item, voice transcripts and typed replies alike. */
+	private streamAssistantText(itemId: string, delta: string, channel: 'voice' | 'text'): void {
+		if (!delta) return;
+		const last = this.messages.at(-1);
+		if (last?.role === 'assistant' && last.pending && itemId === this.textItemId) {
+			last.text += delta;
+			return;
+		}
+		this.textItemId = itemId;
+		this.messages.push({
+			id: crypto.randomUUID(),
+			role: 'assistant',
+			channel,
+			text: delta,
+			pending: true
+		});
+	}
+
+	private settleTranscript(): void {
+		for (const message of this.messages) {
+			if (message.pending) message.pending = false;
+		}
+	}
+
 	private handleEvent(event: Record<string, unknown>): void {
 		const type = event.type as string;
 		switch (type) {
@@ -392,8 +517,25 @@ export class RealtimeAssistantState {
 				}
 				this.caption += (event.delta as string) ?? '';
 				this.speaking = true;
+				this.streamAssistantText(itemId, (event.delta as string) ?? '', 'voice');
 				break;
 			}
+			case 'response.output_text.delta':
+				this.streamAssistantText(
+					(event.item_id as string) ?? '',
+					(event.delta as string) ?? '',
+					'text'
+				);
+				break;
+			case 'input_audio_buffer.committed':
+				this.turnChannel = 'voice';
+				this.messages.push({
+					id: crypto.randomUUID(),
+					role: 'user',
+					channel: 'voice',
+					text: '(spoken question)'
+				});
+				break;
 			case 'output_audio_buffer.started':
 				this.speaking = true;
 				break;
@@ -413,6 +555,8 @@ export class RealtimeAssistantState {
 				this.speaking = false;
 				this.advanceAfterAudio = false;
 				this.pendingPlayback = undefined;
+				// A cut-off answer stays truncated in the transcript — accurate.
+				this.settleTranscript();
 				break;
 			case 'input_audio_buffer.speech_started':
 				// Hands-free barge-in; the server cuts the response itself.
@@ -441,6 +585,7 @@ export class RealtimeAssistantState {
 				// the queued playback here instead of waiting for a drain that
 				// will never come.
 				if (!this.speaking) this.startPendingPlayback();
+				this.settleTranscript();
 				break;
 			}
 			case 'error': {
@@ -473,7 +618,7 @@ export class RealtimeAssistantState {
 		if (this.respondTimer) clearTimeout(this.respondTimer);
 		this.respondTimer = setTimeout(() => {
 			this.respondTimer = undefined;
-			this.channel?.send({ type: 'response.create' });
+			this.createResponse();
 		}, 120);
 	}
 
@@ -588,7 +733,7 @@ export class RealtimeAssistantState {
 			type: 'conversation.item.create',
 			item: { type: 'message', role: 'system', content: [{ type: 'input_text', text }] }
 		});
-		this.channel?.send({ type: 'response.create' });
+		this.createResponse();
 	}
 
 	private advanceTour(): void {
