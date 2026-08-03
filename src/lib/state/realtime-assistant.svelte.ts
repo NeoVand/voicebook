@@ -94,6 +94,13 @@ export class RealtimeAssistantState {
 	tourProgress = $state<{ stop: number; of: number }>();
 	/** The typed-chat panel, for when speaking aloud is not an option. */
 	chatOpen = $state(false);
+	/** Bumped whenever something asks for the composer's caret — the panel
+	 * watches it so the "/" shortcut lands the cursor even when it is already
+	 * open. */
+	chatFocusToken = $state(0);
+	/** Where the reader dragged the panel, in viewport pixels. Null keeps it
+	 * docked above the mic chip. Survives closing and reopening. */
+	chatPosition = $state<{ left: number; top: number } | null>(null);
 	/** The running transcript: typed turns verbatim, voice turns as they are
 	 * transcribed. Kept across reconnects; cleared when the document changes. */
 	messages = $state<AssistantChatMessage[]>([]);
@@ -233,6 +240,14 @@ export class RealtimeAssistantState {
 			item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
 		});
 		this.createResponse();
+	}
+
+	/** Open the typed panel and put the caret in it. Idempotent: firing this
+	 * on an open panel just re-focuses rather than closing it — Escape is the
+	 * way out. */
+	openChat(): void {
+		this.chatOpen = true;
+		this.chatFocusToken += 1;
 	}
 
 	/** response.create on the current turn's channel: typed turns ask for

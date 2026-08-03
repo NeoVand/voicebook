@@ -334,11 +334,41 @@ test('opens the typed-chat panel from the assistant menu', async ({ page }) => {
 
 	const panel = page.getByRole('dialog', { name: 'Type to the assistant' });
 	await expect(panel).toBeVisible();
-	await expect(panel.getByRole('textbox', { name: 'Message the assistant' })).toBeEnabled();
+	const composer = panel.getByRole('textbox', { name: 'Message the assistant' });
+	await expect(composer).toBeEnabled();
 	await expect(panel).toContainText('Ask about this document by typing');
+	// Opening the panel hands over the caret — you can type straight away.
+	await expect(composer).toBeFocused();
 	// Escape closes the panel without touching the session.
-	await panel.getByRole('textbox', { name: 'Message the assistant' }).press('Escape');
+	await composer.press('Escape');
 	await expect(panel).toHaveCount(0);
+});
+
+test('opens the typed chat with the / shortcut and keeps / typable inside it', async ({ page }) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByRole('textbox', { name: 'Text' }).fill('A paragraph worth asking about.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+
+	const panel = page.getByRole('dialog', { name: 'Type to the assistant' });
+	await expect(panel).toHaveCount(0);
+	await page.keyboard.press('/');
+	await expect(panel).toBeVisible();
+	const composer = panel.getByRole('textbox', { name: 'Message the assistant' });
+	await expect(composer).toBeFocused();
+
+	// Inside the composer the key is just a character, never the shortcut.
+	await page.keyboard.type('what/why?');
+	await expect(composer).toHaveValue('what/why?');
+
+	// It also fires from a focused control, and re-focuses an open panel
+	// rather than toggling it shut.
+	await page.getByRole('button', { name: 'Open document outline' }).focus();
+	await page.keyboard.press('/');
+	await expect(panel).toBeVisible();
+	await expect(composer).toBeFocused();
+	await expect(composer).toHaveValue('what/why?');
 });
 
 test('keeps highlights and margin notes across reloads', async ({ page }) => {
