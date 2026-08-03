@@ -1,9 +1,7 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import {
 		ArrowRight,
-		BookOpenText,
 		BrainCircuit,
 		Clock3,
 		FileText,
@@ -11,8 +9,7 @@
 		Link2,
 		Plus,
 		Search,
-		Trash2,
-		X
+		Trash2
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
@@ -21,19 +18,12 @@
 	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
 	import type { DocumentKind, NormalizedDocument } from '$lib/domain/types';
 	import { appState } from '$lib/state/app-state.svelte';
+	import { libraryAdd } from '$lib/state/library-add.svelte';
 	import { llmState } from '$lib/state/llm.svelte';
 	import { providersState } from '$lib/state/providers.svelte';
 
-	let fileInput: HTMLInputElement | undefined;
 	let dragging = $state(false);
 	let dragDepth = 0;
-	let pasteOpen = $state(false);
-	let pasteTitle = $state('');
-	let pasteText = $state('');
-	let urlOpen = $state(false);
-	let urlValue = $state('');
-	let urlError = $state('');
-	let urlBusy = $state(false);
 	let searchQuery = $state('');
 	let sortOrder = $state('recent');
 	const sortOptions = [
@@ -75,13 +65,6 @@
 		void providersState.initialize();
 	});
 
-	function captureFileInput(node: HTMLInputElement): () => void {
-		fileInput = node;
-		return () => {
-			if (fileInput === node) fileInput = undefined;
-		};
-	}
-
 	function progressFor(document: NormalizedDocument): number {
 		if (!document.playback || !document.segments.length) return 0;
 		const index = document.segments.findIndex(
@@ -122,24 +105,12 @@
 		}[kind];
 	}
 
-	async function acceptFiles(files: File[]): Promise<void> {
-		const imported = await appState.importFiles(files);
-		if (files.length === 1 && imported[0])
-			await goto(resolve(`/read?document=${encodeURIComponent(imported[0].id)}`));
-	}
-
-	async function onFileChange(event: Event): Promise<void> {
-		const target = event.currentTarget as HTMLInputElement;
-		await acceptFiles(Array.from(target.files ?? []));
-		target.value = '';
-	}
-
 	async function onDrop(event: DragEvent): Promise<void> {
 		event.preventDefault();
 		dragDepth = 0;
 		dragging = false;
 		if (!speechCapable) return;
-		await acceptFiles(Array.from(event.dataTransfer?.files ?? []));
+		await libraryAdd.addFiles(Array.from(event.dataTransfer?.files ?? []));
 	}
 
 	function onDragEnter(event: DragEvent): void {
@@ -159,35 +130,6 @@
 		event.preventDefault();
 		dragDepth = Math.max(0, dragDepth - 1);
 		if (dragDepth === 0) dragging = false;
-	}
-
-	async function savePaste(): Promise<void> {
-		const document = await appState.addPastedText(pasteTitle, pasteText);
-		if (!document) return;
-		pasteTitle = '';
-		pasteText = '';
-		pasteOpen = false;
-		await goto(resolve(`/read?document=${encodeURIComponent(document.id)}`));
-	}
-
-	function openUrlDialog(): void {
-		urlError = '';
-		urlOpen = true;
-	}
-
-	async function saveUrl(): Promise<void> {
-		if (!urlValue.trim() || urlBusy) return;
-		urlBusy = true;
-		urlError = '';
-		const document = await appState.addWebArticle(urlValue);
-		urlBusy = false;
-		if (!document) {
-			urlError = appState.errorMessage || 'The page could not be imported.';
-			return;
-		}
-		urlOpen = false;
-		urlValue = '';
-		await goto(resolve(`/read?document=${encodeURIComponent(document.id)}`));
 	}
 
 	async function removeDocument(document: NormalizedDocument): Promise<void> {
@@ -227,7 +169,7 @@
 						class="button library-action"
 						type="button"
 						data-tour="paste-text"
-						onclick={() => (pasteOpen = true)}
+						onclick={() => libraryAdd.openPaste()}
 					>
 						<FileText size={16} /> Paste text
 					</button>
@@ -235,7 +177,7 @@
 						class="button library-action"
 						type="button"
 						data-tour="from-url"
-						onclick={openUrlDialog}
+						onclick={() => libraryAdd.openUrl()}
 					>
 						<Link2 size={16} /> From URL
 					</button>
@@ -243,24 +185,13 @@
 						class="button primary library-action"
 						type="button"
 						data-tour="add-document"
-						onclick={() => fileInput?.click()}
+						onclick={() => libraryAdd.pickFiles()}
 					>
 						<Plus size={16} /> Add document
 					</button>
 				</div>
 			</header>
 		{/if}
-
-		<input
-			id="document-upload"
-			class="visually-hidden"
-			type="file"
-			multiple
-			aria-label="Choose documents to import"
-			accept=".pdf,.docx,.md,.markdown,.txt,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-			{@attach captureFileInput}
-			onchange={onFileChange}
-		/>
 
 		{#if showSetup}
 			<div class="library-welcome setup-welcome">
@@ -381,7 +312,7 @@
 							type="button"
 							data-tour="add-document"
 							disabled={appState.importing}
-							onclick={() => fileInput?.click()}
+							onclick={() => libraryAdd.pickFiles()}
 						>
 							<Plus size={16} /> Add document
 						</button>
@@ -390,7 +321,7 @@
 							type="button"
 							data-tour="paste-text"
 							disabled={appState.importing}
-							onclick={() => (pasteOpen = true)}
+							onclick={() => libraryAdd.openPaste()}
 						>
 							<FileText size={16} /> Paste text
 						</button>
@@ -399,7 +330,7 @@
 							type="button"
 							data-tour="from-url"
 							disabled={appState.importing}
-							onclick={openUrlDialog}
+							onclick={() => libraryAdd.openUrl()}
 						>
 							<Link2 size={16} /> From URL
 						</button>
@@ -421,151 +352,11 @@
 			</div>
 		{/if}
 	</div>
-
-	{#if pasteOpen}
-		<div class="modal-scrim" role="presentation">
-			<div class="paste-dialog" role="dialog" aria-modal="true" aria-labelledby="paste-title">
-				<header>
-					<div>
-						<p class="eyebrow">Quick import</p>
-						<h2 id="paste-title">Paste text or Markdown</h2>
-					</div>
-					<button
-						class="icon-button"
-						type="button"
-						aria-label="Close"
-						onclick={() => (pasteOpen = false)}
-					>
-						<X size={18} />
-					</button>
-				</header>
-				<label class="form-field">
-					<span>Title</span>
-					<input bind:value={pasteTitle} placeholder="Untitled document" />
-				</label>
-				<label class="form-field">
-					<span>Text</span>
-					<textarea bind:value={pasteText} placeholder="Paste text or Markdown to read aloud…"
-					></textarea>
-				</label>
-				<footer>
-					<small>{pasteText.trim().split(/\s+/).filter(Boolean).length} words</small>
-					<div>
-						<button class="button ghost" type="button" onclick={() => (pasteOpen = false)}
-							>Cancel</button
-						>
-						<button
-							class="button primary"
-							type="button"
-							disabled={!pasteText.trim()}
-							onclick={savePaste}
-						>
-							Add to library
-						</button>
-					</div>
-				</footer>
-			</div>
-		</div>
-	{/if}
-
-	{#if urlOpen}
-		<div class="modal-scrim" role="presentation">
-			<div
-				class="paste-dialog url-dialog"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="url-title"
-			>
-				<header>
-					<div>
-						<p class="eyebrow">Quick import</p>
-						<h2 id="url-title">Read a web page</h2>
-					</div>
-					<button
-						class="icon-button"
-						type="button"
-						aria-label="Close"
-						onclick={() => (urlOpen = false)}
-					>
-						<X size={18} />
-					</button>
-				</header>
-				<label class="form-field">
-					<span>Web address</span>
-					<input
-						type="url"
-						bind:value={urlValue}
-						placeholder="https://en.wikipedia.org/wiki/…"
-						disabled={urlBusy}
-						onkeydown={(event) => {
-							if (event.key === 'Enter') {
-								event.preventDefault();
-								void saveUrl();
-							}
-						}}
-					/>
-				</label>
-				<p class="url-hint">
-					Articles and reference pages work best — equations and pictures come along. Pages that
-					refuse direct access are fetched through a public relay.
-				</p>
-				{#if urlError}
-					<p class="url-error" role="alert">{urlError}</p>
-				{/if}
-				<footer>
-					<small aria-live="polite">{urlBusy ? appState.statusMessage : ''}</small>
-					<div>
-						<button class="button ghost" type="button" onclick={() => (urlOpen = false)}
-							>Cancel</button
-						>
-						<button
-							class="button primary"
-							type="button"
-							disabled={!urlValue.trim() || urlBusy}
-							onclick={saveUrl}
-						>
-							{urlBusy ? 'Adding…' : 'Add to library'}
-						</button>
-					</div>
-				</footer>
-			</div>
-		</div>
-	{/if}
-
-	{#if appState.duplicate}
-		<div class="modal-scrim" role="presentation">
-			<div
-				class="duplicate-dialog"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="duplicate-title"
-			>
-				<span class="duplicate-icon"><BookOpenText size={22} /></span>
-				<h2 id="duplicate-title">Already in your library</h2>
-				<p>“{appState.duplicate.existing.title}” matches this file.</p>
-				<footer>
-					<button class="button ghost" type="button" onclick={() => (appState.duplicate = null)}
-						>Cancel</button
-					>
-					<button class="button" type="button" onclick={() => appState.importDuplicateCopy()}
-						>Keep copy</button
-					>
-					<a
-						class="button primary"
-						href={resolve(`/read?document=${encodeURIComponent(appState.duplicate.existing.id)}`)}
-					>
-						Open existing
-					</a>
-				</footer>
-			</div>
-		</div>
-	{/if}
 {/if}
 
 <div class="status-region" aria-live="polite">{appState.statusMessage}</div>
 
 <style>
-	.visually-hidden,
 	.status-region {
 		position: absolute;
 		width: 1px !important;
@@ -980,101 +771,6 @@
 		margin-top: 7px;
 		color: var(--muted);
 		font-size: 10px;
-	}
-
-	.modal-scrim {
-		position: fixed;
-		inset: 0;
-		z-index: 70;
-		display: grid;
-		place-items: center;
-		padding: 20px;
-		background: var(--modal-scrim);
-	}
-
-	.paste-dialog,
-	.duplicate-dialog {
-		width: min(540px, 100%);
-		padding: 22px;
-		border-radius: 8px;
-		background: var(--modal-surface);
-		box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
-	}
-
-	.paste-dialog {
-		display: grid;
-		gap: 17px;
-	}
-
-	.paste-dialog header {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-	}
-
-	.paste-dialog h2,
-	.duplicate-dialog h2 {
-		margin: 0;
-		font-family: var(--font-display);
-		font-size: 21px;
-		font-variation-settings: 'opsz' 24;
-		font-weight: 560;
-		letter-spacing: -0.025em;
-	}
-
-	.paste-dialog textarea {
-		min-height: 230px;
-	}
-
-	.paste-dialog footer,
-	.duplicate-dialog footer {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-	}
-
-	.paste-dialog footer > div,
-	.duplicate-dialog footer {
-		display: flex;
-		gap: 8px;
-	}
-
-	.paste-dialog footer small {
-		color: var(--faint);
-		font-size: 9px;
-	}
-
-	.url-dialog .url-hint {
-		margin: -8px 0 0;
-		color: var(--muted);
-		font-size: 11px;
-		line-height: 1.5;
-	}
-
-	.url-dialog .url-error {
-		margin: -6px 0 0;
-		color: var(--danger, #e5484d);
-		font-size: 11px;
-		line-height: 1.5;
-	}
-
-	.duplicate-icon {
-		color: var(--primary);
-	}
-
-	.duplicate-dialog h2 {
-		margin-top: 17px;
-	}
-
-	.duplicate-dialog p {
-		margin: 7px 0 24px;
-		color: var(--muted);
-		font-size: 11px;
-	}
-
-	.duplicate-dialog footer {
-		justify-content: flex-end;
 	}
 
 	@media (max-width: 900px) {

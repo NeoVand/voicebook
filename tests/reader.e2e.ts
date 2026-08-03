@@ -291,6 +291,36 @@ test('detects and renders pasted Markdown as structured document content', async
 	await expect(readingCanvas).not.toContainText('```ts');
 });
 
+test('sidebar searches the library and adds documents from any page', async ({ page }) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByLabel('Title').fill('Alpha study');
+	await page.getByRole('textbox', { name: 'Text' }).fill('The alpha document body.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+
+	// The plus menu works from the reader: the dialogs live in the layout now.
+	await page.locator('.sidebar-add-button').click();
+	await page.getByRole('menuitem', { name: 'Paste text' }).click();
+	await page.getByLabel('Title').fill('Beta notes');
+	await page.getByRole('textbox', { name: 'Text' }).fill('The beta document body.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page.getByRole('article', { name: 'Beta notes' })).toBeVisible();
+
+	// The sidebar search filters every document, not just what fits.
+	const search = page.locator('.sidebar-search input');
+	await search.fill('alpha');
+	const results = page.locator('.sidebar-documents nav a');
+	await expect(results).toHaveCount(1);
+	await expect(results.first()).toContainText('Alpha study');
+	await results.first().click();
+	await expect(page.getByRole('article', { name: 'Alpha study' })).toBeVisible();
+
+	// Clearing restores the recents.
+	await search.fill('');
+	await expect(page.locator('.sidebar-documents nav a')).toHaveCount(2);
+});
+
 test("Space stays the reader's key even when the play button holds focus", async ({ page }) => {
 	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text', exact: true }).click();

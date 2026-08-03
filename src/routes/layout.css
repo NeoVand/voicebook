@@ -1215,6 +1215,161 @@ h3 {
 	color: var(--text-soft);
 }
 
+.sidebar-quick {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 0 10px;
+}
+
+.sidebar-search {
+	display: flex;
+	min-width: 0;
+	height: 28px;
+	align-items: center;
+	gap: 6px;
+	padding: 0 8px;
+	border: 1px solid var(--line-strong);
+	border-radius: 6px;
+	background: transparent;
+	color: var(--faint);
+	transition: border-color 150ms var(--ease);
+}
+
+.sidebar-search:focus-within {
+	border-color: color-mix(in srgb, var(--primary) 45%, var(--line-strong));
+	color: var(--muted);
+}
+
+.sidebar-search input {
+	min-width: 0;
+	flex: 1;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-soft);
+	font-size: 10.5px;
+}
+
+.sidebar-search input:focus-visible {
+	border: 0;
+	box-shadow: none;
+	outline: none;
+}
+
+.sidebar-search input::placeholder {
+	color: var(--faint);
+}
+
+.sidebar-add {
+	position: relative;
+}
+
+.sidebar-add-button {
+	display: grid;
+	width: 28px;
+	height: 28px;
+	place-items: center;
+	padding: 0;
+	border: 1px solid var(--line-strong);
+	border-radius: 6px;
+	background: transparent;
+	color: var(--faint);
+	cursor: pointer;
+	transition:
+		border-color 150ms var(--ease),
+		color 150ms var(--ease);
+}
+
+.sidebar-add-button:hover,
+.sidebar-add-button[aria-expanded='true'] {
+	border-color: color-mix(in srgb, var(--primary) 45%, var(--line-strong));
+	color: var(--text);
+}
+
+.sidebar-add-menu {
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	z-index: 75;
+	display: grid;
+	width: 158px;
+	gap: 1px;
+	padding: 4px;
+	border: 1px solid var(--line-strong);
+	border-radius: 7px;
+	background: var(--surface-overlay);
+	box-shadow: 0 14px 42px rgba(0, 0, 0, 0.4);
+}
+
+.sidebar-add-menu button,
+.flyout-action {
+	display: flex;
+	width: 100%;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 9px;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--muted);
+	cursor: pointer;
+	font-size: 10.5px;
+	font-weight: 560;
+	text-align: left;
+	transition:
+		background 150ms var(--ease),
+		color 150ms var(--ease);
+}
+
+.sidebar-add-menu button:hover,
+.flyout-action:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+.sidebar-add-menu button svg,
+.flyout-action svg {
+	flex: 0 0 auto;
+	color: var(--faint);
+}
+
+.flyout-search {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 2px;
+	padding: 6px 9px;
+	border-bottom: 1px solid var(--line);
+	color: var(--faint);
+}
+
+.flyout-search input {
+	min-width: 0;
+	flex: 1;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-soft);
+	font-size: 10.5px;
+}
+
+.flyout-search input:focus-visible {
+	border: 0;
+	box-shadow: none;
+	outline: none;
+}
+
+.flyout-empty {
+	margin: 2px 0 4px;
+	padding: 0 9px;
+	color: var(--faint);
+	font-size: 10px;
+}
+
 .sidebar-documents {
 	display: flex;
 	min-height: 0;
@@ -2013,4 +2168,23 @@ select:focus,
 [type='radio']:focus {
 	--tw-ring-color: color-mix(in srgb, var(--focus) 55%, transparent);
 	border-color: var(--focus);
+}
+
+/* Sidebar search fields are compact and borderless — their wrapper draws the
+ * frame and the focus treatment, so the global text-field sizing and ring
+ * must stand down (these come last to win the cascade at equal specificity). */
+.app-sidebar .sidebar-search input:not([type='range']),
+.app-sidebar .flyout-search input:not([type='range']) {
+	height: auto;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	box-shadow: none;
+}
+
+.app-sidebar .sidebar-search input:not([type='range']):focus-visible,
+.app-sidebar .flyout-search input:not([type='range']):focus-visible {
+	border: 0;
+	box-shadow: none;
+	outline: none;
 }
