@@ -321,6 +321,26 @@ test('sidebar searches the library and adds documents from any page', async ({ p
 	await expect(page.locator('.sidebar-documents nav a')).toHaveCount(2);
 });
 
+test('opens the typed-chat panel from the assistant menu', async ({ page }) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByRole('textbox', { name: 'Text' }).fill('A short paragraph to chat about.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+
+	// A tap on the mic opens its menu (after the double-tap window passes).
+	await page.locator('[data-tour="assistant"]').click();
+	await page.getByRole('menuitemcheckbox', { name: /Type instead/ }).click();
+
+	const panel = page.getByRole('dialog', { name: 'Type to the assistant' });
+	await expect(panel).toBeVisible();
+	await expect(panel.getByRole('textbox', { name: 'Message the assistant' })).toBeEnabled();
+	await expect(panel).toContainText('Ask about this document by typing');
+	// Escape closes the panel without touching the session.
+	await panel.getByRole('textbox', { name: 'Message the assistant' }).press('Escape');
+	await expect(panel).toHaveCount(0);
+});
+
 test("Space stays the reader's key even when the play button holds focus", async ({ page }) => {
 	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text', exact: true }).click();

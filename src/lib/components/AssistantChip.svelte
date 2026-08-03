@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Eye, Mic, MicOff, PhoneOff } from '@lucide/svelte';
+	import { Eye, Keyboard, Mic, MicOff, PhoneOff } from '@lucide/svelte';
 	import { tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
@@ -335,6 +335,27 @@
 				<span>
 					<strong>Hands-free conversation</strong>
 					<small>{handsFree ? 'On — it listens continuously' : 'Talk without holding'}</small>
+				</span>
+			</button>
+
+			<button
+				class="menu-item"
+				type="button"
+				role="menuitemcheckbox"
+				aria-checked={realtimeAssistant.chatOpen}
+				onclick={() => {
+					closeMenu();
+					realtimeAssistant.chatOpen = !realtimeAssistant.chatOpen;
+				}}
+			>
+				<Keyboard size={15} strokeWidth={1.8} aria-hidden="true" />
+				<span>
+					<strong>Type instead</strong>
+					<small>
+						{realtimeAssistant.chatOpen
+							? 'Chat panel is open'
+							: 'Ask by typing — replies stay silent'}
+					</small>
 				</span>
 			</button>
 

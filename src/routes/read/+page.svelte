@@ -24,6 +24,7 @@
 	import type { Attachment } from 'svelte/attachments';
 	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import AssistantChat from '$lib/components/AssistantChat.svelte';
 	import AssistantChip from '$lib/components/AssistantChip.svelte';
 	import AudioActionsMenu from '$lib/components/AudioActionsMenu.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
@@ -1792,6 +1793,7 @@
 					/>
 				{/if}
 				<AssistantChip {book} />
+				<AssistantChat {book} />
 			</div>
 
 			<div class="transport">
