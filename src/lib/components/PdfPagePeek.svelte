@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { ChevronLeft, ChevronRight, X } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { ChevronRight, ChevronLeft, X } from '$lib/icons';
 	import type { NormalizedDocument } from '$lib/domain/types';
 	import { openPdfRenderer } from '$lib/services/pdf-pages';
 
@@ -99,7 +100,7 @@
 					disabled={currentPage <= 1}
 					onclick={() => (currentPage -= 1)}
 				>
-					<ChevronLeft size={17} />
+					<Icon icon={ChevronLeft} size={17} />
 				</button>
 				<button
 					class="icon-button"
@@ -108,10 +109,10 @@
 					disabled={currentPage >= pageCount}
 					onclick={() => (currentPage += 1)}
 				>
-					<ChevronRight size={17} />
+					<Icon icon={ChevronRight} size={17} />
 				</button>
 				<button class="icon-button" type="button" aria-label="Close" onclick={onClose}>
-					<X size={17} />
+					<Icon icon={X} size={17} />
 				</button>
 			</div>
 		</header>

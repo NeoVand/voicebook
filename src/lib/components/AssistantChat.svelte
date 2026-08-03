@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { ArrowUp, Globe, Mic, X } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { ArrowUp, Globe, Mic, X } from '$lib/icons';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
 	import type { NormalizedDocument } from '$lib/domain/types';
@@ -188,7 +189,7 @@
 				aria-label="Close chat"
 				onclick={() => (realtimeAssistant.chatOpen = false)}
 			>
-				<X size={14} />
+				<Icon icon={X} size={14} />
 			</button>
 		</header>
 		<div class="chat-messages" {@attach trackList}>
@@ -201,7 +202,9 @@
 			{#each realtimeAssistant.messages as message (message.id)}
 				<div class="chat-message {message.role}" class:pending={message.pending}>
 					{#if message.channel === 'voice'}
-						<span class="chat-voice-mark" title="Spoken"><Mic size={10} aria-hidden="true" /></span>
+						<span class="chat-voice-mark" title="Spoken"
+							><Icon icon={Mic} size={10} aria-hidden="true" /></span
+						>
 					{/if}
 					<span class="chat-text">{message.text}</span>
 				</div>
@@ -209,7 +212,7 @@
 			{#if realtimeAssistant.activity}
 				<div class="chat-activity" role="status">
 					{#if realtimeAssistant.activity === 'searching'}
-						<Globe size={11} aria-hidden="true" />
+						<Icon icon={Globe} size={11} aria-hidden="true" />
 						<span>Searching the web</span>
 					{:else}
 						<span class="sr-only">Thinking</span>
@@ -237,7 +240,7 @@
 				disabled={busy || !draft.trim()}
 				onclick={() => void send()}
 			>
-				<ArrowUp size={14} strokeWidth={2.6} />
+				<Icon icon={ArrowUp} size={14} strokeWidth={2.6} />
 			</button>
 		</footer>
 	</div>

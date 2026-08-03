@@ -1,31 +1,32 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { onDestroy, onMount } from 'svelte';
+	import Icon from '$lib/components/Icon.svelte';
 	import {
 		AlertTriangle,
-		ArrowUpRight,
-		Bug,
-		Check,
 		ClipboardCopy,
-		Cpu,
+		ArrowUpRight,
+		LoaderCircle,
+		BrainCircuit,
+		LockKeyhole,
+		ShieldCheck,
+		PencilLine,
+		RefreshCw,
 		Database,
 		Download,
-		Gauge,
 		Keyboard,
-		LoaderCircle,
-		LockKeyhole,
-		Mic2,
-		PencilLine,
-		Play,
 		ListTree,
-		RefreshCw,
-		ShieldCheck,
-		BrainCircuit,
-		Cloud,
 		Square,
 		Trash2,
-		Wifi
-	} from '@lucide/svelte';
+		Check,
+		Gauge,
+		Cloud,
+		Mic2,
+		Play,
+		Wifi,
+		Bug,
+		Cpu
+	} from '$lib/icons';
 	import { getModel } from '$lib/domain/model-catalog';
 	import { LLM_CATALOG, type LlmModelSpec } from '$lib/domain/llm-catalog';
 	import {
@@ -712,7 +713,7 @@
 						onclick={() => void chooseSpeechEngine('local')}
 					>
 						<span class="engine-radio" aria-hidden="true"></span>
-						<span class="engine-icon"><Mic2 size={16} /></span>
+						<span class="engine-icon"><Icon icon={Mic2} size={16} /></span>
 						<span class="engine-copy">
 							<strong>On-device <em>· Supertonic 3</em></strong>
 							<small>Private and free — ten studio voices, works offline</small>
@@ -731,7 +732,7 @@
 						onclick={() => void chooseSpeechEngine('elevenlabs')}
 					>
 						<span class="engine-radio" aria-hidden="true"></span>
-						<span class="engine-icon cloud"><Cloud size={16} /></span>
+						<span class="engine-icon cloud"><Icon icon={Cloud} size={16} /></span>
 						<span class="engine-copy">
 							<strong>ElevenLabs <em>· premium cloud voices</em></strong>
 							<small>Lifelike narration with word timing — bring your own API key</small>
@@ -798,7 +799,7 @@
 
 				<div class="engine-hero">
 					<div class="engine-name">
-						<span><Mic2 size={20} /></span>
+						<span><Icon icon={Mic2} size={20} /></span>
 						<div>
 							<h3>{model.name}</h3>
 							<p>{model.description}</p>
@@ -818,7 +819,7 @@
 						<p>
 							Review the model’s use restrictions before the one-time download.
 							<a href={model.licenseUrl} target="_blank" rel="external noreferrer">
-								Open terms <ArrowUpRight size={12} />
+								Open terms <Icon icon={ArrowUpRight} size={12} />
 							</a>
 						</p>
 					</div>
@@ -839,7 +840,7 @@
 					</div>
 				{:else if progress.status === 'error'}
 					<div class="inline-error" role="alert">
-						<AlertTriangle size={15} />
+						<Icon icon={AlertTriangle} size={15} />
 						<span>{friendlyError(progress.message)}</span>
 					</div>
 				{/if}
@@ -849,12 +850,12 @@
 					<div>
 						{#if busy}
 							<button class="button" type="button" onclick={cancelInstall}>
-								<Square size={13} fill="currentColor" /> Stop
+								<Icon icon={Square} size={13} fill="currentColor" /> Stop
 							</button>
 						{:else if installed}
-							<span class="installed-mark"><Check size={14} /> Ready to read</span>
+							<span class="installed-mark"><Icon icon={Check} size={14} /> Ready to read</span>
 							<button class="button danger" type="button" onclick={remove}>
-								<Trash2 size={14} /> Remove
+								<Icon icon={Trash2} size={14} /> Remove
 							</button>
 						{:else}
 							<button
@@ -863,7 +864,7 @@
 								disabled={!licenseAccepted}
 								onclick={install}
 							>
-								<Download size={15} />
+								<Icon icon={Download} size={15} />
 								{progress.status === 'error' ? 'Retry install' : 'Install locally'}
 							</button>
 						{/if}
@@ -885,7 +886,7 @@
 						disabled={!providersState.elevenLabsReady}
 						onclick={() => void refreshElevenLabs()}
 					>
-						<RefreshCw size={14} /> Refresh
+						<Icon icon={RefreshCw} size={14} /> Refresh
 					</button>
 				</header>
 				{#if providersState.elevenLabsVoices.length}
@@ -904,7 +905,8 @@
 										<strong>{voice.name}</strong>
 										<small>{voice.description || 'ElevenLabs voice'}</small>
 									</span>
-									<span class="voice-check" aria-hidden="true"><Check size={13} /></span>
+									<span class="voice-check" aria-hidden="true"><Icon icon={Check} size={13} /></span
+									>
 								</button>
 								<button
 									class="preview-button"
@@ -917,9 +919,9 @@
 									onclick={() => previewElevenLabsVoice(voice)}
 								>
 									{#if elPreviewVoiceId === voice.id}
-										<Square size={12} fill="currentColor" />
+										<Icon icon={Square} size={12} fill="currentColor" />
 									{:else}
-										<Play size={15} fill="currentColor" />
+										<Icon icon={Play} size={15} fill="currentColor" />
 									{/if}
 								</button>
 							</li>
@@ -973,7 +975,7 @@
 									<strong>{voice.name}</strong>
 									<small>{voice.gender ?? 'Voice'} · multilingual</small>
 								</span>
-								<span class="voice-check" aria-hidden="true"><Check size={13} /></span>
+								<span class="voice-check" aria-hidden="true"><Icon icon={Check} size={13} /></span>
 							</button>
 							<button
 								class="preview-button"
@@ -987,11 +989,11 @@
 								onclick={() => void previewVoice(voice)}
 							>
 								{#if voice.id === previewVoiceId && previewState === 'loading'}
-									<LoaderCircle class="spin" size={15} />
+									<Icon icon={LoaderCircle} class="spin" size={15} />
 								{:else if voice.id === previewVoiceId && previewState === 'playing'}
-									<Square size={12} fill="currentColor" />
+									<Icon icon={Square} size={12} fill="currentColor" />
 								{:else}
-									<Play size={15} fill="currentColor" />
+									<Icon icon={Play} size={15} fill="currentColor" />
 								{/if}
 							</button>
 						</li>
@@ -999,7 +1001,7 @@
 				</ul>
 				{#if previewError}
 					<div class="inline-error preview-error" role="alert">
-						<AlertTriangle size={15} />
+						<Icon icon={AlertTriangle} size={15} />
 						<span>{previewError}</span>
 					</div>
 				{/if}
@@ -1027,7 +1029,7 @@
 						onclick={() => void chooseDescriptionEngine('local')}
 					>
 						<span class="engine-radio" aria-hidden="true"></span>
-						<span class="engine-icon"><BrainCircuit size={16} /></span>
+						<span class="engine-icon"><Icon icon={BrainCircuit} size={16} /></span>
 						<span class="engine-copy">
 							<strong>On-device</strong>
 							<small>Private and free — runs on this computer’s GPU</small>
@@ -1119,7 +1121,7 @@
 						onclick={() => void chooseStudyEngine('auto')}
 					>
 						<span class="engine-radio" aria-hidden="true"></span>
-						<span class="engine-icon"><ListTree size={16} /></span>
+						<span class="engine-icon"><Icon icon={ListTree} size={16} /></span>
 						<span class="engine-copy">
 							<strong>Automatic</strong>
 							<small>
@@ -1226,11 +1228,11 @@
 								onclick={() => void previewAssistantVoiceSample(voice.id)}
 							>
 								{#if assistantVoiceLoading === voice.id}
-									<LoaderCircle class="spin" size={12} />
+									<Icon icon={LoaderCircle} class="spin" size={12} />
 								{:else if assistantVoicePlaying === voice.id}
-									<Square size={10} />
+									<Icon icon={Square} size={10} />
 								{:else}
-									<Play size={12} />
+									<Icon icon={Play} size={12} />
 								{/if}
 							</button>
 						</div>
@@ -1311,7 +1313,7 @@
 								A cloud engine above still works here.
 							</p>
 						</div>
-						<span class="capability-label"><Cpu size={15} /> WebGPU required</span>
+						<span class="capability-label"><Icon icon={Cpu} size={15} /> WebGPU required</span>
 					</div>
 				{:else}
 					<div class="llm-grid">
@@ -1327,7 +1329,7 @@
 								aria-label={`${spec.label} language model`}
 							>
 								<header class="llm-card-head">
-									<span class="llm-card-icon"><BrainCircuit size={19} /></span>
+									<span class="llm-card-icon"><Icon icon={BrainCircuit} size={19} /></span>
 									<div class="llm-card-name">
 										<h3>{spec.label}</h3>
 										<p>{spec.tagline}</p>
@@ -1355,7 +1357,7 @@
 										<dd>
 											<a href={spec.licenseUrl} target="_blank" rel="external noreferrer">
 												{spec.license}
-												<ArrowUpRight size={11} />
+												<Icon icon={ArrowUpRight} size={11} />
 											</a>
 										</dd>
 									</div>
@@ -1392,12 +1394,12 @@
 										<p class="llm-card-note">{offer.reason ?? 'Unavailable on this device'}</p>
 									{:else if specActivating}
 										<button class="button" type="button" onclick={cancelLlmInstall}>
-											<Square size={13} fill="currentColor" /> Stop
+											<Icon icon={Square} size={13} fill="currentColor" /> Stop
 										</button>
 									{:else if specInstalled}
 										{#if !specSelected}
 											<button class="button primary" type="button" onclick={() => useLlm(spec)}>
-												<Check size={14} /> Use this model
+												<Icon icon={Check} size={14} /> Use this model
 											</button>
 										{/if}
 										<button
@@ -1406,7 +1408,7 @@
 											disabled={llmBusy}
 											onclick={() => removeLlm(spec)}
 										>
-											<Trash2 size={14} /> Remove
+											<Icon icon={Trash2} size={14} /> Remove
 										</button>
 									{:else}
 										<button
@@ -1415,7 +1417,7 @@
 											disabled={!llmState.acceptedLicenses.includes(spec.id) || llmBusy}
 											onclick={() => installLlm(spec)}
 										>
-											<Download size={15} /> Download · {spec.sizeMb} MB
+											<Icon icon={Download} size={15} /> Download · {spec.sizeMb} MB
 										</button>
 									{/if}
 								</footer>
@@ -1425,7 +1427,7 @@
 
 					{#if llmError || llmState.error}
 						<div class="inline-error" role="alert">
-							<AlertTriangle size={15} />
+							<Icon icon={AlertTriangle} size={15} />
 							<span>{llmError || llmState.error}</span>
 						</div>
 					{/if}
@@ -1487,7 +1489,7 @@
 
 			{#if narrationState.error}
 				<div class="inline-error" role="alert">
-					<AlertTriangle size={15} />
+					<Icon icon={AlertTriangle} size={15} />
 					<span>{narrationState.error}</span>
 				</div>
 			{/if}
@@ -1501,7 +1503,8 @@
 						disabled={regenerating || !narrationState.engineAvailable}
 						onclick={regenerateNarrations}
 					>
-						{#if regenerating}<LoaderCircle class="spin" size={15} />{:else}<RefreshCw
+						{#if regenerating}<Icon icon={LoaderCircle} class="spin" size={15} />{:else}<Icon
+								icon={RefreshCw}
 								size={15}
 							/>{/if}
 						Regenerate all descriptions
@@ -1550,7 +1553,7 @@
 					<p>Want different wording? Start from this style and make it yours.</p>
 					<div>
 						<button class="button" type="button" onclick={() => void customizePreset()}>
-							<PencilLine size={14} /> Customize prompts
+							<Icon icon={PencilLine} size={14} /> Customize prompts
 						</button>
 					</div>
 				</footer>
@@ -1565,7 +1568,7 @@
 							</div>
 							<div class="prompt-editor-actions">
 								{#if promptSavedKey === field.key}
-									<span class="installed-mark"><Check size={13} /> Saved</span>
+									<span class="installed-mark"><Icon icon={Check} size={13} /> Saved</span>
 								{/if}
 								<button
 									class="button"
@@ -1616,7 +1619,7 @@
 					</div>
 					<div class="prompt-editor-actions">
 						{#if explainSaved}
-							<span class="installed-mark"><Check size={13} /> Saved</span>
+							<span class="installed-mark"><Icon icon={Check} size={13} /> Saved</span>
 						{/if}
 						<button
 							class="button"
@@ -1735,11 +1738,11 @@
 				<div>
 					{#if !appState.storage.persisted}
 						<button class="button" type="button" onclick={makePersistent}>
-							<ShieldCheck size={15} /> Keep storage
+							<Icon icon={ShieldCheck} size={15} /> Keep storage
 						</button>
 					{/if}
 					<button class="button danger" type="button" disabled={storageBusy} onclick={clearAudio}>
-						<Trash2 size={15} /> Clear audio
+						<Icon icon={Trash2} size={15} /> Clear audio
 					</button>
 				</div>
 			</footer>
@@ -1756,7 +1759,10 @@
 				<p>The app reloads into first-run setup. This cannot be undone.</p>
 				<div>
 					<button class="button danger" type="button" disabled={resetting} onclick={factoryReset}>
-						{#if resetting}<LoaderCircle class="spin" size={15} />{:else}<Trash2 size={15} />{/if}
+						{#if resetting}<Icon icon={LoaderCircle} class="spin" size={15} />{:else}<Icon
+								icon={Trash2}
+								size={15}
+							/>{/if}
 						Erase all data
 					</button>
 				</div>
@@ -1773,28 +1779,28 @@
 
 			<div class="capability-list">
 				<div>
-					<Cpu size={17} />
+					<Icon icon={Cpu} size={17} />
 					<span><strong>WebGPU</strong><small>Hardware-accelerated inference</small></span>
 					<b class:available={appState.capabilities.webgpu}>
 						{appState.capabilities.webgpu ? 'Available' : 'Unavailable'}
 					</b>
 				</div>
 				<div>
-					<Gauge size={17} />
+					<Icon icon={Gauge} size={17} />
 					<span><strong>16-bit shaders</strong><small>Optional GPU feature</small></span>
 					<b class:available={appState.capabilities.shaderF16}>
 						{appState.capabilities.shaderF16 ? 'Available' : 'Unavailable'}
 					</b>
 				</div>
 				<div>
-					<Mic2 size={17} />
+					<Icon icon={Mic2} size={17} />
 					<span><strong>WebCodecs</strong><small>Compact Opus audio cache</small></span>
 					<b class:available={appState.capabilities.webCodecs}>
 						{appState.capabilities.webCodecs ? 'Available' : 'WAV fallback'}
 					</b>
 				</div>
 				<div>
-					<Database size={17} />
+					<Icon icon={Database} size={17} />
 					<span
 						><strong>Private file storage</strong><small>Origin-private source files</small></span
 					>
@@ -1808,14 +1814,17 @@
 		<section class="settings-section diagnostics-section" aria-labelledby="diagnostics-title">
 			<header class="section-title">
 				<div>
-					<h2 id="diagnostics-title"><Bug size={16} /> Local diagnostics</h2>
+					<h2 id="diagnostics-title"><Icon icon={Bug} size={16} /> Local diagnostics</h2>
 					<p>
 						Records model loading, speech generation, worker errors, and interrupted browser
 						sessions on this device. Nothing is transmitted automatically.
 					</p>
 				</div>
 				<button class="button" type="button" onclick={copyDiagnostics}>
-					{#if diagnosticsCopied}<Check size={14} /> Copied{:else}<ClipboardCopy size={14} /> Copy report{/if}
+					{#if diagnosticsCopied}<Icon icon={Check} size={14} /> Copied{:else}<Icon
+							icon={ClipboardCopy}
+							size={14}
+						/> Copy report{/if}
 				</button>
 			</header>
 			<details class="diagnostics-report">
@@ -1828,19 +1837,19 @@
 			<section class="settings-section compact" aria-labelledby="privacy-title">
 				<header class="section-title">
 					<div>
-						<h2 id="privacy-title"><LockKeyhole size={16} /> Privacy</h2>
+						<h2 id="privacy-title"><Icon icon={LockKeyhole} size={16} /> Privacy</h2>
 					</div>
 				</header>
 				<ul class="plain-list">
-					<li><ShieldCheck size={14} /> Document content stays in this browser.</li>
-					<li><Wifi size={14} /> Model downloads contact Hugging Face.</li>
-					<li><Database size={14} /> No account, analytics, or cloud sync.</li>
+					<li><Icon icon={ShieldCheck} size={14} /> Document content stays in this browser.</li>
+					<li><Icon icon={Wifi} size={14} /> Model downloads contact Hugging Face.</li>
+					<li><Icon icon={Database} size={14} /> No account, analytics, or cloud sync.</li>
 				</ul>
 			</section>
 			<section class="settings-section compact" aria-labelledby="shortcuts-title">
 				<header class="section-title">
 					<div>
-						<h2 id="shortcuts-title"><Keyboard size={16} /> Reader shortcuts</h2>
+						<h2 id="shortcuts-title"><Icon icon={Keyboard} size={16} /> Reader shortcuts</h2>
 					</div>
 				</header>
 				<dl class="shortcut-list">

@@ -1,17 +1,18 @@
 <script lang="ts">
+	import Icon from '$lib/components/Icon.svelte';
 	import {
 		AlertTriangle,
 		ArrowUpRight,
-		AudioLines,
 		BrainCircuit,
-		Check,
-		Download,
 		LoaderCircle,
-		Mic2,
-		Play,
 		ShieldCheck,
-		Square
-	} from '@lucide/svelte';
+		AudioLines,
+		Download,
+		Square,
+		Check,
+		Mic2,
+		Play
+	} from '$lib/icons';
 	import { onMount } from 'svelte';
 	import ApiKeyField from '$lib/components/ApiKeyField.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
@@ -182,12 +183,12 @@
 		</div>
 		<div class="panel-foot">
 			{#if speechInstalled}
-				<span class="model-state"><Check size={12} strokeWidth={2.6} /> Installed</span>
+				<span class="model-state"><Icon icon={Check} size={12} strokeWidth={2.6} /> Installed</span>
 			{:else}
 				<span class="model-size">{model.sizeMb} MB</span>
 			{/if}
 			<a class="model-license" href={model.licenseUrl} target="_blank" rel="external noreferrer">
-				{model.license} license <ArrowUpRight size={10} />
+				{model.license} license <Icon icon={ArrowUpRight} size={10} />
 			</a>
 		</div>
 		{#if installingSpeech}
@@ -207,13 +208,13 @@
 		</div>
 		<div class="panel-foot">
 			{#if llmInstalled}
-				<span class="model-state"><Check size={12} strokeWidth={2.6} /> Installed</span>
+				<span class="model-state"><Icon icon={Check} size={12} strokeWidth={2.6} /> Installed</span>
 			{:else}
 				<span class="model-size">{llmSpec.sizeMb} MB</span>
 			{/if}
 			<a class="model-license" href={llmSpec.licenseUrl} target="_blank" rel="external noreferrer">
 				{llmSpec.license}
-				<ArrowUpRight size={10} />
+				<Icon icon={ArrowUpRight} size={10} />
 			</a>
 		</div>
 		{#if installingLlm}
@@ -254,7 +255,7 @@
 	{#if compact}
 		<div class="setup-models" role="list">
 			<div class="model-row" class:done={speechInstalled} role="listitem">
-				<span class="model-icon" aria-hidden="true"><Mic2 size={17} /></span>
+				<span class="model-icon" aria-hidden="true"><Icon icon={Mic2} size={17} /></span>
 				<div class="model-copy">
 					<strong>Reading voice</strong>
 					<small>{model.name} · {model.voices.length} studio voices · 31 languages</small>
@@ -264,7 +265,7 @@
 						target="_blank"
 						rel="external noreferrer"
 					>
-						{model.license} license <ArrowUpRight size={10} />
+						{model.license} license <Icon icon={ArrowUpRight} size={10} />
 					</a>
 					{#if installingSpeech}
 						<div class="model-progress" aria-live="polite">
@@ -275,7 +276,9 @@
 				</div>
 				<div class="model-meta">
 					{#if speechInstalled}
-						<span class="model-state"><Check size={12} strokeWidth={2.6} /> Installed</span>
+						<span class="model-state"
+							><Icon icon={Check} size={12} strokeWidth={2.6} /> Installed</span
+						>
 					{:else if installingSpeech}
 						<span class="model-size">{Math.round(progress.progress)}%</span>
 					{:else}
@@ -285,7 +288,7 @@
 			</div>
 			{#if llmEligible}
 				<div class="model-row" class:done={llmInstalled} role="listitem">
-					<span class="model-icon" aria-hidden="true"><BrainCircuit size={17} /></span>
+					<span class="model-icon" aria-hidden="true"><Icon icon={BrainCircuit} size={17} /></span>
 					<div class="model-copy">
 						<strong>Visual descriptions</strong>
 						<small>{llmSpec.label} · speaks equations, tables, and diagrams</small>
@@ -296,7 +299,7 @@
 							rel="external noreferrer"
 						>
 							{llmSpec.license}
-							<ArrowUpRight size={10} />
+							<Icon icon={ArrowUpRight} size={10} />
 						</a>
 						{#if installingLlm}
 							<div class="model-progress" aria-live="polite">
@@ -311,7 +314,9 @@
 					</div>
 					<div class="model-meta">
 						{#if llmInstalled}
-							<span class="model-state"><Check size={12} strokeWidth={2.6} /> Installed</span>
+							<span class="model-state"
+								><Icon icon={Check} size={12} strokeWidth={2.6} /> Installed</span
+							>
 						{:else if installingLlm}
 							<span class="model-size">{llmState.download?.percent ?? 0}%</span>
 						{:else}
@@ -325,7 +330,7 @@
 		<div class="engine-cards">
 			<article class="engine-card" aria-label="Reading voice">
 				<header class="card-head">
-					<span class="card-icon" aria-hidden="true"><Mic2 size={15} /></span>
+					<span class="card-icon" aria-hidden="true"><Icon icon={Mic2} size={15} /></span>
 					<strong>Reading voice</strong>
 				</header>
 				<div class="choice-seg" role="radiogroup" aria-label="Reading voice source">
@@ -353,7 +358,7 @@
 				{:else}
 					<div class="choice-panel">
 						<div class="panel-model">
-							<strong><AudioLines size={13} aria-hidden="true" /> ElevenLabs</strong>
+							<strong><Icon icon={AudioLines} size={13} aria-hidden="true" /> ElevenLabs</strong>
 							<small>Studio voices, no download · usage billed to your key</small>
 						</div>
 						<ApiKeyField
@@ -371,7 +376,7 @@
 
 			<article class="engine-card" aria-label="Visual descriptions">
 				<header class="card-head">
-					<span class="card-icon" aria-hidden="true"><BrainCircuit size={15} /></span>
+					<span class="card-icon" aria-hidden="true"><Icon icon={BrainCircuit} size={15} /></span>
 					<strong>Visual descriptions</strong>
 				</header>
 				<div class="choice-seg" role="radiogroup" aria-label="Visual descriptions source">
@@ -420,7 +425,11 @@
 								>
 									<ProviderLogo provider={spec.id} size={14} />
 									<span>{spec.label}</span>
-									{#if providersState.hasKey(spec.id)}<Check size={11} strokeWidth={2.6} />{/if}
+									{#if providersState.hasKey(spec.id)}<Icon
+											icon={Check}
+											size={11}
+											strokeWidth={2.6}
+										/>{/if}
 								</button>
 							{/each}
 						</div>
@@ -460,7 +469,9 @@
 	{#if totalMb > 0}
 		<label class="license-check">
 			<input type="checkbox" checked={consented} disabled={installing} onchange={updateConsent} />
-			<span class="check-box" aria-hidden="true"><Check size={14} strokeWidth={2.5} /></span>
+			<span class="check-box" aria-hidden="true"
+				><Icon icon={Check} size={14} strokeWidth={2.5} /></span
+			>
 			<span>I accept the model licenses linked above</span>
 		</label>
 	{/if}
@@ -468,7 +479,7 @@
 	<footer class="setup-actions">
 		{#if installing}
 			<button class="button" type="button" onclick={cancelInstall}>
-				<Square size={12} fill="currentColor" /> Stop for now
+				<Icon icon={Square} size={12} fill="currentColor" /> Stop for now
 			</button>
 		{:else if totalMb > 0}
 			<button
@@ -477,7 +488,10 @@
 				disabled={!consented || Boolean(missingKeyHint)}
 				onclick={install}
 			>
-				{#if busy}<LoaderCircle class="spin" size={16} />{:else}<Download size={16} />{/if}
+				{#if busy}<Icon icon={LoaderCircle} class="spin" size={16} />{:else}<Icon
+						icon={Download}
+						size={16}
+					/>{/if}
 				{downloadLabel}
 			</button>
 		{:else if !compact}
@@ -487,7 +501,7 @@
 				disabled={Boolean(missingKeyHint)}
 				onclick={startListening}
 			>
-				<Play size={15} /> Start listening
+				<Icon icon={Play} size={15} /> Start listening
 			</button>
 		{/if}
 		{#if missingKeyHint && !installing}
@@ -499,17 +513,17 @@
 		<div class="install-state" aria-live="polite">
 			{#if localError || progress.status === 'error'}
 				<div class="setup-error" role="alert">
-					<AlertTriangle size={15} />
+					<Icon icon={AlertTriangle} size={15} />
 					<span>{localError || friendlyError(progress.message)}</span>
 				</div>
 			{:else if llmError}
 				<div class="setup-error" role="alert">
-					<AlertTriangle size={15} />
+					<Icon icon={AlertTriangle} size={15} />
 					<span>{llmError}</span>
 				</div>
 			{:else if appState.runtimeNotice}
 				<div class="recovery-note">
-					<ShieldCheck size={15} />
+					<Icon icon={ShieldCheck} size={15} />
 					<span>{appState.runtimeNotice}</span>
 				</div>
 			{/if}

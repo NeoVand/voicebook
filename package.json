@@ -67,7 +67,6 @@
 		"@huggingface/hub": "^2.13.3",
 		"@huggingface/transformers": "^4.2.0",
 		"@llamaindex/liteparse-wasm": "^2.8.0",
-		"@lucide/svelte": "1.25.0",
 		"@mediabunny/mp3-encoder": "1.50.9",
 		"@soundtouchjs/audio-worklet": "2.1.0",
 		"@tesseract.js-data/eng": "^1.0.0",

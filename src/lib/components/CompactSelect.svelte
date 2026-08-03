@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Check } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { Check } from '$lib/icons';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
 
@@ -167,7 +168,7 @@
 					onclick={() => selectOption(index)}
 				>
 					<span class="option-check" aria-hidden="true">
-						<Check size={13} strokeWidth={2.2} />
+						<Icon icon={Check} size={13} strokeWidth={2.2} />
 					</span>
 					<span>{option.label}</span>
 				</button>

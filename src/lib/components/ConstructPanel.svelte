@@ -15,7 +15,8 @@
 </script>
 
 <script lang="ts">
-	import { Check, LoaderCircle, PencilLine, RefreshCw, Sparkles, X } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { LoaderCircle, PencilLine, RefreshCw, Sparkles, Check, X } from '$lib/icons';
 	import hljs from 'highlight.js/lib/core';
 	import latex from 'highlight.js/lib/languages/latex';
 	import markdown from 'highlight.js/lib/languages/markdown';
@@ -132,7 +133,7 @@
 			aria-label={explaining ? 'Stop explaining' : `Explain this ${noun.toLowerCase()} aloud`}
 			onclick={(event) => onExplain?.(event)}
 		>
-			<Sparkles size={12} /> Explain
+			<Icon icon={Sparkles} size={12} /> Explain
 		</button>
 	{/if}
 	<details>
@@ -153,7 +154,7 @@
 						<div class="panel-item-head">
 							{#if item.label}<span class="panel-item-label">{item.label}</span>{/if}
 							<span class={`panel-item-status ${status.kind}`} title={item.entry?.modelId}>
-								{#if status.kind === 'busy'}<LoaderCircle class="spin" size={11} />{/if}
+								{#if status.kind === 'busy'}<Icon icon={LoaderCircle} class="spin" size={11} />{/if}
 								{status.label}
 							</span>
 							<span class="panel-item-actions">
@@ -165,7 +166,7 @@
 										aria-label={`Edit the spoken text${item.label ? ` for ${item.label}` : ''}`}
 										onclick={() => beginEdit(item)}
 									>
-										<PencilLine size={13} />
+										<Icon icon={PencilLine} size={13} />
 									</button>
 									{#if onRegenerate && item.canRegenerate !== false}
 										<button
@@ -176,7 +177,7 @@
 											disabled={Boolean(item.regenerating)}
 											onclick={() => void onRegenerate(item.constructId)}
 										>
-											<RefreshCw size={13} />
+											<Icon icon={RefreshCw} size={13} />
 										</button>
 									{/if}
 								{/if}
@@ -202,10 +203,10 @@
 									disabled={!draft.trim()}
 									onclick={() => void saveEdit()}
 								>
-									<Check size={13} /> Save
+									<Icon icon={Check} size={13} /> Save
 								</button>
 								<button type="button" class="panel-cancel" onclick={cancelEdit}>
-									<X size={13} /> Cancel
+									<Icon icon={X} size={13} /> Cancel
 								</button>
 							</div>
 						{:else}

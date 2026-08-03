@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Check, Copy } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { Check, Copy } from '$lib/icons';
 	import hljs from 'highlight.js/lib/core';
 	import bash from 'highlight.js/lib/languages/bash';
 	import cpp from 'highlight.js/lib/languages/cpp';
@@ -112,7 +113,8 @@
 			aria-label={copyState === 'copied' ? 'Code copied' : 'Copy code'}
 			onclick={() => void copyCode()}
 		>
-			{#if copyState === 'copied'}<Check size={13} aria-hidden="true" /> Copied{:else}<Copy
+			{#if copyState === 'copied'}<Icon icon={Check} size={13} aria-hidden="true" /> Copied{:else}<Icon
+					icon={Copy}
 					size={13}
 					aria-hidden="true"
 				/>

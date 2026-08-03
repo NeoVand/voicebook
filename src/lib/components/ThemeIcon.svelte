@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/components/Icon.svelte';
 	import {
 		Cloud,
 		CloudRain,
@@ -10,7 +11,7 @@
 		Sun,
 		TreePine,
 		Waves
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import type { ThemeId } from '$lib/state/appearance.svelte';
 
 	let { theme, size = 16 }: { theme: ThemeId; size?: number } = $props();
@@ -28,7 +29,7 @@
 		aurora: Sparkles
 	} as const;
 
-	const Icon = $derived(ICONS[theme]);
+	const glyph = $derived(ICONS[theme]);
 </script>
 
-<Icon {size} />
+<Icon icon={glyph} {size} />
