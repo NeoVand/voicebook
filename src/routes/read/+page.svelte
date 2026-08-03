@@ -8,10 +8,13 @@
 		Check,
 		ChevronLeft,
 		ChevronRight,
+		GraduationCap,
 		Highlighter,
 		LoaderCircle,
 		EyeOff,
+		ListTree,
 		LocateFixed,
+		MessagesSquare,
 		MoonStar,
 		Pause,
 		Play,
@@ -20,10 +23,13 @@
 		Sparkles,
 		Square,
 		StickyNote,
+		Trash2,
+		TriangleAlert,
 		Volume2,
 		X
 	} from '@lucide/svelte';
 	import { onMount } from 'svelte';
+	import { slide } from 'svelte/transition';
 	import type { Attachment } from 'svelte/attachments';
 	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -79,6 +85,19 @@
 	let outlinePanelTab = $state<'contents' | 'study'>('contents');
 	let memoryEditId = $state<string>();
 	let memoryDraft = $state('');
+	/** Study notes open one at a time by default — the panel is a map first,
+	 * and reading every summary at once is what made it a wall of text. */
+	const expandedStudyNodes = new SvelteSet<string>();
+	let overviewOpen = $state(true);
+
+	function toggleStudyNode(id: string): void {
+		if (expandedStudyNodes.has(id)) expandedStudyNodes.delete(id);
+		else expandedStudyNodes.add(id);
+	}
+
+	let studyReadyCount = $derived(
+		(book?.study?.nodes ?? []).filter((node) => node.status === 'ready').length
+	);
 
 	function beginMemoryEdit(id: string, text: string): void {
 		memoryEditId = id;
@@ -544,6 +563,8 @@
 		realtimeAssistant.stop();
 		narrationStartAction = undefined;
 		annotationEditor = undefined;
+		expandedStudyNodes.clear();
+		overviewOpen = true;
 		closeExplainBox();
 		outlineNavigationBlockId = undefined;
 		activeOutlineBlockId = undefined;
@@ -1747,6 +1768,7 @@
 							aria-pressed={outlinePanelTab === 'contents'}
 							onclick={() => (outlinePanelTab = 'contents')}
 						>
+							<ListTree size={13} strokeWidth={2} aria-hidden="true" />
 							Contents
 						</button>
 						<button
@@ -1756,6 +1778,7 @@
 							aria-pressed={outlinePanelTab === 'study'}
 							onclick={() => (outlinePanelTab = 'study')}
 						>
+							<GraduationCap size={13} strokeWidth={2} aria-hidden="true" />
 							Study
 						</button>
 					</div>
@@ -1777,54 +1800,117 @@
 							</p>
 						{:else}
 							{#if studyState.working}
-								<p class="study-progress" role="status">
-									Summarizing sections… {Math.min(
-										studyState.done,
-										studyState.total
-									)}/{studyState.total}
-								</p>
+								{@const done = Math.min(studyState.done, studyState.total)}
+								<div class="study-progress" role="status">
+									<span class="study-progress-head">
+										<span class="study-spin"><LoaderCircle size={11} aria-hidden="true" /></span>
+										Summarizing sections
+										<em>{done}/{studyState.total}</em>
+									</span>
+									<span class="study-track" aria-hidden="true">
+										<i
+											style:width={`${studyState.total ? Math.round((done / studyState.total) * 100) : 0}%`}
+										></i>
+									</span>
+								</div>
 							{:else if studyState.error && !book.study?.abstract}
-								<p class="study-progress failed" role="status">{studyState.error}</p>
+								<p class="study-alert" role="status">
+									<TriangleAlert size={11} aria-hidden="true" />
+									{studyState.error}
+								</p>
 							{/if}
 							{#if book.study?.abstract}
-								<p class="study-abstract">{book.study.abstract}</p>
-							{/if}
-							<div class="study-nodes">
-								{#each book.study?.nodes ?? [] as node (node.id)}
-									{@const nodeBlock = blockFor(node.blockId)}
+								<div class="study-card" class:open={overviewOpen}>
 									<button
 										type="button"
-										class="study-node"
-										style={'--outline-level:' + Math.max(0, node.level - 1)}
-										onclick={() => nodeBlock && navigateToOutlineBlock(nodeBlock)}
+										class="study-card-head"
+										aria-expanded={overviewOpen}
+										onclick={() => (overviewOpen = !overviewOpen)}
 									>
-										<span class="study-node-title">{node.title}</span>
-										{#if node.status === 'ready' && node.summary}
-											<span class="study-node-summary">{node.summary}</span>
-										{:else if node.status === 'pending'}
-											<span class="study-node-summary pending">Summarizing…</span>
-										{:else}
-											<span class="study-node-summary failed">Not summarized yet</span>
-										{/if}
+										<Sparkles size={12} aria-hidden="true" />
+										<strong>Overview</strong>
+										<span class="study-chevron"><ChevronRight size={13} aria-hidden="true" /></span>
 									</button>
-								{/each}
-							</div>
+									{#if overviewOpen}
+										<p class="study-card-body" transition:slide={{ duration: 160 }}>
+											{book.study.abstract}
+										</p>
+									{/if}
+								</div>
+							{/if}
+							{#if book.study?.nodes.length}
+								<div class="study-group">
+									<span>Sections</span>
+									<em>{studyReadyCount}/{book.study.nodes.length}</em>
+								</div>
+								<div class="study-nodes">
+									{#each book.study.nodes as node (node.id)}
+										{@const open = expandedStudyNodes.has(node.id)}
+										{@const nodeBlock = blockFor(node.blockId)}
+										<div
+											class="study-node"
+											class:open
+											style={'--outline-level:' + Math.max(0, node.level - 1)}
+										>
+											<button
+												type="button"
+												class="study-node-row"
+												aria-expanded={open}
+												onclick={() => toggleStudyNode(node.id)}
+											>
+												<span class="study-pip {node.status}" aria-hidden="true"></span>
+												<span class="study-node-title">{node.title}</span>
+												<span class="study-chevron"
+													><ChevronRight size={12} aria-hidden="true" /></span
+												>
+											</button>
+											{#if open}
+												<div class="study-node-body" transition:slide={{ duration: 160 }}>
+													{#if node.status === 'ready' && node.summary}
+														<p>{node.summary}</p>
+													{:else if node.status === 'pending'}
+														<p class="quiet">Summarizing…</p>
+													{:else}
+														<p class="quiet">Not summarized yet.</p>
+													{/if}
+													{#if nodeBlock}
+														<button
+															type="button"
+															class="study-jump"
+															onclick={() => navigateToOutlineBlock(nodeBlock)}
+														>
+															<LocateFixed size={11} aria-hidden="true" />
+															Go to section
+														</button>
+													{/if}
+												</div>
+											{/if}
+										</div>
+									{/each}
+								</div>
+							{/if}
 							<div class="study-actions">
 								<button
 									type="button"
 									onclick={() => void studyState.rebuild()}
 									disabled={!studyState.available || studyState.working}
 								>
+									<RotateCw size={11} aria-hidden="true" />
 									Rebuild
 								</button>
 								<button type="button" onclick={() => studyState.clear()} disabled={!book.study}>
+									<Trash2 size={11} aria-hidden="true" />
 									Clear
 								</button>
 							</div>
 						{/if}
 						{#if book.memories?.length}
 							<div class="study-memories">
-								<span class="study-memories-label">Conversation notes</span>
+								<span class="study-group study-memories-label">
+									<MessagesSquare size={11} aria-hidden="true" />
+									Conversation notes
+									<em>{book.memories.length}</em>
+								</span>
 								{#each book.memories as memory (memory.id)}
 									<div class="study-memory">
 										{#if memoryEditId === memory.id}
@@ -2580,16 +2666,19 @@
 	}
 
 	.outline-tab {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
 		padding: 0;
 		border: 0;
 		background: transparent;
 		color: var(--faint);
 		cursor: pointer;
 		font-family: var(--font-display);
-		font-size: 15px;
-		font-variation-settings: 'opsz' 18;
+		font-size: 12.5px;
+		font-variation-settings: 'opsz' 14;
 		font-weight: 680;
-		letter-spacing: -0.015em;
+		letter-spacing: -0.01em;
 		transition: color 150ms var(--ease);
 	}
 
@@ -2607,12 +2696,19 @@
 		align-content: start;
 		overflow-y: auto;
 		gap: 10px;
-		padding: 2px 14px 16px;
+		/* Explicit track: the ellipsised section titles never wrap, and an
+		   auto track would size to them and push every row past the panel. */
+		grid-template-columns: minmax(0, 1fr);
+		overscroll-behavior: contain;
+		/* Clears the floating player dock, exactly like the contents list —
+		   without this the last notes sit behind the transport, unreachable. */
+		padding: 2px 14px calc(var(--player-height) + 16px);
+		scroll-padding-bottom: calc(var(--player-height) + 16px);
 		scrollbar-width: thin;
+		flex: 1;
 	}
 
-	.study-hint,
-	.study-progress {
+	.study-hint {
 		margin: 0;
 		color: var(--faint);
 		font-family: var(--font-ui);
@@ -2621,70 +2717,256 @@
 	}
 
 	.study-progress {
+		display: grid;
+		gap: 5px;
+	}
+
+	.study-progress-head {
+		display: flex;
+		align-items: center;
+		gap: 5px;
 		color: var(--muted);
+		font-family: var(--font-ui);
+		font-size: 10.5px;
 	}
 
-	.study-progress.failed {
-		color: var(--danger);
+	.study-progress-head em {
+		margin-left: auto;
+		color: var(--faint);
+		font-style: normal;
+		font-variant-numeric: tabular-nums;
 	}
 
-	.study-abstract {
+	.study-spin {
+		display: inline-flex;
+		animation: study-spin 1s linear infinite;
+		color: var(--primary);
+	}
+
+	@keyframes study-spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+
+	.study-track {
+		overflow: hidden;
+		height: 3px;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--text) 9%, transparent);
+	}
+
+	.study-track i {
+		display: block;
+		height: 100%;
+		border-radius: 999px;
+		background: var(--primary);
+		transition: width 300ms var(--ease);
+	}
+
+	.study-alert {
+		display: flex;
+		align-items: flex-start;
+		gap: 5px;
 		margin: 0;
-		padding: 9px 11px;
+		color: var(--danger);
+		font-family: var(--font-ui);
+		font-size: 10.5px;
+		line-height: 1.5;
+	}
+
+	/* The overview and each section note stay folded until asked for — the
+	   panel reads as a map of the document, not a second copy of it. */
+	.study-card {
 		border: 1px solid var(--line);
-		border-radius: 8px;
-		background: color-mix(in srgb, var(--primary) 5%, transparent);
+		border-radius: 9px;
+		background: color-mix(in srgb, var(--primary) 4%, transparent);
+	}
+
+	.study-card-head,
+	.study-node-row {
+		display: flex;
+		width: 100%;
+		align-items: center;
+		gap: 6px;
+		border: 0;
+		background: transparent;
+		color: var(--text-soft);
+		cursor: pointer;
+		font-family: var(--font-ui);
+		text-align: left;
+	}
+
+	.study-card-head {
+		padding: 8px 10px;
+		color: var(--primary);
+	}
+
+	.study-card-head strong {
+		color: var(--text-soft);
+		font-size: 10px;
+		font-weight: 680;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+
+	.study-chevron {
+		display: inline-flex;
+		margin-left: auto;
+		color: var(--faint);
+		transition: transform 160ms var(--ease);
+	}
+
+	.study-card.open .study-chevron,
+	.study-node.open .study-chevron {
+		transform: rotate(90deg);
+	}
+
+	.study-card-body {
+		margin: 0;
+		padding: 0 10px 9px;
 		color: var(--text-soft);
 		font-family: var(--font-ui);
 		font-size: 11px;
 		line-height: 1.6;
 	}
 
+	.study-group {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin-top: 2px;
+		color: var(--faint);
+		font-family: var(--font-ui);
+		font-size: 8.5px;
+		font-weight: 660;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+	}
+
+	.study-group em {
+		margin-left: auto;
+		font-style: normal;
+		font-variant-numeric: tabular-nums;
+		letter-spacing: 0.02em;
+	}
+
 	.study-nodes {
 		display: grid;
-		gap: 2px;
+		gap: 1px;
+		grid-template-columns: minmax(0, 1fr);
 	}
 
 	.study-node {
-		display: grid;
-		gap: 2px;
-		padding: 6px 8px 7px;
-		padding-left: calc(8px + var(--outline-level, 0) * 12px);
-		border: 0;
+		min-width: 0;
 		border-radius: 7px;
-		background: transparent;
-		cursor: pointer;
-		text-align: left;
+		margin-left: calc(var(--outline-level, 0) * 10px);
+	}
+
+	.study-node.open {
+		background: color-mix(in srgb, var(--text) 4%, transparent);
+	}
+
+	.study-node-row {
+		min-width: 0;
+		padding: 6px 8px;
+		border-radius: 7px;
+		font-size: 11px;
+		font-weight: 620;
+		line-height: 1.35;
 		transition: background 150ms var(--ease);
 	}
 
-	.study-node:hover {
+	.study-node-row:hover {
 		background: var(--hover);
+		color: var(--text);
 	}
 
 	.study-node-title {
-		color: var(--text-soft);
-		font-family: var(--font-ui);
-		font-size: 11px;
-		font-weight: 650;
-		line-height: 1.35;
+		overflow: hidden;
+		flex: 1;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
-	.study-node-summary {
+	/* Status at a glance: filled for a written note, ringed while it is being
+	   written, hollow when it never landed. */
+	.study-pip {
+		width: 6px;
+		height: 6px;
+		flex: 0 0 auto;
+		border-radius: 999px;
+		background: var(--primary);
+	}
+
+	.study-pip.pending {
+		animation: study-pulse 1.4s ease-in-out infinite;
+		background: var(--bookmark);
+	}
+
+	.study-pip.failed {
+		border: 1px solid color-mix(in srgb, var(--danger) 70%, transparent);
+		background: transparent;
+	}
+
+	@keyframes study-pulse {
+		0%,
+		100% {
+			opacity: 0.35;
+		}
+		50% {
+			opacity: 1;
+		}
+	}
+
+	.study-node-body {
+		display: grid;
+		justify-items: start;
+		gap: 6px;
+		padding: 0 9px 9px 20px;
+	}
+
+	.study-node-body p {
+		margin: 0;
 		color: var(--muted);
 		font-family: var(--font-ui);
 		font-size: 10.5px;
-		line-height: 1.5;
+		line-height: 1.55;
 	}
 
-	.study-node-summary.pending {
+	.study-node-body p.quiet {
 		color: var(--faint);
 		font-style: italic;
 	}
 
-	.study-node-summary.failed {
-		color: color-mix(in srgb, var(--danger) 75%, var(--muted));
-		font-style: italic;
+	.study-jump {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 3px 7px;
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		background: transparent;
+		color: var(--muted);
+		cursor: pointer;
+		font-family: var(--font-ui);
+		font-size: 9.5px;
+		font-weight: 650;
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.study-jump:hover {
+		background: var(--hover);
+		color: var(--primary);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.study-spin,
+		.study-pip.pending {
+			animation: none;
+		}
 	}
 
 	.study-actions {
@@ -2693,17 +2975,24 @@
 		margin-top: 2px;
 	}
 
+	/* Same pill as "Go to section" — without inline-flex the icon stacks above
+	   the label and the control turns into a box. */
 	.study-actions button {
-		padding: 5px 10px;
-		border: 1px solid var(--line-strong);
-		border-radius: 6px;
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 3px 9px;
+		border: 1px solid var(--line);
+		border-radius: 999px;
 		background: transparent;
-		color: var(--text-soft);
+		color: var(--muted);
 		cursor: pointer;
 		font-family: var(--font-ui);
-		font-size: 10.5px;
+		font-size: 9.5px;
 		font-weight: 650;
-		transition: background 150ms var(--ease);
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease);
 	}
 
 	.study-actions button:hover:not(:disabled) {
@@ -2724,13 +3013,9 @@
 		margin-top: 6px;
 	}
 
+	/* Shares .study-group's typography; only the icon spacing differs. */
 	.study-memories-label {
-		color: var(--faint);
-		font-family: var(--font-ui);
-		font-size: 8.5px;
-		font-weight: 660;
-		letter-spacing: 0.1em;
-		text-transform: uppercase;
+		margin-top: 0;
 	}
 
 	.study-memory {
@@ -2758,16 +3043,23 @@
 		color: var(--primary);
 	}
 
+	/* Web findings run long — show the first lines and let the edit view (one
+	   click away) carry the rest, so the notes list stays a list. */
 	.study-memory-text {
+		display: -webkit-box;
+		overflow: hidden;
 		padding: 4px 6px;
 		border: 0;
 		border-radius: 6px;
 		margin: -4px -6px;
+		-webkit-box-orient: vertical;
 		background: transparent;
 		color: var(--muted);
 		cursor: text;
 		font-family: var(--font-ui);
 		font-size: 10.5px;
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
 		line-height: 1.5;
 		text-align: left;
 		transition: background 150ms var(--ease);
