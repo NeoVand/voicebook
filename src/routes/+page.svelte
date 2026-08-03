@@ -1,16 +1,17 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import Icon from '$lib/components/Icon.svelte';
 	import {
-		ArrowRight,
 		BrainCircuit,
-		Clock3,
+		ArrowRight,
 		FileText,
+		Clock3,
 		FileUp,
-		Link2,
-		Plus,
 		Search,
-		Trash2
-	} from '@lucide/svelte';
+		Trash2,
+		Link2,
+		Plus
+	} from '$lib/icons';
 	import { onMount } from 'svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
 	import CompactSelect from '$lib/components/CompactSelect.svelte';
@@ -171,7 +172,7 @@
 						data-tour="paste-text"
 						onclick={() => libraryAdd.openPaste()}
 					>
-						<FileText size={16} /> Paste text
+						<Icon icon={FileText} size={16} /> Paste text
 					</button>
 					<button
 						class="button library-action"
@@ -179,7 +180,7 @@
 						data-tour="from-url"
 						onclick={() => libraryAdd.openUrl()}
 					>
-						<Link2 size={16} /> From URL
+						<Icon icon={Link2} size={16} /> From URL
 					</button>
 					<button
 						class="button primary library-action"
@@ -187,7 +188,7 @@
 						data-tour="add-document"
 						onclick={() => libraryAdd.pickFiles()}
 					>
-						<Plus size={16} /> Add document
+						<Icon icon={Plus} size={16} /> Add document
 					</button>
 				</div>
 			</header>
@@ -200,7 +201,7 @@
 		{:else if appState.documents.length}
 			{#if narrationOffer}
 				<aside class="narration-offer" aria-label="Language model setup suggestion">
-					<BrainCircuit size={16} />
+					<Icon icon={BrainCircuit} size={16} />
 					<p>
 						<strong>New: spoken equations, tables, and diagrams.</strong>
 						An on-device language model can rewrite them into words the reader voice can speak.
@@ -224,7 +225,7 @@
 					</div>
 					<div class="library-controls">
 						<label class="library-search">
-							<Search size={14} aria-hidden="true" />
+							<Icon icon={Search} size={14} aria-hidden="true" />
 							<input
 								type="search"
 								placeholder="Search titles…"
@@ -268,13 +269,13 @@
 									<small>{document.segments[0]?.text ?? 'Ready to listen.'}</small>
 								</span>
 								<span class="document-time"
-									><Clock3 size={13} /> {readingMinutes(document)} min</span
+									><Icon icon={Clock3} size={13} /> {readingMinutes(document)} min</span
 								>
 								<span class="document-progress">
 									<span>{Math.round(progressFor(document))}%</span>
 									<i><b style:width={progressFor(document) + '%'}></b></i>
 								</span>
-								<span class="row-arrow"><ArrowRight size={16} /></span>
+								<span class="row-arrow"><Icon icon={ArrowRight} size={16} /></span>
 							</a>
 							<button
 								class="icon-button remove-document"
@@ -282,7 +283,7 @@
 								aria-label={'Remove ' + document.title}
 								onclick={() => removeDocument(document)}
 							>
-								<Trash2 size={15} />
+								<Icon icon={Trash2} size={15} />
 							</button>
 						</article>
 					{/each}
@@ -314,7 +315,7 @@
 							disabled={appState.importing}
 							onclick={() => libraryAdd.pickFiles()}
 						>
-							<Plus size={16} /> Add document
+							<Icon icon={Plus} size={16} /> Add document
 						</button>
 						<button
 							class="button library-action"
@@ -323,7 +324,7 @@
 							disabled={appState.importing}
 							onclick={() => libraryAdd.openPaste()}
 						>
-							<FileText size={16} /> Paste text
+							<Icon icon={FileText} size={16} /> Paste text
 						</button>
 						<button
 							class="button library-action"
@@ -332,7 +333,7 @@
 							disabled={appState.importing}
 							onclick={() => libraryAdd.openUrl()}
 						>
-							<Link2 size={16} /> From URL
+							<Icon icon={Link2} size={16} /> From URL
 						</button>
 					</div>
 					<div class="empty-library-note">
@@ -346,7 +347,7 @@
 
 		{#if dragging}
 			<div class="library-drop-overlay" aria-hidden="true">
-				<span><FileUp size={24} /></span>
+				<span><Icon icon={FileUp} size={24} /></span>
 				<strong>Drop to add to your library</strong>
 				<small>Release the files to import them locally</small>
 			</div>

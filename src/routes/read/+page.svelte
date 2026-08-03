@@ -1,33 +1,35 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import Icon from '$lib/components/Icon.svelte';
 	import {
-		ArrowLeft,
+		MessagesSquare,
+		GraduationCap,
+		TriangleAlert,
 		ArrowUpRight,
 		BookOpenText,
-		Check,
-		ChevronLeft,
 		ChevronRight,
-		GraduationCap,
-		Highlighter,
 		LoaderCircle,
-		EyeOff,
-		ListTree,
+		ChevronLeft,
+		Highlighter,
 		LocateFixed,
-		MessagesSquare,
+		StickyNote,
+		ArrowLeft,
+		SkipBack10,
+		SkipForward10,
+		ListTree,
 		MoonStar,
-		Pause,
-		Play,
-		RotateCcw,
 		RotateCw,
 		Sparkles,
-		Square,
-		StickyNote,
-		Trash2,
-		TriangleAlert,
 		Volume2,
+		EyeOff,
+		Square,
+		Trash2,
+		Check,
+		Pause,
+		Play,
 		X
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { onMount } from 'svelte';
 	import { slide } from 'svelte/transition';
 	import type { Attachment } from 'svelte/attachments';
@@ -1451,7 +1453,7 @@
 		<li id={block.id} class:task-item={block.list?.checked !== undefined}>
 			{#if block.list?.checked !== undefined}
 				<span class="task-marker" aria-hidden="true">
-					{#if block.list.checked}<Check size={11} strokeWidth={2.6} />{/if}
+					{#if block.list.checked}<Icon icon={Check} size={11} strokeWidth={2.6} />{/if}
 				</span>
 				<span class="sr-only">{block.list.checked ? 'Completed: ' : 'Not completed: '}</span>
 			{/if}
@@ -1757,10 +1759,10 @@
 	{@render readerLoading(openingTitle)}
 {:else if !book}
 	<section class="missing-book">
-		<BookOpenText size={30} />
+		<Icon icon={BookOpenText} size={30} />
 		<h1>Document unavailable</h1>
 		<p>It may have been removed, or this link came from another browser.</p>
-		<a class="button primary" href={resolve('/')}><ArrowLeft size={16} /> Library</a>
+		<a class="button primary" href={resolve('/')}><Icon icon={ArrowLeft} size={16} /> Library</a>
 	</section>
 {:else}
 	<div class="reader-shell" class:outline-closed={!readerChrome.outlineOpen}>
@@ -1775,7 +1777,7 @@
 							aria-pressed={outlinePanelTab === 'contents'}
 							onclick={() => (outlinePanelTab = 'contents')}
 						>
-							<ListTree size={13} strokeWidth={2} aria-hidden="true" />
+							<Icon icon={ListTree} size={13} strokeWidth={2} aria-hidden="true" />
 							Contents
 						</button>
 						<button
@@ -1785,7 +1787,7 @@
 							aria-pressed={outlinePanelTab === 'study'}
 							onclick={() => (outlinePanelTab = 'study')}
 						>
-							<GraduationCap size={13} strokeWidth={2} aria-hidden="true" />
+							<Icon icon={GraduationCap} size={13} strokeWidth={2} aria-hidden="true" />
 							Study
 						</button>
 					</div>
@@ -1810,7 +1812,9 @@
 								{@const done = Math.min(studyState.done, studyState.total)}
 								<div class="study-progress" role="status">
 									<span class="study-progress-head">
-										<span class="study-spin"><LoaderCircle size={11} aria-hidden="true" /></span>
+										<span class="study-spin"
+											><Icon icon={LoaderCircle} size={11} aria-hidden="true" /></span
+										>
 										Summarizing sections
 										<em>{done}/{studyState.total}</em>
 									</span>
@@ -1822,7 +1826,7 @@
 								</div>
 							{:else if studyState.error && !book.study?.abstract}
 								<p class="study-alert" role="status">
-									<TriangleAlert size={11} aria-hidden="true" />
+									<Icon icon={TriangleAlert} size={11} aria-hidden="true" />
 									{studyState.error}
 								</p>
 							{/if}
@@ -1834,9 +1838,11 @@
 										aria-expanded={overviewOpen}
 										onclick={() => (overviewOpen = !overviewOpen)}
 									>
-										<Sparkles size={12} aria-hidden="true" />
+										<Icon icon={Sparkles} size={12} aria-hidden="true" />
 										<strong>Overview</strong>
-										<span class="study-chevron"><ChevronRight size={13} aria-hidden="true" /></span>
+										<span class="study-chevron"
+											><Icon icon={ChevronRight} size={13} aria-hidden="true" /></span
+										>
 									</button>
 									{#if overviewOpen}
 										<p class="study-card-body" transition:slide={{ duration: 160 }}>
@@ -1868,7 +1874,7 @@
 												<span class="study-pip {node.status}" aria-hidden="true"></span>
 												<span class="study-node-title">{node.title}</span>
 												<span class="study-chevron"
-													><ChevronRight size={12} aria-hidden="true" /></span
+													><Icon icon={ChevronRight} size={12} aria-hidden="true" /></span
 												>
 											</button>
 											{#if open}
@@ -1886,7 +1892,7 @@
 															class="study-jump"
 															onclick={() => navigateToOutlineBlock(nodeBlock)}
 														>
-															<LocateFixed size={11} aria-hidden="true" />
+															<Icon icon={LocateFixed} size={11} aria-hidden="true" />
 															Go to section
 														</button>
 													{/if}
@@ -1902,11 +1908,11 @@
 									onclick={() => void studyState.rebuild()}
 									disabled={!studyState.available || studyState.working}
 								>
-									<RotateCw size={11} aria-hidden="true" />
+									<Icon icon={RotateCw} size={11} aria-hidden="true" />
 									Rebuild
 								</button>
 								<button type="button" onclick={() => studyState.clear()} disabled={!book.study}>
-									<Trash2 size={11} aria-hidden="true" />
+									<Icon icon={Trash2} size={11} aria-hidden="true" />
 									Clear
 								</button>
 							</div>
@@ -1914,7 +1920,7 @@
 						{#if book.memories?.length}
 							<div class="study-memories">
 								<span class="study-group study-memories-label">
-									<MessagesSquare size={11} aria-hidden="true" />
+									<Icon icon={MessagesSquare} size={11} aria-hidden="true" />
 									Conversation notes
 									<em>{book.memories.length}</em>
 								</span>
@@ -1954,7 +1960,7 @@
 												aria-label="Open this note’s web source"
 												title={memory.sourceUrl}
 											>
-												<ArrowUpRight size={11} />
+												<Icon icon={ArrowUpRight} size={11} />
 											</a>
 											<!-- eslint-enable svelte/no-navigation-without-resolve -->
 										{/if}
@@ -1964,7 +1970,7 @@
 											aria-label="Delete this note"
 											onclick={() => deleteMemory(memory.id)}
 										>
-											<X size={12} />
+											<Icon icon={X} size={12} />
 										</button>
 									</div>
 								{/each}
@@ -2003,7 +2009,7 @@
 									<span class="outline-state" aria-hidden="true">
 										{#if narrationOutlineBlockId === item.blockId}
 											<span class="narration-indicator"
-												><Volume2 size={12} strokeWidth={2.2} /></span
+												><Icon icon={Volume2} size={12} strokeWidth={2.2} /></span
 											>
 										{/if}
 									</span>
@@ -2025,7 +2031,7 @@
 									<span class="outline-state" aria-hidden="true">
 										{#if segment.id === player.currentSegment?.id}
 											<span class="narration-indicator"
-												><Volume2 size={12} strokeWidth={2.2} /></span
+												><Icon icon={Volume2} size={12} strokeWidth={2.2} /></span
 											>
 										{/if}
 									</span>
@@ -2110,7 +2116,7 @@
 								onpointerdown={(event) => event.preventDefault()}
 								onclick={playSelectedPassage}
 							>
-								<Play size={12} fill="currentColor" />
+								<Icon icon={Play} size={12} fill="currentColor" />
 								Play selection
 							</button>
 							<span class="selection-actions-divider" aria-hidden="true"></span>
@@ -2121,7 +2127,7 @@
 								onpointerdown={(event) => event.preventDefault()}
 								onclick={openExplainBox}
 							>
-								<Sparkles size={12} />
+								<Icon icon={Sparkles} size={12} />
 								Explain
 							</button>
 							<span class="selection-actions-divider" aria-hidden="true"></span>
@@ -2132,7 +2138,7 @@
 								onpointerdown={(event) => event.preventDefault()}
 								onclick={() => annotateSelection(false)}
 							>
-								<Highlighter size={12} />
+								<Icon icon={Highlighter} size={12} />
 								Highlight
 							</button>
 							<span class="selection-actions-divider" aria-hidden="true"></span>
@@ -2143,7 +2149,7 @@
 								onpointerdown={(event) => event.preventDefault()}
 								onclick={() => annotateSelection(true)}
 							>
-								<StickyNote size={12} />
+								<Icon icon={StickyNote} size={12} />
 								Note
 							</button>
 						</div>
@@ -2164,7 +2170,7 @@
 								: openAnnotationEditor(marker.id, event.currentTarget.getBoundingClientRect())}
 					>
 						{#if marker.hasNote}
-							<StickyNote size={12} aria-hidden="true" />
+							<Icon icon={StickyNote} size={12} aria-hidden="true" />
 						{:else}
 							<span class="annotation-dot" aria-hidden="true"></span>
 						{/if}
@@ -2182,7 +2188,7 @@
 						aria-label="Edit the annotation"
 					>
 						<div class="annotation-editor-head">
-							<Highlighter size={12} aria-hidden="true" />
+							<Icon icon={Highlighter} size={12} aria-hidden="true" />
 							<span class="annotation-excerpt">{annotationEditorExcerpt}</span>
 							<button
 								class="annotation-editor-close"
@@ -2190,7 +2196,7 @@
 								aria-label="Close the annotation card"
 								onclick={() => closeAnnotationEditor()}
 							>
-								<X size={13} />
+								<Icon icon={X} size={13} />
 							</button>
 						</div>
 						<textarea
@@ -2224,7 +2230,7 @@
 						aria-label="Explain the selected passage"
 					>
 						<div class="explain-head">
-							<Sparkles size={12} aria-hidden="true" />
+							<Icon icon={Sparkles} size={12} aria-hidden="true" />
 							<span class="explain-excerpt">{explainBox.selection}</span>
 							<button
 								class="explain-close"
@@ -2232,7 +2238,7 @@
 								aria-label="Close the explain panel"
 								onclick={closeExplainBox}
 							>
-								<X size={13} />
+								<Icon icon={X} size={13} />
 							</button>
 						</div>
 						<div class="explain-row">
@@ -2252,7 +2258,7 @@
 									title="Explain aloud"
 									onclick={() => void runExplain()}
 								>
-									<Sparkles size={13} />
+									<Icon icon={Sparkles} size={13} />
 								</button>
 							{:else}
 								<button
@@ -2262,7 +2268,7 @@
 									title="Cancel"
 									onclick={closeExplainBox}
 								>
-									<LoaderCircle class="spin" size={13} />
+									<Icon icon={LoaderCircle} class="spin" size={13} />
 								</button>
 							{/if}
 						</div>
@@ -2276,7 +2282,7 @@
 
 			{#if !player.autoFollow}
 				<button class="return-follow button" type="button" onclick={resumeNarrationFollow}>
-					<LocateFixed size={15} /> Follow narration
+					<Icon icon={LocateFixed} size={15} /> Follow narration
 				</button>
 			{/if}
 
@@ -2317,7 +2323,7 @@
 							title="Hide commentary"
 							onclick={() => readerChrome.setAssistantCaptions(false)}
 						>
-							<EyeOff size={13} />
+							<Icon icon={EyeOff} size={13} />
 						</button>
 					{/if}
 					<button
@@ -2329,7 +2335,7 @@
 								? realtimeAssistant.stop()
 								: realtimeAssistant.dismissError()}
 					>
-						<X size={13} />
+						<Icon icon={X} size={13} />
 					</button>
 				</div>
 			{/if}
@@ -2364,7 +2370,7 @@
 						disabled={player.currentSegmentIndex === 0}
 						onclick={() => player.goToSegment(player.currentSegmentIndex - 1)}
 					>
-						<ChevronLeft size={17} />
+						<Icon icon={ChevronLeft} size={17} />
 					</button>
 					<button
 						class="seek-button"
@@ -2372,7 +2378,7 @@
 						aria-label="Back 10 seconds"
 						onclick={() => player.seekBy(-10)}
 					>
-						<RotateCcw size={17} /><span>10</span>
+						<Icon icon={SkipBack10} size={19} />
 					</button>
 					<button
 						class="play-button"
@@ -2391,11 +2397,11 @@
 						}}
 					>
 						{#if player.isBuffering}
-							<Square size={14} fill="currentColor" />
+							<Icon icon={Square} size={14} fill="currentColor" />
 						{:else if player.isPlaying}
-							<Pause size={18} fill="currentColor" />
+							<Icon icon={Pause} size={18} fill="currentColor" />
 						{:else}
-							<Play size={18} fill="currentColor" />
+							<Icon icon={Play} size={18} fill="currentColor" />
 						{/if}
 					</button>
 					<button
@@ -2404,7 +2410,7 @@
 						aria-label="Forward 10 seconds"
 						onclick={() => player.seekBy(10)}
 					>
-						<RotateCw size={17} /><span>10</span>
+						<Icon icon={SkipForward10} size={19} />
 					</button>
 					<button
 						class="mini-button"
@@ -2413,7 +2419,7 @@
 						disabled={player.currentSegmentIndex >= book.segments.length - 1}
 						onclick={() => player.goToSegment(player.currentSegmentIndex + 1)}
 					>
-						<ChevronRight size={17} />
+						<Icon icon={ChevronRight} size={17} />
 					</button>
 				</div>
 
@@ -2519,7 +2525,7 @@
 						: `Pauses in ${Math.max(1, Math.ceil((player.sleepTimerRemainingMs ?? 0) / 60_000))} min`}
 					onclick={() => player.cycleSleepTimer()}
 				>
-					<MoonStar size={17} aria-hidden="true" />
+					<Icon icon={MoonStar} size={17} aria-hidden="true" />
 					{#if player.sleepTimerMinutes !== null}
 						<span class="sleep-timer-badge">{player.sleepTimerMinutes}</span>
 					{/if}
@@ -2539,7 +2545,7 @@
 						aria-label="Dismiss storage warning"
 						onclick={() => player.dismissStorageWarning()}
 					>
-						<X size={13} />
+						<Icon icon={X} size={13} />
 					</button>
 				</div>
 			{/if}
@@ -4414,12 +4420,6 @@
 		width: 34px;
 		height: 34px;
 		border-radius: 50%;
-	}
-
-	.seek-button span {
-		position: absolute;
-		font-size: 7px;
-		font-weight: 750;
 	}
 
 	.mini-button:hover:not(:disabled),

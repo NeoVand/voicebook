@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { BrainCircuit, Check, RefreshCw, Settings2 } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { BrainCircuit, RefreshCw, Settings2, Check } from '$lib/icons';
 	import { resolve } from '$app/paths';
 	import { tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
@@ -153,7 +154,7 @@
 		onkeydown={handleTriggerKeydown}
 		{@attach trackTrigger}
 	>
-		<BrainCircuit size={17} strokeWidth={2} aria-hidden="true" />
+		<Icon icon={BrainCircuit} size={17} strokeWidth={2} aria-hidden="true" />
 	</button>
 	{#if working}
 		<span class="sr-only" aria-live="polite">
@@ -180,7 +181,7 @@
 				onclick={() => void toggleEnabled()}
 			>
 				<span class="menu-check" class:on={enabled} aria-hidden="true">
-					{#if enabled}<Check size={12} strokeWidth={2.6} />{/if}
+					{#if enabled}<Icon icon={Check} size={12} strokeWidth={2.6} />{/if}
 				</span>
 				<span>
 					<strong>Describe visuals</strong>
@@ -194,7 +195,7 @@
 				disabled={working || !enabled}
 				onclick={() => void regenerate()}
 			>
-				<RefreshCw size={15} strokeWidth={1.8} aria-hidden="true" />
+				<Icon icon={RefreshCw} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>Regenerate descriptions</strong>
 					<small>{working ? 'Already rewriting…' : 'This document'}</small>
@@ -210,7 +211,7 @@
 					onclick={() => void onListeningMode(mode.id)}
 				>
 					<span class="menu-check radio" class:on={listeningMode === mode.id} aria-hidden="true">
-						{#if listeningMode === mode.id}<Check size={12} strokeWidth={2.6} />{/if}
+						{#if listeningMode === mode.id}<Icon icon={Check} size={12} strokeWidth={2.6} />{/if}
 					</span>
 					<span>
 						<strong>{mode.label}</strong>
@@ -224,7 +225,7 @@
 				href={resolve('/settings?section=llm')}
 				onclick={() => closeMenu()}
 			>
-				<Settings2 size={15} strokeWidth={1.8} aria-hidden="true" />
+				<Icon icon={Settings2} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>LLM settings</strong>
 					<small>Models, engines, prompts</small>

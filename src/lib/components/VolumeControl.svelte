@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Volume1, Volume2, VolumeX } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { Volume1, Volume2, VolumeX } from '$lib/icons';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
 
@@ -42,11 +43,11 @@
 		onclick={() => (open = !open)}
 	>
 		{#if volume === 0}
-			<VolumeX size={17} aria-hidden="true" />
+			<Icon icon={VolumeX} size={17} aria-hidden="true" />
 		{:else if volume < 0.55}
-			<Volume1 size={17} aria-hidden="true" />
+			<Icon icon={Volume1} size={17} aria-hidden="true" />
 		{:else}
-			<Volume2 size={17} aria-hidden="true" />
+			<Icon icon={Volume2} size={17} aria-hidden="true" />
 		{/if}
 	</button>
 

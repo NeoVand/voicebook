@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { ArrowUpRight, Check, KeyRound, LoaderCircle, Trash2, X } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { ArrowUpRight, LoaderCircle, KeyRound, Trash2, Check, X } from '$lib/icons';
 
 	interface Props {
 		/** "Anthropic API key" */
@@ -61,9 +62,9 @@
 
 <div class="key-field">
 	<div class="key-field-head">
-		<span class="key-field-label"><KeyRound size={13} /> {label}</span>
+		<span class="key-field-label"><Icon icon={KeyRound} size={13} /> {label}</span>
 		<a href={keyUrl} target="_blank" rel="external noreferrer"
-			>Get a key <ArrowUpRight size={11} /></a
+			>Get a key <Icon icon={ArrowUpRight} size={11} /></a
 		>
 	</div>
 	{#if hasKey && !editing}
@@ -75,7 +76,7 @@
 			<span class="key-field-actions">
 				{#if onTest}
 					<button class="key-button" type="button" disabled={testing} onclick={() => void test()}>
-						{#if testing}<LoaderCircle class="spin" size={12} />{:else}Test{/if}
+						{#if testing}<Icon icon={LoaderCircle} class="spin" size={12} />{:else}Test{/if}
 					</button>
 				{/if}
 				<button class="key-button" type="button" onclick={() => (editing = true)}>Replace</button>
@@ -86,7 +87,7 @@
 						aria-label={`Remove ${label}`}
 						onclick={() => void clear()}
 					>
-						<Trash2 size={12} />
+						<Icon icon={Trash2} size={12} />
 					</button>
 				{/if}
 			</span>
@@ -111,11 +112,11 @@
 				disabled={!draft.trim()}
 				onclick={() => void save()}
 			>
-				<Check size={12} /> Save
+				<Icon icon={Check} size={12} /> Save
 			</button>
 			{#if hasKey}
 				<button class="key-button" type="button" onclick={() => (editing = false)}>
-					<X size={12} />
+					<Icon icon={X} size={12} />
 				</button>
 			{/if}
 		</div>

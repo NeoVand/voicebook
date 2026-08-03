@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { FileCode, FileImage, FileText, FileType, Globe } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { FileImage, FileCode, FileText, FileType, Globe } from '$lib/icons';
 	import type { DocumentKind } from '$lib/domain/types';
 
 	let {
@@ -10,13 +11,13 @@
 </script>
 
 {#if kind === 'pdf'}
-	<FileImage {size} {strokeWidth} aria-hidden="true" />
+	<Icon icon={FileImage} {size} {strokeWidth} aria-hidden="true" />
 {:else if kind === 'docx'}
-	<FileType {size} {strokeWidth} aria-hidden="true" />
+	<Icon icon={FileType} {size} {strokeWidth} aria-hidden="true" />
 {:else if kind === 'markdown'}
-	<FileCode {size} {strokeWidth} aria-hidden="true" />
+	<Icon icon={FileCode} {size} {strokeWidth} aria-hidden="true" />
 {:else if kind === 'web'}
-	<Globe {size} {strokeWidth} aria-hidden="true" />
+	<Icon icon={Globe} {size} {strokeWidth} aria-hidden="true" />
 {:else}
-	<FileText {size} {strokeWidth} aria-hidden="true" />
+	<Icon icon={FileText} {size} {strokeWidth} aria-hidden="true" />
 {/if}

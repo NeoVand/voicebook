@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Eye, Keyboard, Mic, MicOff, PhoneOff } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { Keyboard, PhoneOff, MicOff, Eye, Mic } from '$lib/icons';
 	import { tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
@@ -227,9 +228,9 @@
 		{@attach trackTrigger}
 	>
 		{#if status === 'error'}
-			<MicOff size={16} strokeWidth={2} aria-hidden="true" />
+			<Icon icon={MicOff} size={16} strokeWidth={2} aria-hidden="true" />
 		{:else}
-			<Mic size={16} strokeWidth={2} aria-hidden="true" />
+			<Icon icon={Mic} size={16} strokeWidth={2} aria-hidden="true" />
 		{/if}
 	</button>
 
@@ -331,7 +332,7 @@
 					realtimeAssistant.toggleHandsFree(book);
 				}}
 			>
-				<Mic size={15} strokeWidth={1.8} aria-hidden="true" />
+				<Icon icon={Mic} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>Hands-free conversation</strong>
 					<small>{handsFree ? 'On — it listens continuously' : 'Talk without holding'}</small>
@@ -349,7 +350,7 @@
 					else realtimeAssistant.openChat();
 				}}
 			>
-				<Keyboard size={15} strokeWidth={1.8} aria-hidden="true" />
+				<Icon icon={Keyboard} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>Type instead</strong>
 					<small>
@@ -368,7 +369,7 @@
 				aria-checked={readerChrome.assistantCaptions}
 				onclick={() => readerChrome.setAssistantCaptions(!readerChrome.assistantCaptions)}
 			>
-				<Eye size={15} strokeWidth={1.8} aria-hidden="true" />
+				<Icon icon={Eye} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>Show commentary</strong>
 					<small>
@@ -386,7 +387,7 @@
 				disabled={!realtimeAssistant.active}
 				onclick={endConversation}
 			>
-				<PhoneOff size={15} strokeWidth={1.8} aria-hidden="true" />
+				<Icon icon={PhoneOff} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>End conversation</strong>
 					<small>{realtimeAssistant.active ? 'Hang up' : 'Not connected'}</small>

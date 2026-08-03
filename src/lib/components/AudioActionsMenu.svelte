@@ -1,13 +1,6 @@
 <script lang="ts">
-	import {
-		AudioLines,
-		Check,
-		Download,
-		LoaderCircle,
-		RefreshCw,
-		Square,
-		Trash2
-	} from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { LoaderCircle, AudioLines, RefreshCw, Download, Square, Trash2, Check } from '$lib/icons';
 	import { tick } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
@@ -231,11 +224,11 @@
 		{@attach trackTrigger}
 	>
 		{#if busy}
-			<span class="spinner"><LoaderCircle size={16} aria-hidden="true" /></span>
+			<span class="spinner"><Icon icon={LoaderCircle} size={16} aria-hidden="true" /></span>
 		{:else if player.isDocumentPrepared}
-			<Check size={17} strokeWidth={2.2} aria-hidden="true" />
+			<Icon icon={Check} size={17} strokeWidth={2.2} aria-hidden="true" />
 		{:else}
-			<AudioLines size={17} aria-hidden="true" />
+			<Icon icon={AudioLines} size={17} aria-hidden="true" />
 		{/if}
 	</button>
 
@@ -266,7 +259,11 @@
 							onclick={() => void chooseVoice(voice.id)}
 						>
 							<span class="voice-option-check" aria-hidden="true">
-								{#if voice.id === currentVoiceId}<Check size={12} strokeWidth={2.6} />{/if}
+								{#if voice.id === currentVoiceId}<Icon
+										icon={Check}
+										size={12}
+										strokeWidth={2.6}
+									/>{/if}
 							</span>
 							{voice.name}
 						</button>
@@ -312,11 +309,11 @@
 				onclick={prepare}
 			>
 				{#if player.isDocumentPrepared}
-					<Check size={15} strokeWidth={2.2} aria-hidden="true" />
+					<Icon icon={Check} size={15} strokeWidth={2.2} aria-hidden="true" />
 				{:else if player.isGeneratingAll}
-					<Square size={13} fill="currentColor" aria-hidden="true" />
+					<Icon icon={Square} size={13} fill="currentColor" aria-hidden="true" />
 				{:else}
-					<AudioLines size={15} strokeWidth={1.8} aria-hidden="true" />
+					<Icon icon={AudioLines} size={15} strokeWidth={1.8} aria-hidden="true" />
 				{/if}
 				<span>
 					<strong>
@@ -339,9 +336,9 @@
 				onclick={() => void download()}
 			>
 				{#if downloading}
-					<span class="spinner"><LoaderCircle size={15} aria-hidden="true" /></span>
+					<span class="spinner"><Icon icon={LoaderCircle} size={15} aria-hidden="true" /></span>
 				{:else}
-					<Download size={15} strokeWidth={1.8} aria-hidden="true" />
+					<Icon icon={Download} size={15} strokeWidth={1.8} aria-hidden="true" />
 				{/if}
 				<span>
 					<strong>
@@ -360,7 +357,7 @@
 				disabled={!player.hasDocumentAudioState || player.isGeneratingAll || busy || !speechReady}
 				onclick={() => void regenerateAudio()}
 			>
-				<RefreshCw size={15} strokeWidth={1.8} aria-hidden="true" />
+				<Icon icon={RefreshCw} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>Regenerate all audio</strong>
 					<small>Clear, then prepare again</small>
@@ -376,9 +373,9 @@
 				onclick={() => void clearAudio()}
 			>
 				{#if clearing}
-					<span class="spinner"><LoaderCircle size={15} aria-hidden="true" /></span>
+					<span class="spinner"><Icon icon={LoaderCircle} size={15} aria-hidden="true" /></span>
 				{:else}
-					<Trash2 size={15} strokeWidth={1.8} aria-hidden="true" />
+					<Icon icon={Trash2} size={15} strokeWidth={1.8} aria-hidden="true" />
 				{/if}
 				<span>
 					<strong>{clearing ? 'Clearing audio…' : 'Clear cached audio'}</strong>

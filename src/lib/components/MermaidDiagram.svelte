@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { AlertTriangle, Maximize2, Minimize2, Workflow } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { AlertTriangle, Maximize2, Minimize2, Workflow } from '$lib/icons';
 	import type { Attachment } from 'svelte/attachments';
 	import type { Snippet } from 'svelte';
 	import { renderMermaid } from '$lib/services/mermaid';
@@ -79,7 +80,7 @@
 	data-status="loading"
 >
 	<figcaption id={captionId}>
-		<span><Workflow size={15} aria-hidden="true" /> Diagram</span>
+		<span><Icon icon={Workflow} size={15} aria-hidden="true" /> Diagram</span>
 		<div class="diagram-actions">
 			<small data-diagram-status aria-live="polite"></small>
 			<button
@@ -88,7 +89,8 @@
 				aria-pressed={fullSize}
 				onclick={() => (fullSize = !fullSize)}
 			>
-				{#if fullSize}<Minimize2 size={13} aria-hidden="true" /> Fit width{:else}<Maximize2
+				{#if fullSize}<Icon icon={Minimize2} size={13} aria-hidden="true" /> Fit width{:else}<Icon
+						icon={Maximize2}
 						size={13}
 						aria-hidden="true"
 					/> Full size{/if}
@@ -99,7 +101,7 @@
 	<div class="diagram-output" {@attach diagram(source)}></div>
 
 	<div class="diagram-error" role="alert">
-		<AlertTriangle size={16} aria-hidden="true" />
+		<Icon icon={AlertTriangle} size={16} aria-hidden="true" />
 		<div>
 			<strong>Diagram unavailable</strong>
 			<span data-diagram-error></span>

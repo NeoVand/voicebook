@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { FileSearch } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { FileSearch } from '$lib/icons';
 
 	interface Props {
 		page: number;
@@ -23,7 +24,7 @@
 			title="View original page"
 			onclick={() => onPeek?.(page)}
 		>
-			<FileSearch size={12} strokeWidth={2} />
+			<Icon icon={FileSearch} size={12} strokeWidth={2} />
 		</button>
 	{/if}
 </div>

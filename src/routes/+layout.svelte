@@ -5,27 +5,28 @@
 	import { fly } from 'svelte/transition';
 	import { page } from '$app/state';
 	import { base, resolve } from '$app/paths';
+	import Icon from '$lib/components/Icon.svelte';
 	import {
-		CircleHelp,
-		Cpu,
-		FileText,
-		FileUp,
-		Library,
-		Link2,
-		List,
-		Fullscreen,
-		Menu,
 		PanelLeftClose,
 		PanelLeftOpen,
-		Plus,
 		BrainCircuit,
+		CircleHelp,
+		Fullscreen,
 		RefreshCw,
-		Search,
 		Settings2,
+		FileText,
+		Library,
 		Palette,
+		FileUp,
+		Search,
 		Shrink,
+		Link2,
+		List,
+		Menu,
+		Plus,
+		Cpu,
 		X
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
 	import BrandMark from '$lib/components/BrandMark.svelte';
@@ -253,7 +254,7 @@
 			title={mobileSidebarOpen ? 'Close navigation' : 'Open navigation'}
 			onclick={() => (mobileSidebarOpen = !mobileSidebarOpen)}
 		>
-			{#if mobileSidebarOpen}<X size={17} />{:else}<Menu size={17} />{/if}
+			{#if mobileSidebarOpen}<Icon icon={X} size={17} />{:else}<Icon icon={Menu} size={17} />{/if}
 		</button>
 	</div>
 
@@ -275,7 +276,7 @@
 					title={readerChrome.outlineOpen ? 'Close contents' : 'Open contents'}
 					onclick={() => (readerChrome.outlineOpen = !readerChrome.outlineOpen)}
 				>
-					<List size={16} strokeWidth={1.6} />
+					<Icon icon={List} size={16} strokeWidth={1.6} />
 				</button>
 				<div class="document-zoom" role="group" aria-label="Document zoom">
 					<div class="zoom-control" bind:this={zoomRoot}>
@@ -328,7 +329,10 @@
 						title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
 						onclick={() => void toggleFullscreen()}
 					>
-						{#if isFullscreen}<Shrink size={16} />{:else}<Fullscreen size={16} />{/if}
+						{#if isFullscreen}<Icon icon={Shrink} size={16} />{:else}<Icon
+								icon={Fullscreen}
+								size={16}
+							/>{/if}
 					</button>
 				</div>
 				<button
@@ -339,7 +343,7 @@
 					title="Show me around"
 					onclick={() => startTour(tourContext)}
 				>
-					<CircleHelp size={16} />
+					<Icon icon={CircleHelp} size={16} />
 				</button>
 				<button
 					class="icon-button"
@@ -373,7 +377,7 @@
 				title="Show me around"
 				onclick={() => startTour(tourContext)}
 			>
-				<CircleHelp size={16} />
+				<Icon icon={CircleHelp} size={16} />
 			</button>
 			<button
 				class="icon-button"
@@ -426,14 +430,14 @@
 					data-tooltip="Library"
 					onclick={closeNavigation}
 				>
-					<Library size={17} />
+					<Icon icon={Library} size={17} />
 					<span>Library</span>
 				</a>
 
 				{#if sidebarCollapsed && !mobileSidebarOpen}
 					<div class="library-flyout" aria-label="Library">
 						<label class="flyout-search">
-							<Search size={12} aria-hidden="true" />
+							<Icon icon={Search} size={12} aria-hidden="true" />
 							<input
 								type="search"
 								placeholder="Search library…"
@@ -442,15 +446,15 @@
 							/>
 						</label>
 						<button class="flyout-action" type="button" onclick={() => sidebarAdd('files')}>
-							<FileUp size={14} />
+							<Icon icon={FileUp} size={14} />
 							<span>Add document</span>
 						</button>
 						<button class="flyout-action" type="button" onclick={() => sidebarAdd('paste')}>
-							<FileText size={14} />
+							<Icon icon={FileText} size={14} />
 							<span>Paste text</span>
 						</button>
 						<button class="flyout-action" type="button" onclick={() => sidebarAdd('url')}>
-							<Link2 size={14} />
+							<Icon icon={Link2} size={14} />
 							<span>From URL</span>
 						</button>
 						{#if appState.documents.length}
@@ -482,9 +486,9 @@
 				onclick={toggleSidebar}
 			>
 				{#if sidebarCollapsed}
-					<PanelLeftOpen size={17} />
+					<Icon icon={PanelLeftOpen} size={17} />
 				{:else}
-					<PanelLeftClose size={17} />
+					<Icon icon={PanelLeftClose} size={17} />
 				{/if}
 			</button>
 		</div>
@@ -493,7 +497,7 @@
 			{#if !sidebarCollapsed || mobileSidebarOpen}
 				<div class="sidebar-quick">
 					<label class="sidebar-search">
-						<Search size={12} aria-hidden="true" />
+						<Icon icon={Search} size={12} aria-hidden="true" />
 						<input
 							type="search"
 							placeholder="Search…"
@@ -511,7 +515,7 @@
 							title="Quick add"
 							onclick={() => (sidebarAddOpen = !sidebarAddOpen)}
 						>
-							<Plus size={15} />
+							<Icon icon={Plus} size={15} />
 						</button>
 						{#if sidebarAddOpen}
 							<div
@@ -521,15 +525,15 @@
 								in:fly={{ y: 4, duration: 120 }}
 							>
 								<button role="menuitem" type="button" onclick={() => sidebarAdd('files')}>
-									<FileUp size={14} />
+									<Icon icon={FileUp} size={14} />
 									<span>Add document</span>
 								</button>
 								<button role="menuitem" type="button" onclick={() => sidebarAdd('paste')}>
-									<FileText size={14} />
+									<Icon icon={FileText} size={14} />
 									<span>Paste text</span>
 								</button>
 								<button role="menuitem" type="button" onclick={() => sidebarAdd('url')}>
-									<Link2 size={14} />
+									<Icon icon={Link2} size={14} />
 									<span>From URL</span>
 								</button>
 							</div>
@@ -574,7 +578,7 @@
 				data-tooltip="Voice"
 				onclick={closeNavigation}
 			>
-				<Cpu size={17} />
+				<Icon icon={Cpu} size={17} />
 				<span>Voice</span>
 			</a>
 			<a
@@ -588,7 +592,7 @@
 				data-tooltip="LLM"
 				onclick={closeNavigation}
 			>
-				<BrainCircuit size={17} />
+				<Icon icon={BrainCircuit} size={17} />
 				<span>LLM</span>
 			</a>
 			<a
@@ -603,7 +607,7 @@
 				data-tooltip="Appearance"
 				onclick={closeNavigation}
 			>
-				<Palette size={17} />
+				<Icon icon={Palette} size={17} />
 				<span>Appearance</span>
 			</a>
 			<a
@@ -617,7 +621,7 @@
 				data-tooltip="System"
 				onclick={closeNavigation}
 			>
-				<Settings2 size={17} />
+				<Icon icon={Settings2} size={17} />
 				<span>System</span>
 			</a>
 		</nav>
@@ -649,7 +653,7 @@
 				disabled={runtimeBusy || applyingUpdate}
 				onclick={applyUpdate}
 			>
-				<RefreshCw class={applyingUpdate ? 'spin' : undefined} size={14} />
+				<Icon icon={RefreshCw} class={applyingUpdate ? 'spin' : undefined} size={14} />
 				{applyingUpdate ? 'Reloading' : 'Reload'}
 			</button>
 			<button
@@ -658,7 +662,7 @@
 				aria-label="Dismiss update notice"
 				onclick={() => (updateDismissed = true)}
 			>
-				<X size={17} />
+				<Icon icon={X} size={17} />
 			</button>
 		</div>
 	</div>
@@ -676,7 +680,7 @@
 			aria-label="Dismiss error"
 			onclick={() => appState.clearError()}
 		>
-			<X size={17} />
+			<Icon icon={X} size={17} />
 		</button>
 	</div>
 {/if}

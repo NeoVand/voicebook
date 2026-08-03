@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { BookOpenText, X } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { BookOpenText, X } from '$lib/icons';
 	import { appState } from '$lib/state/app-state.svelte';
 	import { libraryAdd } from '$lib/state/library-add.svelte';
 
@@ -79,7 +80,7 @@
 					aria-label="Close"
 					onclick={() => (libraryAdd.pasteOpen = false)}
 				>
-					<X size={18} />
+					<Icon icon={X} size={18} />
 				</button>
 			</header>
 			<label class="form-field">
@@ -130,7 +131,7 @@
 					aria-label="Close"
 					onclick={() => (libraryAdd.urlOpen = false)}
 				>
-					<X size={18} />
+					<Icon icon={X} size={18} />
 				</button>
 			</header>
 			<label class="form-field">
@@ -178,7 +179,7 @@
 {#if appState.duplicate}
 	<div class="modal-scrim" role="presentation">
 		<div class="duplicate-dialog" role="dialog" aria-modal="true" aria-labelledby="duplicate-title">
-			<span class="duplicate-icon"><BookOpenText size={22} /></span>
+			<span class="duplicate-icon"><Icon icon={BookOpenText} size={22} /></span>
 			<h2 id="duplicate-title">Already in your library</h2>
 			<p>“{appState.duplicate.existing.title}” matches this file.</p>
 			<footer>

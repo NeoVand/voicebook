@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Image as ImageIcon, Maximize2, Minimize2, Shapes } from '@lucide/svelte';
+	import Icon from '$lib/components/Icon.svelte';
+	import { Image as ImageIcon, Maximize2, Minimize2, Shapes } from '$lib/icons';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -20,7 +21,8 @@
 <figure class="media-figure" class:full-size={fullSize} aria-labelledby={captionId}>
 	<figcaption id={captionId}>
 		<span>
-			{#if kind === 'diagram'}<Shapes size={15} aria-hidden="true" /> Diagram{:else}<ImageIcon
+			{#if kind === 'diagram'}<Icon icon={Shapes} size={15} aria-hidden="true" /> Diagram{:else}<Icon
+					icon={ImageIcon}
 					size={15}
 					aria-hidden="true"
 				/> Image{/if}
@@ -31,7 +33,8 @@
 			aria-pressed={fullSize}
 			onclick={() => (fullSize = !fullSize)}
 		>
-			{#if fullSize}<Minimize2 size={13} aria-hidden="true" /> Fit width{:else}<Maximize2
+			{#if fullSize}<Icon icon={Minimize2} size={13} aria-hidden="true" /> Fit width{:else}<Icon
+					icon={Maximize2}
 					size={13}
 					aria-hidden="true"
 				/> Full size{/if}
