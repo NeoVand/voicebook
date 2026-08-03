@@ -199,6 +199,7 @@ describe('assistantTools', () => {
 			'add_highlight',
 			'add_note',
 			'save_memory',
+			'web_research',
 			'play_section'
 		]);
 		expect(assistantTools(true).map((tool) => tool.name)).toEqual([
@@ -211,6 +212,7 @@ describe('assistantTools', () => {
 			'add_highlight',
 			'add_note',
 			'save_memory',
+			'web_research',
 			'play_section',
 			'read_passage'
 		]);
@@ -283,6 +285,19 @@ describe('parseAssistantToolCall', () => {
 		);
 		expect(unanchored.call).toEqual({ name: 'save_memory', text: 'Keep this' });
 		expect(parseAssistantToolCall(doc(), 'save_memory', '{"note":"  "}').error).toContain('note');
+	});
+
+	it('parses web_research and requires a query', () => {
+		const result = parseAssistantToolCall(
+			doc(),
+			'web_research',
+			'{"query":"  How has whale-song research changed since 2024?  "}'
+		);
+		expect(result.call).toEqual({
+			name: 'web_research',
+			query: 'How has whale-song research changed since 2024?'
+		});
+		expect(parseAssistantToolCall(doc(), 'web_research', '{}').error).toContain('query');
 	});
 
 	it('parses clear_highlight regardless of arguments', () => {

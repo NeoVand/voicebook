@@ -80,6 +80,7 @@ export default defineConfig({
 				'src/lib/domain/pdf-markdown.ts',
 				'src/lib/domain/segmenter.ts',
 				'src/lib/domain/study-tree.ts',
+				'src/lib/services/web-research.ts',
 				'src/lib/domain/speech-words.ts',
 				'src/lib/domain/web-article.ts',
 				'src/lib/services/generation-plan.ts',

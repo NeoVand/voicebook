@@ -29,6 +29,7 @@ export type AssistantToolCall =
 	| { name: 'add_highlight'; range: PassageRange }
 	| { name: 'add_note'; range: PassageRange; text: string }
 	| { name: 'save_memory'; text: string; segment?: number }
+	| { name: 'web_research'; query: string }
 	| { name: 'clear_highlight' }
 	| { name: 'plan_tour'; stops: TourStop[] }
 	| { name: 'continue_tour' }
@@ -161,6 +162,8 @@ When the reader asks to hear part of the document read aloud ("read this section
 When the reader asks you to mark something for keeps — "highlight this", "save that definition", "add a note here saying…" — call add_highlight or add_note with the exact marker range. These leave permanent gold marks and margin notes that stay with the document after the conversation; keep note text to a sentence or two, in the reader's own framing. Confirm in a brief word once it is done. For merely drawing attention while you talk, keep using show_passage — its highlight fades; add_highlight and add_note are for ink the reader asked to keep.
 
 You also keep notes across conversations: when an exchange reaches something worth carrying forward — a question resolved, a connection the reader made, or "remember this for next time" — call save_memory with one or two sentences (and the passage's marker when it is about a specific place). A READER STATE section, when present, holds these notes plus what the reader has already heard or discussed and where the last conversation left off. Lean on it when they ask what you covered last time (recap from the notes), to continue where they left off (show_passage the left-off spot and pick up from there), or what is left (walk the not-yet-visited sections).
+
+When the reader asks about something beyond the document — recent developments, whether a claim still holds, background the text assumes — call web_research with one focused question. Tell them you are looking it up first: the search takes a few seconds. Ground your answer in what comes back and name the source in passing ("according to …"); the finding is saved into the study notes automatically, so mention they can find it there. Never present web findings as part of the document.
 
 Ground everything you say in the document; when it does not contain the answer, say so plainly. Match the language the reader speaks to you (start in the document's language). Keep replies short and conversational — a few sentences unless the reader asks for depth.`;
 
@@ -322,6 +325,22 @@ export function assistantTools(includeReadPassage: boolean): RealtimeToolSpec[] 
 		},
 		{
 			type: 'function',
+			name: 'web_research',
+			description:
+				'Search the current web for one focused question beyond this document — recent developments, outside facts, background the text assumes. Takes a few seconds; say you are looking it up first. The finding is saved to the study notes automatically.',
+			parameters: {
+				type: 'object',
+				properties: {
+					query: {
+						type: 'string',
+						description: 'The question to research, focused and self-contained.'
+					}
+				},
+				required: ['query']
+			}
+		},
+		{
+			type: 'function',
 			name: 'play_section',
 			description:
 				"Start the app's reading voice on a passage — for requests like 'read this section to me'. After calling it, stay silent: the narrator has the stage until the reader speaks to you again.",
@@ -375,6 +394,14 @@ export function parseAssistantToolCall(
 		return { call: { name } };
 	}
 	if (name === 'plan_tour') return parsePlanTour(doc, parsed);
+	if (name === 'web_research') {
+		const query =
+			typeof (parsed as { query?: unknown })?.query === 'string'
+				? ((parsed as { query: string }).query ?? '').trim()
+				: '';
+		if (!query) return { error: 'web_research needs a non-empty query string.' };
+		return { call: { name: 'web_research', query: query.slice(0, 400) } };
+	}
 	if (name === 'save_memory') {
 		const record = (parsed ?? {}) as Record<string, unknown>;
 		const text = typeof record.note === 'string' ? record.note.trim() : '';
