@@ -50,23 +50,71 @@ function sentenceParts(text: string): Array<{ text: string; index: number }> {
  * into two invalid fragments, and the spoken layer reads the leftover tail as
  * raw source. Sentence punctuation is common inside TeX (`\!`, trailing
  * periods, commas), so both splitters route their boundaries around spans.
+ *
+ * Two behaviors, by span kind:
+ * - `merge` (math, images): the punctuation was inside the construct, so the
+ *   split is spurious — glue the sentence back together.
+ * - `shift` (footnote references): "…mysterious.[6] Next…" is genuinely two
+ *   sentences, but the sentence segmenter parks its boundary between the
+ *   bracket and the digits. Snap the boundary to the marker's end — pulling
+ *   any directly adjacent markers along, so a [6][7] cluster stays with its
+ *   sentence — which keeps every marker whole for the citation-elision rule
+ *   and leaves no rendered gap inside the brackets.
  */
-function mergePartsAcrossSpans(
+function routePartsAroundSpans(
 	parts: Array<{ text: string; index: number }>,
-	spans: TextRange[]
+	mergeSpans: TextRange[],
+	shiftSpans: TextRange[] = []
 ): Array<{ text: string; index: number }> {
-	if (!spans.length || parts.length < 2) return parts;
-	const inside = (offset: number) => spans.some((span) => offset > span.start && offset < span.end);
-	const merged: Array<{ text: string; index: number }> = [];
+	if ((!mergeSpans.length && !shiftSpans.length) || parts.length < 2) return parts;
+	const inMerge = (offset: number) =>
+		mergeSpans.some((span) => offset > span.start && offset < span.end);
+	const routed: Array<{ text: string; index: number }> = [];
 	for (const part of parts) {
-		const previous = merged.at(-1);
-		if (previous && previous.index + previous.text.length === part.index && inside(part.index)) {
-			previous.text += part.text;
-		} else {
-			merged.push({ ...part });
+		const previous = routed.at(-1);
+		const contiguous = previous && previous.index + previous.text.length === part.index;
+		if (contiguous) {
+			const shift = shiftSpans.find((span) => part.index > span.start && part.index < span.end);
+			if (shift) {
+				let take = Math.min(shift.end - part.index, part.text.length);
+				let following: TextRange | undefined;
+				while (
+					take < part.text.length &&
+					(following = shiftSpans.find((span) => span.start === part.index + take))
+				) {
+					take = Math.min(following.end - part.index, part.text.length);
+				}
+				previous.text += part.text.slice(0, take);
+				const rest = part.text.slice(take);
+				if (rest) routed.push({ text: rest, index: part.index + take });
+				continue;
+			}
+			if (inMerge(part.index)) {
+				previous.text += part.text;
+				continue;
+			}
 		}
+		routed.push({ ...part });
 	}
-	return merged;
+	return routed;
+}
+
+/**
+ * Character ranges of footnote-reference runs ("[6]" linking to the notes)
+ * in a block's text. Returns nothing when the run texts do not reassemble
+ * the block text exactly — offsets would be wrong, and no protection beats
+ * misplaced protection.
+ */
+function footnoteSpans(block: DocumentBlock): TextRange[] {
+	if (!block.inlines?.length) return [];
+	const spans: TextRange[] = [];
+	let offset = 0;
+	for (const run of block.inlines) {
+		const end = offset + run.text.length;
+		if (run.href?.startsWith('#footnote-')) spans.push({ start: offset, end });
+		offset = end;
+	}
+	return offset === block.text.length ? spans : [];
 }
 
 function splitLongSentence(
@@ -302,14 +350,16 @@ export function segmentBlocks(
 
 		const spans = inlineConstructSpans(block);
 		const spanRanges = spans.map((span) => ({ start: span.start, end: span.end }));
+		const citationRanges = footnoteSpans(block);
+		const atomicRanges = [...spanRanges, ...citationRanges];
 		let blockSegmentIndex = 0;
 		const sourceParts =
 			block.kind === 'heading' || block.kind === 'list-item'
 				? [{ text: block.text, index: 0 }]
-				: mergePartsAcrossSpans(sentenceParts(block.text), spanRanges);
+				: routePartsAroundSpans(sentenceParts(block.text), spanRanges, citationRanges);
 
 		for (const part of sourceParts) {
-			for (const piece of splitLongSentence(part.text, part.index, spanRanges)) {
+			for (const piece of splitLongSentence(part.text, part.index, atomicRanges)) {
 				const leading = piece.text.length - piece.text.trimStart().length;
 				const text = piece.text.trim();
 				if (!text) continue;
