@@ -25,8 +25,14 @@ export class WebResearchError extends Error {
 	}
 }
 
-/** Web answers stay speakable: a few sentences, not a page. */
-const RESEARCH_MAX_OUTPUT_TOKENS = 700;
+/**
+ * The answer stays a few sentences by instruction, not by budget — this
+ * ceiling also has to cover the model's reasoning and its search-tool turns,
+ * which measured 450–900 tokens for the SAME question across runs. A tight
+ * budget does not shorten the answer; it truncates the response before the
+ * message item exists at all, leaving nothing to read.
+ */
+const RESEARCH_MAX_OUTPUT_TOKENS = 2_000;
 
 export function webResearchRequestBody(model: string, query: string): Record<string, unknown> {
 	return {
@@ -56,6 +62,7 @@ function cleanUrl(raw: string): string {
 
 interface ResponsesPayload {
 	status?: string;
+	incomplete_details?: { reason?: string } | null;
 	error?: { message?: string } | null;
 	output?: Array<{
 		type?: string;
@@ -79,6 +86,15 @@ export function parseWebResearchResponse(data: unknown): WebResearchFinding {
 		.replace(/\s+/g, ' ')
 		.trim();
 	if (!text) {
+		// A response truncated mid-search carries no message item at all — say
+		// so plainly instead of reporting an empty answer.
+		if (payload.status === 'incomplete') {
+			throw new WebResearchError(
+				payload.incomplete_details?.reason === 'max_output_tokens'
+					? 'The web search ran long and was cut off before it answered. Try a narrower question.'
+					: 'The web search did not finish.'
+			);
+		}
 		throw new WebResearchError(
 			payload.error?.message ?? 'The web search returned no readable answer.'
 		);

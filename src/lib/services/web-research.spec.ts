@@ -78,6 +78,21 @@ describe('parseWebResearchResponse', () => {
 		});
 	});
 
+	it('names truncation when the response was cut off before answering', () => {
+		// Measured live: reasoning + search turns count against max_output_tokens,
+		// so a tight budget yields status 'incomplete' with no message item.
+		expect(() =>
+			parseWebResearchResponse({
+				status: 'incomplete',
+				incomplete_details: { reason: 'max_output_tokens' },
+				output: [{ type: 'reasoning' }, { type: 'web_search_call' }]
+			})
+		).toThrow(/ran long/);
+		expect(() =>
+			parseWebResearchResponse({ status: 'incomplete', output: [{ type: 'reasoning' }] })
+		).toThrow('The web search did not finish.');
+	});
+
 	it('throws a readable error when no answer came back', () => {
 		expect(() => parseWebResearchResponse({ output: [{ type: 'web_search_call' }] })).toThrow(
 			WebResearchError

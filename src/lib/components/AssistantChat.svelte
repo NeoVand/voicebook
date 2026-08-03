@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Mic, SendHorizontal, X } from '@lucide/svelte';
+	import { ArrowUp, Globe, Mic, X } from '@lucide/svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
 	import type { NormalizedDocument } from '$lib/domain/types';
@@ -21,10 +21,12 @@
 		};
 	};
 
-	// Keep the newest turn in view as messages stream in.
+	// Keep the newest turn in view as messages stream in — and when the wait
+	// indicator appears, which is the only thing on screen during a search.
 	$effect(() => {
 		void realtimeAssistant.messages.length;
 		void realtimeAssistant.messages.at(-1)?.text;
+		void realtimeAssistant.activity;
 		const element = list;
 		if (element) element.scrollTop = element.scrollHeight;
 	});
@@ -88,6 +90,17 @@
 					<span class="chat-text">{message.text}</span>
 				</div>
 			{/each}
+			{#if realtimeAssistant.activity}
+				<div class="chat-activity" role="status">
+					{#if realtimeAssistant.activity === 'searching'}
+						<Globe size={11} aria-hidden="true" />
+						<span>Searching the web</span>
+					{:else}
+						<span class="sr-only">Thinking</span>
+					{/if}
+					<span class="chat-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+				</div>
+			{/if}
 		</div>
 		{#if realtimeAssistant.status === 'error' && realtimeAssistant.errorMessage}
 			<p class="chat-error" role="alert">{realtimeAssistant.errorMessage}</p>
@@ -107,7 +120,7 @@
 				disabled={busy || !draft.trim()}
 				onclick={() => void send()}
 			>
-				<SendHorizontal size={14} />
+				<ArrowUp size={14} strokeWidth={2.6} />
 			</button>
 		</footer>
 	</div>
@@ -249,46 +262,129 @@
 		line-height: 1.45;
 	}
 
+	/* The composer is a bare line of text on the panel: the footer rule is the
+	   only frame, so nothing boxes the caret in — including on focus, where
+	   the global form styles would otherwise paint a ring. */
 	.assistant-chat footer {
 		display: flex;
 		align-items: flex-end;
 		gap: 6px;
-		padding: 8px;
+		padding: 7px 8px 7px 11px;
 		border-top: 1px solid var(--line);
 	}
 
 	.assistant-chat textarea {
-		min-height: 30px;
+		min-height: 26px;
 		max-height: 92px;
 		flex: 1;
-		padding: 6px 8px;
-		border: 1px solid var(--line-strong);
-		border-radius: 6px;
+		padding: 5px 0;
+		border: 0;
+		border-radius: 0;
 		background: transparent;
 		color: var(--text);
 		field-sizing: content;
 		font-size: 11px;
-		line-height: 1.4;
+		line-height: 1.45;
 		resize: none;
+	}
+
+	.assistant-chat textarea::placeholder {
+		color: var(--faint);
+	}
+
+	.assistant-chat textarea:focus,
+	.assistant-chat textarea:focus-visible {
+		border: 0;
+		outline: none;
+		box-shadow: none;
 	}
 
 	.chat-send {
 		display: grid;
-		width: 30px;
-		height: 30px;
+		width: 26px;
+		height: 26px;
 		flex: 0 0 auto;
 		place-items: center;
 		padding: 0;
 		border: 0;
-		border-radius: 6px;
+		border-radius: 999px;
 		background: var(--primary);
 		color: var(--primary-ink);
 		cursor: pointer;
-		transition: opacity 150ms var(--ease);
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.chat-send:hover:not(:disabled) {
+		background: var(--primary-hover);
 	}
 
 	.chat-send:disabled {
+		background: color-mix(in srgb, var(--text) 11%, transparent);
+		color: var(--faint);
 		cursor: default;
-		opacity: 0.35;
+	}
+
+	/* Nothing streams during a tool call — these dots are the only proof the
+	   assistant is still working. */
+	.chat-activity {
+		display: flex;
+		align-items: center;
+		justify-self: start;
+		gap: 5px;
+		color: var(--faint);
+		font-size: 10px;
+	}
+
+	.chat-dots {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+	}
+
+	.chat-dots i {
+		width: 4px;
+		height: 4px;
+		border-radius: 999px;
+		animation: chat-dot 1.1s ease-in-out infinite;
+		background: currentColor;
+	}
+
+	.chat-dots i:nth-child(2) {
+		animation-delay: 0.18s;
+	}
+
+	.chat-dots i:nth-child(3) {
+		animation-delay: 0.36s;
+	}
+
+	@keyframes chat-dot {
+		0%,
+		70%,
+		100% {
+			opacity: 0.25;
+			transform: translateY(0);
+		}
+		35% {
+			opacity: 1;
+			transform: translateY(-2px);
+		}
+	}
+
+	@keyframes chat-dot-fade {
+		0%,
+		100% {
+			opacity: 0.3;
+		}
+		50% {
+			opacity: 0.9;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.chat-dots i {
+			animation: chat-dot-fade 1.4s ease-in-out infinite;
+		}
 	}
 </style>
