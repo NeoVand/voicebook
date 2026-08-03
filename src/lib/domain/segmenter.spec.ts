@@ -367,6 +367,45 @@ describe('narrated construct segmentation', () => {
 		expect(segments[1].words.length).toBeGreaterThan(0);
 	});
 
+	it('keeps citation markers whole and silent at sentence boundaries', () => {
+		// The sentence segmenter parks its boundary between "[" and "6]" after
+		// "mysterious.[6]" — which bisected the marker (a rendered gap, and
+		// "six, close bracket" spoken because the elision rule never saw a
+		// complete marker). The boundary must snap to the marker's end.
+		const paragraph = block({
+			id: 'b9',
+			text: 'Described as peculiar and mysterious.[6] Its concepts have been applied widely.',
+			inlines: [
+				{ text: 'Described as peculiar and mysterious.' },
+				{ text: '[6]', href: '#footnote-6' },
+				{ text: ' Its concepts have been applied widely.' }
+			]
+		});
+		const segments = segmentBlocks([paragraph]);
+		expect(segments).toHaveLength(2);
+		expect(segments[0].text).toBe('Described as peculiar and mysterious.[6]');
+		expect(segments[0].normalizedText).toBe('Described as peculiar and mysterious.');
+		expect(segments[1].text).toBe('Its concepts have been applied widely.');
+	});
+
+	it('carries whole citation clusters with their sentence, unspoken', () => {
+		const paragraph = block({
+			id: 'b10',
+			text: 'Confirmed repeatedly.[6][17] Later work refined the result.',
+			inlines: [
+				{ text: 'Confirmed repeatedly.' },
+				{ text: '[6]', href: '#footnote-6' },
+				{ text: '[17]', href: '#footnote-17' },
+				{ text: ' Later work refined the result.' }
+			]
+		});
+		const segments = segmentBlocks([paragraph]);
+		expect(segments).toHaveLength(2);
+		expect(segments[0].text).toBe('Confirmed repeatedly.[6][17]');
+		expect(segments[0].normalizedText).toBe('Confirmed repeatedly.');
+		expect(segments[1].text).toBe('Later work refined the result.');
+	});
+
 	it('never places a segment boundary inside an inline math span', () => {
 		// Wikipedia-style TeX is full of sentence punctuation: `\!` spacing,
 		// commas, and trailing periods. A boundary inside the span would
