@@ -54,6 +54,7 @@
 	import { LISTENING_MODES } from '$lib/domain/listening-modes';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
+	import { previewAssistantVoice, stopVoicePreview } from '$lib/services/assistant-voice-preview';
 	import { READER_FONTS, THEMES, appearanceState } from '$lib/state/appearance.svelte';
 	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
 	import ProviderLogo from '$lib/components/ProviderLogo.svelte';
@@ -71,6 +72,36 @@
 
 	const model = getModel('supertonic-3');
 	const previewText = 'A calm voice can make every page feel closer.';
+
+	let assistantVoiceLoading = $state<string | null>(null);
+	let assistantVoicePlaying = $state<string | null>(null);
+	let assistantVoiceError = $state('');
+
+	async function previewAssistantVoiceSample(voiceId: string): Promise<void> {
+		assistantVoiceError = '';
+		const apiKey = providersState.keyFor('openai');
+		if (!apiKey) {
+			assistantVoiceError = 'Add your OpenAI key to hear voice samples.';
+			return;
+		}
+		assistantVoiceLoading = voiceId;
+		try {
+			const started = await previewAssistantVoice(voiceId, apiKey);
+			assistantVoiceLoading = null;
+			if (!started) {
+				assistantVoicePlaying = null;
+				return;
+			}
+			assistantVoicePlaying = voiceId;
+			await started.finished;
+			if (assistantVoicePlaying === voiceId) assistantVoicePlaying = null;
+		} catch (error) {
+			assistantVoiceLoading = null;
+			assistantVoicePlaying = null;
+			assistantVoiceError =
+				error instanceof Error ? error.message : 'The voice sample could not be played.';
+		}
+	}
 
 	const ASSISTANT_EFFORT_NOTES: Record<RealtimeEffort, string> = {
 		minimal: 'fastest replies',
@@ -234,6 +265,7 @@
 		stopPreview(false);
 		previewGain?.disconnect();
 		void previewContext?.close();
+		stopVoicePreview();
 	});
 
 	onMount(() => {
@@ -1067,23 +1099,49 @@
 
 			<div class="assistant-group" role="group" aria-label="Assistant voice">
 				<span class="assistant-group-label">Voice</span>
-				<div class="engine-models assistant-grid">
+				<div class="voice-grid">
 					{#each REALTIME_VOICES as voice (voice.id)}
-						<button
-							type="button"
-							class="engine-model"
-							class:selected={providersState.realtimeVoice === voice.id}
-							aria-pressed={providersState.realtimeVoice === voice.id}
-							onclick={() => {
-								void providersState.setRealtimeVoice(voice.id);
-								realtimeAssistant.applyLiveSettings();
-							}}
-						>
-							<strong>{voice.label}</strong>
-							{#if voice.tagline}<small>{voice.tagline}</small>{/if}
-						</button>
+						<div class="voice-card" class:selected={providersState.realtimeVoice === voice.id}>
+							<button
+								type="button"
+								class="voice-select"
+								aria-pressed={providersState.realtimeVoice === voice.id}
+								onclick={() => {
+									void providersState.setRealtimeVoice(voice.id);
+									realtimeAssistant.applyLiveSettings();
+								}}
+							>
+								<strong>
+									{voice.label}
+									{#if voice.recommended}<span class="voice-badge">Top pick</span>{/if}
+								</strong>
+								<small>{voice.tagline}</small>
+							</button>
+							<button
+								type="button"
+								class="voice-preview-button"
+								class:sounding={assistantVoicePlaying === voice.id}
+								aria-label={assistantVoicePlaying === voice.id
+									? `Stop the ${voice.label} sample`
+									: `Hear a sample of ${voice.label}`}
+								title={assistantVoicePlaying === voice.id ? 'Stop sample' : 'Hear a sample'}
+								disabled={assistantVoiceLoading !== null && assistantVoiceLoading !== voice.id}
+								onclick={() => void previewAssistantVoiceSample(voice.id)}
+							>
+								{#if assistantVoiceLoading === voice.id}
+									<LoaderCircle class="spin" size={12} />
+								{:else if assistantVoicePlaying === voice.id}
+									<Square size={10} />
+								{:else}
+									<Play size={12} />
+								{/if}
+							</button>
+						</div>
 					{/each}
 				</div>
+				{#if assistantVoiceError}
+					<p class="voice-preview-error" role="alert">{assistantVoiceError}</p>
+				{/if}
 			</div>
 
 			<div class="assistant-group" role="group" aria-label="Assistant model">
@@ -2096,6 +2154,107 @@
 	   ten voices to two rows. */
 	.assistant-grid {
 		grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+	}
+
+	.voice-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+		gap: 8px;
+	}
+
+	.voice-card {
+		position: relative;
+	}
+
+	.voice-select {
+		display: grid;
+		width: 100%;
+		height: 100%;
+		min-height: 56px;
+		align-content: start;
+		gap: 3px;
+		padding: 10px 36px 10px 12px;
+		border: 1px solid var(--line-strong);
+		border-radius: 8px;
+		background: transparent;
+		color: var(--muted);
+		cursor: pointer;
+		text-align: left;
+		transition:
+			border-color 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.voice-select:hover {
+		border-color: var(--line-strong);
+		color: var(--text);
+	}
+
+	.voice-card.selected .voice-select {
+		border-color: color-mix(in srgb, var(--primary) 60%, var(--line-strong));
+		background: color-mix(in srgb, var(--primary) 7%, transparent);
+		color: var(--text);
+	}
+
+	.voice-select strong {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 11px;
+		font-weight: 620;
+	}
+
+	.voice-select small {
+		color: var(--faint);
+		font-size: 9px;
+		line-height: 1.35;
+	}
+
+	.voice-badge {
+		padding: 2px 6px;
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--primary) 14%, transparent);
+		color: var(--primary);
+		font-size: 7.5px;
+		font-weight: 660;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+	}
+
+	.voice-preview-button {
+		position: absolute;
+		top: 8px;
+		right: 8px;
+		display: grid;
+		width: 22px;
+		height: 22px;
+		place-items: center;
+		padding: 0;
+		border: 1px solid var(--line-strong);
+		border-radius: 50%;
+		background: transparent;
+		color: var(--muted);
+		cursor: pointer;
+		transition:
+			border-color 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.voice-preview-button:hover:not(:disabled),
+	.voice-preview-button.sounding {
+		border-color: color-mix(in srgb, var(--primary) 60%, var(--line-strong));
+		color: var(--primary);
+	}
+
+	.voice-preview-button:disabled {
+		cursor: default;
+		opacity: 0.4;
+	}
+
+	.voice-preview-error {
+		margin: 7px 0 0;
+		color: var(--danger, #e5484d);
+		font-size: 10px;
 	}
 
 	.engine-model {
