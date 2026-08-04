@@ -36,6 +36,7 @@ import {
 } from '$lib/services/openai-realtime';
 import { player } from './player.svelte';
 import { providersState } from './providers.svelte';
+import { readerChrome } from './reader-chrome.svelte';
 
 export type AssistantStatus = 'idle' | 'connecting' | 'live' | 'error';
 export type AssistantMode = 'ptt' | 'handsFree';
@@ -250,14 +251,16 @@ export class RealtimeAssistantState {
 		this.chatFocusToken += 1;
 	}
 
-	/** response.create on the current turn's channel: typed turns ask for
-	 * text-only output; spoken turns leave the session's voice default. */
+	/** response.create on the current turn's channel. Spoken turns always leave
+	 * the session's voice default; a typed turn only asks for text-only output
+	 * when the composer's speaker toggle is off — otherwise typing gets an
+	 * answer out loud, with the transcript still landing in the panel. */
 	private createResponse(): void {
 		// Every path that asks for a reply — a typed turn, a tool-output nudge,
 		// a tour prompt — starts the wait indicator here.
 		this.activity = 'thinking';
 		this.channel?.send(
-			this.turnChannel === 'text'
+			this.turnChannel === 'text' && !readerChrome.spokenChatReplies
 				? { type: 'response.create', response: { output_modalities: ['text'] } }
 				: { type: 'response.create' }
 		);

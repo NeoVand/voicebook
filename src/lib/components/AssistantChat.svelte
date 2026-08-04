@@ -1,9 +1,10 @@
 <script lang="ts">
 	import Icon from '$lib/components/Icon.svelte';
-	import { ArrowUp, Globe, Mic, X } from '$lib/icons';
+	import { ArrowUp, Globe, Mic, Volume2, VolumeX, X } from '$lib/icons';
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
 	import type { NormalizedDocument } from '$lib/domain/types';
+	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
 
 	interface Props {
@@ -234,6 +235,19 @@
 				onkeydown={handleComposerKeydown}
 				{@attach trackComposer}></textarea>
 			<button
+				class="chat-speak"
+				class:on={readerChrome.spokenChatReplies}
+				type="button"
+				aria-pressed={readerChrome.spokenChatReplies}
+				aria-label={readerChrome.spokenChatReplies
+					? 'Replies are spoken aloud. Switch to text-only replies'
+					: 'Replies are text only. Switch to spoken replies'}
+				title={readerChrome.spokenChatReplies ? 'Answers out loud' : 'Answers in text only'}
+				onclick={() => readerChrome.setSpokenChatReplies(!readerChrome.spokenChatReplies)}
+			>
+				<Icon icon={readerChrome.spokenChatReplies ? Volume2 : VolumeX} size={14} />
+			</button>
+			<button
 				class="chat-send"
 				type="button"
 				aria-label="Send"
@@ -433,6 +447,34 @@
 		border: 0;
 		outline: none;
 		box-shadow: none;
+	}
+
+	/* Sits beside Send as a quiet sibling: same footprint, no fill, so the
+	   send button stays the one bright thing in the composer. */
+	.chat-speak {
+		display: grid;
+		width: 26px;
+		height: 26px;
+		flex: 0 0 auto;
+		place-items: center;
+		padding: 0;
+		border: 0;
+		border-radius: 999px;
+		background: transparent;
+		color: var(--faint);
+		cursor: pointer;
+		transition:
+			background 150ms var(--ease),
+			color 150ms var(--ease);
+	}
+
+	.chat-speak.on {
+		color: var(--text);
+	}
+
+	.chat-speak:hover {
+		background: color-mix(in srgb, var(--text) 9%, transparent);
+		color: var(--text);
 	}
 
 	.chat-send {
