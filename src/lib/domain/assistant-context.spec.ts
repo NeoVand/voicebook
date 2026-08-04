@@ -5,7 +5,8 @@ import {
 	buildAssistantInstructions,
 	describePassageLocation,
 	parseAssistantToolCall,
-	readPassageText
+	readPassageText,
+	shouldFollowUpAfterTools
 } from './assistant-context';
 
 function block(
@@ -409,5 +410,49 @@ describe('describePassageLocation', () => {
 
 	it('returns an empty string without an outline', () => {
 		expect(describePassageLocation(doc({ outline: [] }), { startIndex: 1, endIndex: 1 })).toBe('');
+	});
+});
+
+describe('shouldFollowUpAfterTools', () => {
+	it('stays quiet when a mark the reader can see was already spoken for', () => {
+		// Regression: the model says "Okay, I've added that note" in the very
+		// response that calls add_note, and the follow-up said it all over
+		// again — one action, two confirmations.
+		expect(shouldFollowUpAfterTools([{ name: 'add_note' }], true)).toBe(false);
+		expect(
+			shouldFollowUpAfterTools([{ name: 'add_highlight' }, { name: 'save_memory' }], true)
+		).toBe(false);
+	});
+
+	it('answers a silent call, because nothing has been said yet', () => {
+		expect(shouldFollowUpAfterTools([{ name: 'add_note' }], false)).toBe(true);
+		expect(shouldFollowUpAfterTools([{ name: 'show_passage' }], false)).toBe(true);
+	});
+
+	it('answers whenever a result is the point, spoken for or not', () => {
+		for (const name of ['read_passage', 'get_reader_focus', 'plan_tour', 'show_passage']) {
+			expect(shouldFollowUpAfterTools([{ name }], true)).toBe(true);
+		}
+		// A mixed turn follows its answering half.
+		expect(shouldFollowUpAfterTools([{ name: 'add_note' }, { name: 'read_passage' }], true)).toBe(
+			true
+		);
+	});
+
+	it('answers a failure even when success was already claimed', () => {
+		expect(shouldFollowUpAfterTools([{ name: 'add_note', failed: true }], true)).toBe(true);
+	});
+
+	it('leaves the stage to the narrator after play_section', () => {
+		expect(shouldFollowUpAfterTools([{ name: 'play_section' }], false)).toBe(false);
+		expect(shouldFollowUpAfterTools([{ name: 'play_section' }], true)).toBe(false);
+	});
+
+	it('lets a slow tool answer from its own result instead', () => {
+		expect(shouldFollowUpAfterTools([{ name: 'web_research', pending: true }], false)).toBe(false);
+	});
+
+	it('says nothing extra after a response that called nothing', () => {
+		expect(shouldFollowUpAfterTools([], false)).toBe(false);
 	});
 });
