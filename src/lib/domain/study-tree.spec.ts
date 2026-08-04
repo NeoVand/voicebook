@@ -207,6 +207,30 @@ describe('reconcileStudy', () => {
 		expect(queue.map((section) => section.title)).toEqual(['Free particle']);
 	});
 
+	it('is a no-op for a settled document, down to object identity', () => {
+		// `changed` drives a full document write to IndexedDB. Spreading nodes
+		// here made every reopen report a change and rewrite the whole document.
+		const sections = studySections(doc());
+		const first = reconcileStudy(sections, undefined);
+		const settled: typeof first.study = {
+			...first.study,
+			nodes: first.study.nodes.map((node) => ({
+				...node,
+				status: 'ready' as const,
+				summary: `Summary of ${node.title}`
+			}))
+		};
+		settled.abstract = 'The document in a paragraph.';
+		settled.abstractStatus = 'ready';
+		settled.abstractHash = abstractSourceHash(settled.nodes);
+
+		const again = reconcileStudy(sections, settled);
+		expect(again.queue).toHaveLength(0);
+		expect(again.changed).toBe(false);
+		expect(again.study).toBe(settled);
+		again.study.nodes.forEach((node, index) => expect(node).toBe(settled.nodes[index]));
+	});
+
 	it('rescues summaries by content hash when section ids shift', () => {
 		const sections = studySections(doc());
 		const target = sections[1];
