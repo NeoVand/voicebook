@@ -3932,24 +3932,26 @@
 		}
 	}
 
-	/* While the answer is being spoken the source pulses gently — the box
-	   itself is gone by then. */
+	/* While the answer is being spoken the source stays lit — the box itself is
+	   gone by then. The wash behind the glyphs is steady and faint so the
+	   passage stays readable while it is being discussed; only the ring around
+	   it breathes, which is the one part of the highlight that is not sitting
+	   under the text. */
 	.speech-segment.explaining,
 	.construct-segment.explaining,
 	.table-region.explaining {
 		border-radius: 6px;
-		animation: explain-pulse 1.8s ease-in-out infinite;
+		background: color-mix(in srgb, var(--primary) 6%, transparent);
+		animation: explain-pulse 3s ease-in-out infinite;
 	}
 
 	@keyframes explain-pulse {
 		0%,
 		100% {
-			background: color-mix(in srgb, var(--primary) 7%, transparent);
-			box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 7%, transparent);
+			box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 4%, transparent);
 		}
 		50% {
-			background: color-mix(in srgb, var(--primary) 20%, transparent);
-			box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+			box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
 		}
 	}
 
@@ -3961,8 +3963,7 @@
 		.speech-segment.explaining,
 		.construct-segment.explaining,
 		.table-region.explaining {
-			background: color-mix(in srgb, var(--primary) 13%, transparent);
-			box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
+			box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 8%, transparent);
 			animation: none;
 		}
 	}
@@ -3986,12 +3987,15 @@
 		color: var(--reader-ink-strong);
 	}
 
-	/* The assistant's fingertip: the one segment it is describing right now —
-	   solid and darker against the soft pulse of the surrounding passage. */
+	/* The assistant's fingertip: the one segment it is describing right now.
+	   Held to the same weight as the narration highlight — it only has to
+	   stand out from the fainter wash on the passage around it, and anything
+	   heavier turns the sentence it is pointing at into the hardest one to
+	   read. */
 	.speech-segment.assistant-point {
 		border-radius: 6px;
-		background: color-mix(in srgb, var(--primary) 24%, transparent);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 24%, transparent);
+		background: color-mix(in srgb, var(--primary) 14%, transparent);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
 		color: var(--reader-ink-strong);
 	}
 
