@@ -12,6 +12,9 @@ class ReaderChromeState {
 	/** The voice assistant's commentary bubble; hideable from the bubble
 	 * itself, restorable from the mic chip's menu. */
 	assistantCaptions = $state(true);
+	/** Typed questions get a spoken answer as well as the transcript. Off is
+	 * the quiet way to use the chat: the reply arrives as text only. */
+	spokenChatReplies = $state(true);
 
 	get zoomPercent(): number {
 		return Math.round(this.documentZoom * 100);
@@ -28,12 +31,20 @@ class ReaderChromeState {
 		const mode = window.localStorage.getItem('voicebook:listening-mode');
 		if (isListeningMode(mode)) this.defaultListeningMode = mode;
 		this.assistantCaptions = window.localStorage.getItem('voicebook:assistant-captions') !== '0';
+		this.spokenChatReplies = window.localStorage.getItem('voicebook:spoken-chat-replies') !== '0';
 	}
 
 	setAssistantCaptions(on: boolean): void {
 		this.assistantCaptions = on;
 		if (typeof window !== 'undefined') {
 			window.localStorage.setItem('voicebook:assistant-captions', on ? '1' : '0');
+		}
+	}
+
+	setSpokenChatReplies(on: boolean): void {
+		this.spokenChatReplies = on;
+		if (typeof window !== 'undefined') {
+			window.localStorage.setItem('voicebook:spoken-chat-replies', on ? '1' : '0');
 		}
 	}
 

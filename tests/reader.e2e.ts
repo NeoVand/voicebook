@@ -374,6 +374,34 @@ test('opens the typed chat with the / shortcut and keeps / typable inside it', a
 	await expect(composer).toHaveValue('what/why?');
 });
 
+test('typed replies are spoken by default and the composer toggle sticks', async ({ page }) => {
+	await openReadyLibrary(page);
+	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
+	await page.getByRole('textbox', { name: 'Text' }).fill('A paragraph to ask about aloud.');
+	await page.getByRole('button', { name: 'Add to library' }).click();
+	await expect(page).toHaveURL(/\/voicebook\/read\/?\?document=/);
+	await expect(page.locator('[data-segment-id]').first()).toBeVisible();
+	await page.keyboard.press('/');
+
+	const panel = page.getByRole('dialog', { name: 'Type to the assistant' });
+	const spoken = panel.getByRole('button', { name: /Replies are spoken aloud/ });
+	// Typing should feel like talking unless you ask for quiet.
+	await expect(spoken).toHaveAttribute('aria-pressed', 'true');
+
+	await spoken.click();
+	const quiet = panel.getByRole('button', { name: /Replies are text only/ });
+	await expect(quiet).toHaveAttribute('aria-pressed', 'false');
+
+	// The choice is a preference, not panel state: it outlives the reload.
+	await page.reload();
+	await expect(page.locator('[data-segment-id]').first()).toBeVisible();
+	await page.keyboard.press('/');
+	await expect(panel.getByRole('button', { name: /Replies are text only/ })).toHaveAttribute(
+		'aria-pressed',
+		'false'
+	);
+});
+
 test('keeps highlights and margin notes across reloads', async ({ page }) => {
 	await openReadyLibrary(page);
 	await page.getByRole('button', { name: 'Paste text', exact: true }).click();
