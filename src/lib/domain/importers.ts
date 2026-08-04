@@ -56,7 +56,7 @@ export { liteparsePageMarkdown, pdfLooksScanned, stripBlanketBold } from './pdf-
 
 // v13 stripped AI-assistant citation artifacts; v14 re-parses PDFs for
 // pages, embedded images, and bookmarks.
-export const DOCUMENT_NORMALIZATION_VERSION = 14;
+export const DOCUMENT_NORMALIZATION_VERSION = 15;
 
 interface AstNode {
 	type: string;
@@ -543,8 +543,125 @@ export function stripCitationArtifacts(text: string): string {
 	);
 }
 
+/** A `\(`, `\)`, `\[`, or `\]` found outside code, with its source offset. */
+type MathDelimiter = { index: number; display: boolean; open: boolean };
+
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Every LaTeX math delimiter in `text` that sits outside a fenced code block
+ * and outside an inline code span, in source order.
+ */
+function mathDelimiters(text: string): MathDelimiter[] {
+	const found: MathDelimiter[] = [];
+	let fence: string | null = null;
+	let codeSpan: string | null = null;
+	let offset = 0;
+	for (const line of text.split('\n')) {
+		const fenceMatch = FENCE_LINE.exec(line);
+		if (fence) {
+			// Only a run of the same character, at least as long and followed by
+			// nothing but spaces, closes an open fence.
+			if (
+				fenceMatch &&
+				fenceMatch[1][0] === fence[0] &&
+				fenceMatch[1].length >= fence.length &&
+				!line.slice(fenceMatch[0].length).trim()
+			) {
+				fence = null;
+			}
+			offset += line.length + 1;
+			continue;
+		}
+		if (fenceMatch && !codeSpan) {
+			fence = fenceMatch[1];
+			offset += line.length + 1;
+			continue;
+		}
+		for (let index = 0; index < line.length; index += 1) {
+			const char = line[index];
+			if (char === '`') {
+				let run = 1;
+				while (line[index + run] === '`') run += 1;
+				const ticks = '`'.repeat(run);
+				// A code span closes on a backtick run of exactly its own length.
+				if (codeSpan === null) codeSpan = ticks;
+				else if (codeSpan === ticks) codeSpan = null;
+				index += run - 1;
+				continue;
+			}
+			if (codeSpan !== null || char !== '\\') continue;
+			const next = line[index + 1];
+			// `\\(` is an escaped backslash next to a plain paren, not a delimiter.
+			if (next === '\\') {
+				index += 1;
+				continue;
+			}
+			if (next === '(') found.push({ index: offset + index, display: false, open: true });
+			else if (next === ')') found.push({ index: offset + index, display: false, open: false });
+			else if (next === '[') found.push({ index: offset + index, display: true, open: true });
+			else if (next === ']') found.push({ index: offset + index, display: true, open: false });
+			if (next !== undefined) index += 1;
+		}
+		offset += line.length + 1;
+	}
+	return found;
+}
+
+/**
+ * LaTeX-style math delimiters rewritten to the dollar forms remark-math reads.
+ * This has to happen before parsing, not in a plugin: `\(` and `\[` are
+ * backslash escapes in CommonMark, so remark drops the backslash and leaves
+ * the equation body in the paragraph as prose — by the time a plugin sees the
+ * tree, the delimiters are gone. Pandoc, most PDF-to-markdown converters, and
+ * every chat assistant emit this form, so a document full of equations
+ * otherwise renders as naked TeX and is read aloud the same way.
+ *
+ * The rewrite preserves length exactly (`\(x\)` → `$ x $`, `\[x\]` → `$$x$$`;
+ * remark-math strips the padding spaces just as CommonMark strips them from a
+ * code span) so every offset a caller already computed against this source —
+ * PDF page spans especially — still points where it did.
+ */
+export function normalizeMathDelimiters(markdown: string): string {
+	const delimiters = mathDelimiters(markdown);
+	if (!delimiters.length) return markdown;
+	const edits: Array<{ index: number; text: string }> = [];
+	const displayPairs: Array<[number, number]> = [];
+	let opener: MathDelimiter | undefined;
+	// Display pairs resolve first: a `\(` inside one belongs to the equation
+	// body, where a `$` would end the block early.
+	for (const delimiter of delimiters) {
+		if (!delimiter.display) continue;
+		if (delimiter.open) opener ??= delimiter;
+		else if (opener) {
+			edits.push({ index: opener.index, text: '$$' }, { index: delimiter.index, text: '$$' });
+			displayPairs.push([opener.index, delimiter.index]);
+			opener = undefined;
+		}
+	}
+	opener = undefined;
+	for (const delimiter of delimiters) {
+		const nested = displayPairs.some(
+			([start, end]) => delimiter.index > start && delimiter.index < end
+		);
+		if (delimiter.display || nested) continue;
+		if (delimiter.open) opener ??= delimiter;
+		else if (opener) {
+			edits.push({ index: opener.index, text: '$ ' }, { index: delimiter.index, text: ' $' });
+			opener = undefined;
+		}
+	}
+	// An unpaired delimiter is left alone: injecting a lone `$` would swallow
+	// the prose after it as an equation.
+	let out = markdown;
+	for (const edit of edits) {
+		out = out.slice(0, edit.index) + edit.text + out.slice(edit.index + 2);
+	}
+	return out;
+}
+
 function parseMarkdown(markdown: string): ParsedSource {
-	const frontmatter = frontmatterFrom(stripCitationArtifacts(markdown));
+	const frontmatter = frontmatterFrom(normalizeMathDelimiters(stripCitationArtifacts(markdown)));
 	const parsedTree = unified()
 		.use(remarkParse)
 		.use(remarkGfm)
@@ -954,7 +1071,9 @@ function looksLikeMarkdown(text: string): boolean {
 		/^\s{0,3}>\s+\S/m,
 		/^\s{0,3}(?:[-+*]|\d+[.)])\s+\S/m,
 		/^\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}/m,
-		/^\s*(?:\$\$|```math)\s*$/m,
+		// A display equation on its own line, in either delimiter family — a
+		// pasted answer that is prose plus equations has no other markdown tell.
+		/^\s*(?:\$\$|```math|\\\[)\s*$/m,
 		/!\[[^\]]*\]\([^\s)]+(?:\s+['"][^'"]*['"])?\)/,
 		/\[[^\]]+\]\([^\s)]+(?:\s+['"][^'"]*['"])?\)/,
 		/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/m

@@ -111,8 +111,8 @@ async function migrateDocumentNormalization(
 	if (document.normalizationVersion === DOCUMENT_NORMALIZATION_VERSION) return document;
 	// Markdown, DOCX, PDF, and web articles re-parse from the stored original
 	// so normalization improvements (v9: Word tables, equations, diagrams;
-	// v13: PDF pages, images, bookmarks) reach existing documents; other
-	// kinds only re-stamp.
+	// v13: PDF pages, images, bookmarks; v15: LaTeX math delimiters) reach
+	// existing documents; other kinds only re-stamp.
 	const reparseKinds = ['markdown', 'docx', 'pdf', 'web'];
 	if (!reparseKinds.includes(document.sourceKind)) {
 		return { ...document, normalizationVersion: DOCUMENT_NORMALIZATION_VERSION };

@@ -1442,6 +1442,12 @@ test('renders technical Markdown and zooms only the document beneath the navbar'
 				'\\int_0^1 x^2 \\, dx = \\frac{1}{3}',
 				'$$',
 				'',
+				'A LaTeX-delimited \\(\\alpha + \\beta\\) stays inline too.',
+				'',
+				'\\[',
+				'\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}',
+				'\\]',
+				'',
 				'```typescript',
 				'const answer: number = 42;',
 				'```',
@@ -1453,10 +1459,14 @@ test('renders technical Markdown and zooms only the document beneath the navbar'
 		)
 	});
 
-	await expect(page.locator('.math-inline .katex')).toBeVisible();
+	// Both delimiter families reach KaTeX. The LaTeX pair matters because `\(`
+	// and `\[` are CommonMark escapes: unrewritten, remark drops the backslash
+	// and the equation is left in the paragraph as naked TeX.
+	await expect(page.locator('.math-inline .katex')).toHaveCount(2);
+	await expect(page.getByLabel('Equation: \\alpha + \\beta')).toBeVisible();
 	await expect(
 		page.getByRole('figure', { name: 'Mathematical equation' }).locator('.katex-display')
-	).toBeVisible();
+	).toHaveCount(2);
 	const code = page.locator('figure.code-block > pre > code');
 	await expect(code).toContainText('const answer: number = 42;');
 	await expect(code.locator('.hljs-keyword')).toHaveText('const');

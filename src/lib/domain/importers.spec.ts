@@ -25,6 +25,7 @@ import {
 	fingerprint,
 	importFile,
 	kindForFile,
+	normalizeMathDelimiters,
 	pageLines,
 	pdfFailureError,
 	renumberBlocks,
@@ -782,6 +783,20 @@ describe('document importers', () => {
 		expect(documentFromText('Named', 'Text.').sourceName).toBe('Named.txt');
 	});
 
+	it('detects a pasted answer whose only markdown tell is a display equation', () => {
+		// The shape a chat assistant returns: prose and equations, nothing else.
+		const pasted = documentFromText(
+			'Gradient',
+			'The score-function estimator is\n\n\\[\n\\nabla_\\theta J(\\theta)=A\\nabla_\\theta\\log\\pi_\\theta.\n\\]\n'
+		);
+
+		expect(pasted.sourceKind).toBe('markdown');
+		expect(pasted.blocks.find((item) => item.kind === 'math')).toMatchObject({
+			text: '\\nabla_\\theta J(\\theta)=A\\nabla_\\theta\\log\\pi_\\theta.',
+			speak: false
+		});
+	});
+
 	it('detects pasted Markdown and sends it through the structured Markdown parser', () => {
 		const pasted = documentFromText(
 			'',
@@ -939,5 +954,83 @@ describe('stripCitationArtifacts', () => {
 		expect(allText).not.toMatch(/filecite|turn0file|[\ue200-\ue204]/);
 		expect(allText).toContain('The document type is a brief.');
 		expect(allText).toContain('English.');
+	});
+});
+
+describe('normalizeMathDelimiters', () => {
+	const parse = async (markdown: string) =>
+		importFile(new File([markdown], 'paper.md', { type: 'text/markdown' }));
+
+	it('rewrites LaTeX delimiters into the dollar forms remark-math reads', () => {
+		expect(normalizeMathDelimiters(String.raw`For a prompt \(x\), the policy acts.`)).toBe(
+			'For a prompt $ x $, the policy acts.'
+		);
+		expect(normalizeMathDelimiters('\\[\nJ(\\theta)=1.\n\\]')).toBe('$$\nJ(\\theta)=1.\n$$');
+	});
+
+	it('preserves source length so computed offsets stay valid', () => {
+		const source = String.raw`Let \(\pi_\theta\) be a policy.
+
+\[
+J(\theta)=\mathbb E[V(x,y)].
+\]
+
+Then \(V(x,y)=1\) holds.`;
+		expect(normalizeMathDelimiters(source)).toHaveLength(source.length);
+	});
+
+	it('parses equations that CommonMark would otherwise strip to prose', async () => {
+		// Regression: `\(` and `\[` are backslash escapes, so remark dropped the
+		// backslash and left 29 equations sitting in paragraphs as naked TeX.
+		const document = await parse(String.raw`# Objective
+
+Let \(\pi_\theta(y\mid x)\) be a policy with parameters \(\theta\).
+
+\[
+J(\theta)=\mathbb E_{x\sim\mathcal D}[V(x,y)].
+\]
+`);
+		const math = document.blocks.filter((block) => block.kind === 'math');
+		expect(math.map((block) => block.text)).toEqual([
+			'J(\\theta)=\\mathbb E_{x\\sim\\mathcal D}[V(x,y)].'
+		]);
+		const inline = document.blocks
+			.flatMap((block) => block.inlines ?? [])
+			.filter((piece) => piece.math)
+			.map((piece) => piece.text);
+		expect(inline).toEqual(['\\pi_\\theta(y\\mid x)', '\\theta']);
+	});
+
+	it('leaves code fences and code spans alone', () => {
+		const source = [
+			'```python',
+			String.raw`m = re.compile(r"\(a\)")`,
+			'```',
+			'',
+			'Use `\\(x\\)`.'
+		].join('\n');
+		expect(normalizeMathDelimiters(source)).toBe(source);
+	});
+
+	it('leaves an unpaired delimiter alone rather than opening a runaway equation', () => {
+		const source = String.raw`A stray \( with no closer, then a whole paragraph of prose.`;
+		expect(normalizeMathDelimiters(source)).toBe(source);
+	});
+
+	it('treats an escaped backslash as literal, not as a delimiter', () => {
+		const source = String.raw`A Windows path C:\\ (parenthetical) stays put.`;
+		expect(normalizeMathDelimiters(source)).toBe(source);
+	});
+
+	it('keeps inline delimiters inside a display equation as LaTeX', () => {
+		// A `$` inside `$$…$$` would end the block early and split the equation.
+		expect(normalizeMathDelimiters('\\[\n\\left\\(a\\right\\)\n\\]')).toBe(
+			'$$\n\\left\\(a\\right\\)\n$$'
+		);
+	});
+
+	it('leaves documents that already use dollar delimiters untouched', () => {
+		const source = 'Energy is $E=mc^2$ and\n\n$$\na^2+b^2=c^2\n$$\n';
+		expect(normalizeMathDelimiters(source)).toBe(source);
 	});
 });
