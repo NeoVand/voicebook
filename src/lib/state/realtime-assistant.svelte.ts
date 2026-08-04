@@ -18,9 +18,11 @@ import {
 	describePassageLocation,
 	parseAssistantToolCall,
 	readPassageText,
+	shouldFollowUpAfterTools,
 	type AssistantInstructions,
 	type PassageRange,
 	type ReaderFocus,
+	type SettledToolCall,
 	type TourStop
 } from '$lib/domain/assistant-context';
 import { MEMORY_TEXT_LIMIT } from '$lib/domain/study-tree';
@@ -134,6 +136,10 @@ export class RealtimeAssistantState {
 	private sessionLastBlockId?: string;
 	private context?: AssistantInstructions;
 	private seenCalls = new SvelteSet<string>();
+	/** Calls still waiting on a slow tool, and calls whose tool came back with
+	 * an error — both decide whether a finished response gets a follow-up. */
+	private pendingCalls = new SvelteSet<string>();
+	private failedCalls = new SvelteSet<string>();
 	private captionItemId = '';
 	private textItemId = '';
 	private transcriptDocumentId = '';
@@ -438,6 +444,8 @@ export class RealtimeAssistantState {
 		this.document = undefined;
 		this.context = undefined;
 		this.seenCalls.clear();
+		this.pendingCalls.clear();
+		this.failedCalls.clear();
 		this.captionItemId = '';
 		this.textItemId = '';
 		this.turnChannel = 'voice';
@@ -621,6 +629,11 @@ export class RealtimeAssistantState {
 					if (this.speaking) this.advanceAfterAudio = true;
 					else this.advanceTour();
 				}
+				// A response the reader cut off is not owed a follow-up.
+				const finished = (event.response as { status?: string })?.status === 'completed';
+				if (finished && shouldFollowUpAfterTools(this.settledCalls(output), spoke)) {
+					this.scheduleResponseNudge();
+				}
 				// A call-only response produces no audio events at all — start
 				// the queued playback here instead of waiting for a drain that
 				// will never come.
@@ -643,6 +656,10 @@ export class RealtimeAssistantState {
 		}
 	}
 
+	/** Runs the tool and closes the call. Whether the assistant then gets a
+	 * turn to speak about it is decided once the whole response is in, by
+	 * `followUpAfterTools` — deciding here would mean asking for a reply
+	 * before knowing whether the same response already gave one. */
 	private handleFunctionCall(item: FunctionCallItem | undefined): void {
 		if (!item || item.type !== 'function_call' || !this.document) return;
 		const callId = item.call_id ?? '';
@@ -654,18 +671,30 @@ export class RealtimeAssistantState {
 			// model waits on the open call. A session that ended or reconnected
 			// meanwhile drops the result on the floor.
 			const channel = this.channel;
+			this.pendingCalls.add(callId);
 			void output.then((resolved) => {
+				this.pendingCalls.delete(callId);
 				if (!channel || this.channel !== channel) return;
 				this.sendToolOutput(callId, resolved);
+				// The answer only exists now, so this one always gets a turn.
 				this.scheduleResponseNudge();
 			});
 			return;
 		}
+		if ('error' in output) this.failedCalls.add(callId);
 		this.sendToolOutput(callId, output);
-		// After play_section the narration voice has the stage — a follow-up
-		// response would talk over it. The output alone closes the call.
-		if (item.name === 'play_section') return;
-		this.scheduleResponseNudge();
+	}
+
+	/** The response's tool calls, tagged with what running them produced, for
+	 * `shouldFollowUpAfterTools`. */
+	private settledCalls(output: FunctionCallItem[]): SettledToolCall[] {
+		return output
+			.filter((item) => item?.type === 'function_call')
+			.map((item) => ({
+				name: item.name ?? '',
+				pending: this.pendingCalls.has(item.call_id ?? ''),
+				failed: this.failedCalls.has(item.call_id ?? '')
+			}));
 	}
 
 	private sendToolOutput(callId: string, output: Record<string, unknown>): void {

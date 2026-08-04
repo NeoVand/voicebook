@@ -66,6 +66,53 @@ export const ASSISTANT_CONTEXT_CHAR_BUDGET = 360_000;
 /** Tool outputs stay small; the model re-requests when it needs more. */
 export const READ_PASSAGE_CHAR_LIMIT = 8_000;
 
+/** Tools whose entire result is "done": the reader can see the mark land, so
+ * there is nothing for a follow-up response to add. Every other tool either
+ * answers with its result (read_passage, get_reader_focus, web_research) or
+ * hands the assistant something to narrate (plan_tour), and always gets its
+ * turn — suppressing one of those would leave a question unanswered, which is
+ * far worse than hearing a confirmation twice. */
+const CONFIRMATION_TOOLS = new Set([
+	'add_highlight',
+	'add_note',
+	'save_memory',
+	'point_at',
+	'clear_highlight'
+]);
+
+/** One tool call from a finished response, as the follow-up decision sees it. */
+export interface SettledToolCall {
+	name: string;
+	/** Still running — it will ask for its own response when it lands. */
+	pending?: boolean;
+	/** Came back with an error. */
+	failed?: boolean;
+}
+
+/**
+ * Whether a finished response that called tools should be answered with
+ * another one.
+ *
+ * Nearly all of them are: the follow-up is how the reader hears what came
+ * back. The exception is the case that gave the assistant away as a machine —
+ * it says "Okay, I've added that note" in the same response that calls
+ * add_note, and then the follow-up says it a second time. When the whole
+ * response was marks the reader can already see, and something was already
+ * said about them, it ends there.
+ *
+ * A failed tool always gets its turn: the reader is owed the correction,
+ * especially when the response has already claimed success.
+ */
+export function shouldFollowUpAfterTools(calls: SettledToolCall[], spoke: boolean): boolean {
+	if (!calls.length) return false;
+	// After play_section the narration voice has the stage — a follow-up would
+	// talk over it.
+	if (calls.some((call) => call.name === 'play_section')) return false;
+	if (calls.some((call) => call.pending)) return false;
+	if (calls.some((call) => call.failed)) return true;
+	return !spoke || !calls.every((call) => CONFIRMATION_TOOLS.has(call.name));
+}
+
 function marker(index: number): string {
 	return `⟦${index}⟧`;
 }
@@ -159,7 +206,9 @@ When the reader asks for an overview or a walkthrough ("walk me through…", "gi
 
 When the reader asks to hear part of the document read aloud ("read this section to me", "play it from here"), call play_section with that range — the app's reading voice takes over, waiting for you to finish speaking first. A short lead-in ("Here's that section") is fine; after it, stay silent until the reader speaks to you again.
 
-When the reader asks you to mark something for keeps — "highlight this", "save that definition", "add a note here saying…" — call add_highlight or add_note with the exact marker range. These leave permanent gold marks and margin notes that stay with the document after the conversation; keep note text to a sentence or two, in the reader's own framing. Confirm in a brief word once it is done. For merely drawing attention while you talk, keep using show_passage — its highlight fades; add_highlight and add_note are for ink the reader asked to keep.
+When the reader asks you to mark something for keeps — "highlight this", "save that definition", "add a note here saying…" — call add_highlight or add_note with the exact marker range. These leave permanent gold marks and margin notes that stay with the document after the conversation; keep note text to a sentence or two, in the reader's own framing. For merely drawing attention while you talk, keep using show_passage — its highlight fades; add_highlight and add_note are for ink the reader asked to keep.
+
+Do the thing before you talk about it. Never announce a call you are about to make — no "let me add that", no "I'll highlight it and then confirm". Make the call silently, and say your one short line afterwards, about what happened rather than what is coming. Say it once: an action you have already confirmed is finished business, and repeating it is the surest way to sound like a machine.
 
 You also keep notes across conversations: when an exchange reaches something worth carrying forward — a question resolved, a connection the reader made, or "remember this for next time" — call save_memory with one or two sentences (and the passage's marker when it is about a specific place). A READER STATE section, when present, holds these notes plus what the reader has already heard or discussed and where the last conversation left off. Lean on it when they ask what you covered last time (recap from the notes), to continue where they left off (show_passage the left-off spot and pick up from there), or what is left (walk the not-yet-visited sections).
 
