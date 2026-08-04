@@ -718,7 +718,7 @@
 			on(element, 'touchmove', () => (player.autoFollow = false)),
 			on(element, 'pointerup', scheduleTextSelectionAction),
 			on(element, 'keyup', scheduleTextSelectionAction),
-			on(element, 'click', startClickedPassage),
+			on(element, 'dblclick', startClickedPassage),
 			on(element, 'keydown', handlePassageKeydown)
 		];
 		requestAnimationFrame(scheduleVisibleSectionUpdate);
@@ -1125,6 +1125,14 @@
 		};
 	}
 
+	/**
+	 * Double-click, not click: a single click is how you dismiss a popover or
+	 * bring the window forward, and neither should start the voice reading.
+	 *
+	 * The double-click also selects a word, which would leave the selection
+	 * toolbar hanging over a passage that just started playing — so the word
+	 * selection is dropped and the pending toolbar update cancelled.
+	 */
 	function startClickedPassage(event: MouseEvent): void {
 		if (!(event.target instanceof Element)) return;
 		// Interactive content inside a construct (the source-and-description
@@ -1133,10 +1141,10 @@
 			event.target.closest('a, button, summary, textarea, input, select, label, .construct-panel')
 		)
 			return;
-		const selection = window.getSelection();
-		if (selection && !selection.isCollapsed) return;
 		const segment = segmentForElement(event.target);
 		if (!segment) return;
+		window.getSelection()?.removeAllRanges();
+		narrationStartAction = undefined;
 		void startNarrationFrom(segment);
 	}
 
@@ -1389,7 +1397,7 @@
 		role="button"
 		tabindex="0"
 		aria-label={segment.text}
-		title="Play from here"
+		title="Double-click to play from here"
 		data-segment-id={segment.id}
 		{@attach trackSegment(segment.id)}
 	>
@@ -1412,8 +1420,12 @@
 {#snippet renderBlockContent(block: DocumentBlock)}
 	{@const blockSegments = segmentsByBlock.get(block.id) ?? []}
 	{#if blockSegments.length}
-		{#each blockSegments as segment (segment.id)}
-			{@render renderSegment(block, segment)}
+		{#each blockSegments as segment, index (segment.id)}
+			<!-- A real text node, not generated content: the space between two
+			     sentences has to be selectable, or the highlight breaks at every
+			     period and a copied paragraph loses its word gaps. It stays
+			     outside both spans so neither sentence's highlight grows. -->
+			{index > 0 ? ' ' : ''}{@render renderSegment(block, segment)}
 		{/each}
 	{:else}
 		{#each block.inlines ?? [] as inline, inlineIndex (inlineIndex)}
@@ -1483,7 +1495,7 @@
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || 'Diagram'}
-			title="Play from here"
+			title="Double-click to play from here"
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
@@ -1517,7 +1529,7 @@
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || 'Code snippet'}
-			title="Play from here"
+			title="Double-click to play from here"
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
@@ -1550,7 +1562,7 @@
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || 'Equation'}
-			title="Play from here"
+			title="Double-click to play from here"
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
@@ -1649,7 +1661,7 @@
 						class="construct-row"
 						class:active={activeConstructIds.includes(`${block.id}:rh`)}
 						tabindex="0"
-						title="Play from here"
+						title="Double-click to play from here"
 						data-segment-id={headerSegs[0]?.id}
 						{@attach trackConstruct(headerSegs.map((segment) => segment.id))}
 					>
@@ -1668,7 +1680,7 @@
 							class:active={activeConstructIds.includes(`${block.id}:r${rowIndex}`)}
 							class:narration-pending={rowSegs[0]?.narration?.pending}
 							tabindex="0"
-							title="Play from here"
+							title="Double-click to play from here"
 							data-segment-id={rowSegs[0]?.id}
 							{@attach trackConstruct(rowSegs.map((segment) => segment.id))}
 						>
@@ -1718,7 +1730,7 @@
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || run.image?.alt || noun}
-			title="Play from here"
+			title="Double-click to play from here"
 			data-segment-id={segs[0]?.id}
 			{@attach trackConstruct(segs.map((segment) => segment.id))}
 		>
@@ -3953,10 +3965,6 @@
 			box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
 			animation: none;
 		}
-	}
-
-	.speech-segment + .speech-segment::before {
-		content: ' ';
 	}
 
 	/* Persistent reader ink: bookmark gold under the anchored passages.
