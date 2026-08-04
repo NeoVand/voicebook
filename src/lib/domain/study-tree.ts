@@ -231,7 +231,17 @@ export function reconcileStudy(
 		const exact = byId.get(section.id);
 		if (exact && exact.sourceHash === section.sourceHash && exact.status === 'ready') {
 			consumed.add(exact.id);
-			return { ...exact, blockId: section.blockId, title: section.title, level: section.level };
+			// Reuse the very same object when nothing about it moved: `changed`
+			// below is an identity comparison, and a freshly spread node would
+			// report a change on every open — rewriting the whole document to
+			// IndexedDB each time a reader opens it.
+			const moved =
+				exact.blockId !== section.blockId ||
+				exact.title !== section.title ||
+				exact.level !== section.level;
+			return moved
+				? { ...exact, blockId: section.blockId, title: section.title, level: section.level }
+				: exact;
 		}
 		const rescued = readyByHash.get(section.sourceHash);
 		if (rescued && !consumed.has(rescued.id)) {
@@ -265,6 +275,16 @@ export function reconcileStudy(
 		previous.abstractStatus === 'ready' &&
 		previous.abstractHash === expectedAbstractHash
 	);
+
+	// A settled document reconciles to exactly what it already had: hand back
+	// the stored object so callers can skip the write entirely.
+	const settled =
+		previous !== undefined &&
+		!queue.length &&
+		abstractIntact &&
+		previous.nodes.length === nodes.length &&
+		nodes.every((node, index) => node === previous.nodes[index]);
+	if (settled && previous) return { study: previous, queue, changed: false };
 
 	const study: DocumentStudy = {
 		nodes,
