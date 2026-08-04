@@ -1213,8 +1213,15 @@ test('starts narration from a chosen passage or selected word', async ({ page })
 	const thirdPassage = page.locator('.speech-segment').filter({
 		hasText: 'The third passage is the chosen starting point.'
 	});
+	// A single click belongs to the window and to popovers; only a deliberate
+	// double-click starts reading.
 	await thirdPassage.click();
+	await expect(page.getByRole('button', { name: 'Pause' })).toHaveCount(0);
+	await thirdPassage.dblclick();
 	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+	// The word the double-click selected is dropped, so the selection toolbar
+	// never hangs over the passage that just started playing.
+	await expect(page.getByRole('button', { name: 'Play selection' })).toHaveCount(0);
 	await expect(page.locator('.speech-segment.active')).toContainText(
 		'The third passage is the chosen starting point.'
 	);
