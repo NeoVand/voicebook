@@ -783,6 +783,20 @@ describe('document importers', () => {
 		expect(documentFromText('Named', 'Text.').sourceName).toBe('Named.txt');
 	});
 
+	it('detects a pasted answer whose only markdown tell is a display equation', () => {
+		// The shape a chat assistant returns: prose and equations, nothing else.
+		const pasted = documentFromText(
+			'Gradient',
+			'The score-function estimator is\n\n\\[\n\\nabla_\\theta J(\\theta)=A\\nabla_\\theta\\log\\pi_\\theta.\n\\]\n'
+		);
+
+		expect(pasted.sourceKind).toBe('markdown');
+		expect(pasted.blocks.find((item) => item.kind === 'math')).toMatchObject({
+			text: '\\nabla_\\theta J(\\theta)=A\\nabla_\\theta\\log\\pi_\\theta.',
+			speak: false
+		});
+	});
+
 	it('detects pasted Markdown and sends it through the structured Markdown parser', () => {
 		const pasted = documentFromText(
 			'',

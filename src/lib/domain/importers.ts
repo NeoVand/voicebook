@@ -1071,7 +1071,9 @@ function looksLikeMarkdown(text: string): boolean {
 		/^\s{0,3}>\s+\S/m,
 		/^\s{0,3}(?:[-+*]|\d+[.)])\s+\S/m,
 		/^\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}/m,
-		/^\s*(?:\$\$|```math)\s*$/m,
+		// A display equation on its own line, in either delimiter family — a
+		// pasted answer that is prose plus equations has no other markdown tell.
+		/^\s*(?:\$\$|```math|\\\[)\s*$/m,
 		/!\[[^\]]*\]\([^\s)]+(?:\s+['"][^'"]*['"])?\)/,
 		/\[[^\]]+\]\([^\s)]+(?:\s+['"][^'"]*['"])?\)/,
 		/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/m
