@@ -23,6 +23,10 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-78a98f.svg" alt="MIT license" /></a>
 </p>
 
+<p align="center">
+  <a href="https://neovand.github.io/voicebook/"><img src="./docs/images/voicebook-onboarding.png" alt="Voicebook asking how it should read: a reading voice and a visual-description model, each on-device or via your own API key" /></a>
+</p>
+
 Voicebook is a local-first document reader for people who would rather listen. Add a PDF, Word document, Markdown file, plain-text file, or pasted text and Voicebook turns it into a persistent listening experience with natural speech, precise read-along highlighting, and full playback controls — including the parts text-to-speech normally mangles: a language model rewrites equations, tables, diagrams, images, and code into words a voice can actually speak.
 
 There is no account and no Voicebook server. Your documents and generated audio stay on your device, and everything works with free on-device models — or your own API keys when you want premium voices and smarter descriptions.
