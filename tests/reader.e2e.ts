@@ -1894,6 +1894,10 @@ test('reads a PDF as its own pages, with the spoken passage painted on', async (
 	await expect(page.locator('.reading-canvas')).toBeVisible();
 });
 
+/** Enough clicks of the header's theme button to reach any theme from any
+ * other — it steps through them one at a time. */
+const THEME_COUNT = 12;
+
 test('draws each original page once while the reader scrolls back and forth', async ({ page }) => {
 	await openReadyLibrary(page);
 	const pdf = await PDFDocument.create();
@@ -2014,15 +2018,18 @@ test('draws each original page once while the reader scrolls back and forth', as
 	);
 	expect(samples).toBeGreaterThan(0);
 	expect(blank).toBe(0);
-	// The page can be toned down instead of shining white paper out of a dark
-	// theme, and the control says which tone is in force.
-	const toneButton = page.getByRole('button', { name: /Change how bright/ });
-	await expect(toneButton).toHaveAccessibleName(/Dimmed paper/);
-	await toneButton.click();
-	await expect(toneButton).toHaveAccessibleName(/Night paper/);
-	await expect(page.locator('.page-stack')).toHaveAttribute('data-tone', 'night');
-	await toneButton.click();
-	await expect(page.locator('.page-stack')).toHaveAttribute('data-tone', 'paper');
+	// White paper is dimmed under a dark theme and left alone under a light one,
+	// following the theme the reader already chose rather than a control of its
+	// own.
+	const stack = page.locator('.page-stack');
+	await expect(stack).toHaveClass(/\bdimmed\b/);
+	const theme = page.getByRole('button', { name: /Switch to .* theme/ });
+	for (let click = 0; click < THEME_COUNT; click += 1) {
+		if ((await theme.getAttribute('aria-label'))?.includes('Theme: Sunny')) break;
+		await theme.click();
+	}
+	await expect(theme).toHaveAccessibleName(/Theme: Sunny/);
+	await expect(stack).not.toHaveClass(/\bdimmed\b/);
 
 	await expect
 		.poll(

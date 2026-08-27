@@ -80,7 +80,13 @@
 	/** The room the stack has for a page, in CSS pixels. */
 	let available = $state(0);
 
-	let tone = $derived(readerChrome.pageToneFor(appearanceState.themeSpec.dark));
+	/**
+	 * Paper is white, and a white page is a poor thing to hand someone who has
+	 * chosen a dark theme to read in. Under one, the page is dimmed to match —
+	 * no preference to find or set, because the reader already said which kind
+	 * of light they are reading by.
+	 */
+	let dimmed = $derived(appearanceState.themeSpec.dark);
 
 	/**
 	 * The width a page is drawn at. At 100% a page fits the pane, however
@@ -511,7 +517,7 @@
 	});
 </script>
 
-<div class="page-stack" data-tone={tone} {@attach trackStack}>
+<div class="page-stack" class:dimmed {@attach trackStack}>
 	{#each sizes as size (size.page)}
 		{@const scale = pageScale(size.page)}
 		{@const placed = placements.get(size.page)}
@@ -588,19 +594,11 @@
 		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 	}
 
-	/* Toning is applied to the whole sheet, marks included, so the highlights
-	   are still worked out against white paper the way a highlighter behaves
-	   and only then follow the page into the dark. */
-	[data-tone='dim'] .page-sheet {
+	/* Dimming the whole sheet, marks included, rather than the canvas alone:
+	   this way a highlight is still worked out against white paper the way a
+	   highlighter behaves, and only then follows the page into the dark. */
+	.dimmed .page-sheet {
 		filter: brightness(0.72) contrast(1.02);
-	}
-
-	/* Inverting and rotating the hue back keeps the figures' colors roughly
-	   themselves while the paper turns dark and the ink light. Not quite to
-	   black: pure black paper under white type is its own kind of glare. */
-	[data-tone='night'] .page-sheet {
-		box-shadow: none;
-		filter: invert(0.92) hue-rotate(180deg);
 	}
 
 	.page-sheet.over-passage {
