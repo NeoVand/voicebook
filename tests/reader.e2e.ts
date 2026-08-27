@@ -1970,12 +1970,35 @@ test('draws each original page once while the reader scrolls back and forth', as
 	);
 	expect(drawn).toBe(6);
 
-	// Zooming abandons whatever draws were in flight for the old size. The pages
-	// in view must come back at the new one — an abandoned draw that left its
-	// half-finished bitmap in place would show as a torn page here.
+	// Zooming abandons whatever draws were in flight for the old size. A page in
+	// view must never be left blank while that happens: the slider reports every
+	// percent it passes through, and clearing the pages on each one reads as a
+	// strobe.
+	await page.evaluate(() => {
+		let blank = 0;
+		let samples = 0;
+		(window as unknown as { __blank: () => number[] }).__blank = () => [blank, samples];
+		setInterval(() => {
+			for (const slot of document.querySelectorAll<HTMLElement>('.page-slot')) {
+				if (!slot.querySelector('.page-marks')) continue;
+				samples += 1;
+				const canvas = slot.querySelector<HTMLCanvasElement>('canvas');
+				if (!canvas || canvas.width <= 1) blank += 1;
+			}
+		}, 40);
+	});
 	await page.getByRole('button', { name: /Document zoom/ }).click();
-	await page.getByRole('slider', { name: 'Document zoom' }).fill('140');
+	const zoom = page.getByRole('slider', { name: 'Document zoom' });
+	for (let percent = 100; percent <= 140; percent += 4) {
+		await zoom.fill(String(percent));
+		await page.waitForTimeout(30);
+	}
 	await page.keyboard.press('Escape');
+	const [blank, samples] = await page.evaluate(() =>
+		(window as unknown as { __blank: () => number[] }).__blank()
+	);
+	expect(samples).toBeGreaterThan(0);
+	expect(blank).toBe(0);
 	await expect
 		.poll(
 			async () =>

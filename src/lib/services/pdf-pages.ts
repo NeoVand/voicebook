@@ -10,6 +10,12 @@ export interface PageRasterizer {
 	/** Draws a page (1-based) into `canvas` sized for `cssWidth` CSS pixels at
 	 * the device pixel ratio. Sets the canvas buffer and style sizes.
 	 *
+	 * The page is painted off-screen and handed over whole, so `canvas` keeps
+	 * whatever it was showing until the new picture is finished. Painting into
+	 * it directly means clearing it first and then filling it in over however
+	 * many frames the page takes — which reads as a flash on every redraw, and
+	 * as a strobe while a zoom slider is being dragged.
+	 *
 	 * Aborting `signal` abandons the draw — while it is still queued, or partway
 	 * through. A page of dense vector art can take seconds to paint, and renders
 	 * run one at a time, so a reader who has scrolled past one must not leave it
@@ -97,7 +103,17 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 				const width = page.getViewport({ scale: 1 }).width;
 				page.cleanup();
 				const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
-				const viewport = await renderInto(pageNumber, canvas, (cssWidth / width) * ratio, signal);
+				const offscreen = new OffscreenCanvas(1, 1);
+				const viewport = await renderInto(
+					pageNumber,
+					offscreen,
+					(cssWidth / width) * ratio,
+					signal
+				);
+				// Abandoned while it painted: the finished picture is no longer the
+				// one anybody asked for, so leave the canvas as it was.
+				signal?.throwIfAborted();
+				present(canvas, offscreen);
 				canvas.style.width = `${Math.round(viewport.width / ratio)}px`;
 				canvas.style.height = `${Math.round(viewport.height / ratio)}px`;
 			}),
@@ -113,6 +129,33 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 			await loadingTask.destroy();
 		}
 	};
+}
+
+/**
+ * Put a finished off-screen page onto a visible canvas in one step. A bitmap
+ * renderer takes ownership of the pixels outright; where that context is not
+ * available the pixels are copied instead, which costs a blit but still swaps
+ * the whole page at once.
+ */
+function present(canvas: HTMLCanvasElement, source: OffscreenCanvas): void {
+	const bitmap = source.transferToImageBitmap();
+	try {
+		const renderer = canvas.getContext('bitmaprenderer');
+		if (renderer) {
+			// Sized explicitly: transferring a bitmap swaps what the canvas shows
+			// without touching its width and height attributes, and those are what
+			// the page view measures its memory against.
+			canvas.width = bitmap.width;
+			canvas.height = bitmap.height;
+			renderer.transferFromImageBitmap(bitmap);
+			return;
+		}
+		canvas.width = bitmap.width;
+		canvas.height = bitmap.height;
+		canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+	} finally {
+		bitmap.close();
+	}
 }
 
 let openRenderer: { documentId: string; rasterizer: Promise<PageRasterizer | null> } | undefined;

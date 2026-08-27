@@ -93,6 +93,33 @@
 		return Math.max(280, fitted) * readerChrome.documentZoom;
 	});
 
+	/**
+	 * The width to draw at, held still until the reader stops changing it. The
+	 * zoom slider reports every percent it passes through, and redrawing on each
+	 * would abandon and restart every page fifty times across one drag. Layout
+	 * follows `renderWidth` immediately, so the pages resize under the slider
+	 * as it moves — a little soft until the redraw lands, which is what a zoom
+	 * should feel like.
+	 */
+	let drawWidth = $state(0);
+	const ZOOM_SETTLE_MS = 160;
+	/** Plain, not reactive: the settle effect must depend on the width being
+	 * asked for, never on the width it last handed over. */
+	let widthSeen: number | undefined;
+
+	$effect(() => {
+		const width = renderWidth;
+		const first = widthSeen === undefined;
+		widthSeen = width;
+		// The first width is not a zoom — draw at it straight away.
+		if (first) {
+			drawWidth = width;
+			return;
+		}
+		const settle = setTimeout(() => (drawWidth = width), ZOOM_SETTLE_MS);
+		return () => clearTimeout(settle);
+	});
+
 	function trackStack(node: HTMLElement) {
 		scroller = node;
 		const observer = new ResizeObserver(() => {
@@ -227,8 +254,9 @@
 	 * one at a time, and every other page stopped appearing behind it.
 	 */
 	$effect(() => {
-		const width = renderWidth;
+		const width = drawWidth;
 		const pages = new Set(live);
+		if (!width) return;
 
 		// Abandon draws nobody is waiting for any more: the reader has scrolled
 		// past the page, or has zoomed, which makes the size being drawn wrong.
@@ -281,11 +309,9 @@
 					await renderer.renderPage(page, canvas, width, draw.controller.signal);
 					drawnWidths.set(page, width);
 				} catch {
-					// Abandoned, or a page that will not draw. Either way the canvas
-					// is holding a bitmap of a picture nobody will see, so give it
-					// back now rather than leaving it for the budget to find.
-					canvas.width = 0;
-					canvas.height = 0;
+					// Abandoned, or a page that will not draw. The canvas still shows
+					// whatever it showed before — the picture was painted off-screen —
+					// so there is nothing to clean up but the record.
 					drawnWidths.delete(page);
 				} finally {
 					if (drawing.get(page) === draw) drawing.delete(page);
