@@ -67,9 +67,35 @@
 		});
 	});
 
-	/** The width a page is drawn at, in CSS pixels: the reader's canvas width,
-	 * capped so a page never overflows the column it sits in. */
-	let renderWidth = $derived(readerChrome.documentCanvasWidth);
+	/** The room the stack has for a page, in CSS pixels. */
+	let available = $state(0);
+
+	/**
+	 * The width a page is drawn at. At 100% a page fits the pane, however
+	 * narrow it is — a page you have to scroll sideways to read is not a
+	 * readable page. Above 100% it is meant to overflow: that is what zooming
+	 * into a figure is for, and the stack scrolls both ways to follow.
+	 */
+	let renderWidth = $derived.by(() => {
+		// The reading view's column width before zoom — the same measure, so the
+		// two views feel like one document at one size.
+		const column = readerChrome.documentCanvasWidth / readerChrome.documentZoom;
+		const fitted = available > 0 ? Math.min(column, available) : column;
+		return Math.max(280, fitted) * readerChrome.documentZoom;
+	});
+
+	function trackStack(node: HTMLElement) {
+		scroller = node;
+		const observer = new ResizeObserver(() => {
+			const style = getComputedStyle(node);
+			available = node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+		});
+		observer.observe(node);
+		return () => {
+			observer.disconnect();
+			if (scroller === node) scroller = undefined;
+		};
+	}
 
 	let blockText = $derived(new Map(book.blocks.map((block) => [block.id, block.text])));
 
@@ -306,7 +332,7 @@
 	});
 </script>
 
-<div class="page-stack" bind:this={scroller}>
+<div class="page-stack" {@attach trackStack}>
 	{#each sizes as size (size.page)}
 		{@const scale = pageScale(size.page)}
 		{@const placed = placements.get(size.page)}
@@ -318,6 +344,8 @@
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div
 				class="page-sheet"
+				class:over-passage={hovered?.page === size.page}
+				title="Double-click to play from here"
 				style:width={`${size.width * scale}px`}
 				style:height={`${size.height * scale}px`}
 				ondblclick={(event) => handleActivate(event, size.page)}
@@ -346,7 +374,9 @@
 		display: flex;
 		flex: 1;
 		flex-direction: column;
-		align-items: center;
+		/* `safe` matters once a zoomed page is wider than the pane: plain
+		   centring would put its left edge out of reach of the scrollbar. */
+		align-items: safe center;
 		gap: 26px;
 		overflow: auto;
 		padding: calc(var(--app-header-height) + 22px) 20px calc(var(--player-height) + 32px);
@@ -377,6 +407,10 @@
 		border-radius: 3px;
 		background: white;
 		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+	}
+
+	.page-sheet.over-passage {
+		cursor: pointer;
 	}
 
 	.page-sheet canvas {
@@ -411,7 +445,7 @@
 	}
 
 	.mark.hover {
-		background: color-mix(in srgb, var(--primary) 12%, transparent);
+		background: color-mix(in srgb, var(--primary) 17%, transparent);
 	}
 
 	/* Persistent reader ink: the same bookmark gold the reading view paints
