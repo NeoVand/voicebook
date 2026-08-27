@@ -77,6 +77,7 @@ export default defineConfig({
 				'src/lib/domain/importers.ts',
 				'src/lib/domain/model-catalog.ts',
 				'src/lib/domain/pages.ts',
+				'src/lib/domain/pdf-layout.ts',
 				'src/lib/domain/pdf-markdown.ts',
 				'src/lib/domain/segmenter.ts',
 				'src/lib/domain/study-tree.ts',
