@@ -207,10 +207,33 @@
 			owedFollow = undefined;
 			onManualScroll?.();
 		};
-		const afterSelection = () => requestAnimationFrame(readSelection);
+		// Watched on the document, not on the stack: a click that lands anywhere
+		// else — the sidebar, the player, the header — drops the selection, and
+		// the actions have to go with it. Listening only here left them stranded
+		// on the page with nothing that would dismiss them.
+		let queued = false;
+		const afterSelection = () => {
+			if (queued) return;
+			queued = true;
+			requestAnimationFrame(() => {
+				queued = false;
+				readSelection();
+			});
+		};
+		// Pressing on a blank part of the page — a margin, a figure, the gap
+		// between paragraphs — puts no caret anywhere, because there is no text
+		// node under the pointer to put one in. The browser therefore leaves the
+		// old selection standing, and with it the actions, which is what made
+		// them feel impossible to dismiss. Clearing it by hand is what clicking
+		// off a selection does everywhere else.
+		const clearOnEmptyPress = (event: PointerEvent) => {
+			const target = event.target as HTMLElement | null;
+			if (target?.closest('.page-text span, .selection-actions, .explain-box')) return;
+			window.getSelection()?.removeAllRanges();
+		};
 		const removeListeners = [
-			on(node, 'pointerup', afterSelection),
-			on(node, 'keyup', afterSelection),
+			on(node, 'pointerdown', clearOnEmptyPress),
+			on(document, 'selectionchange', afterSelection),
 			on(node, 'scroll', measureFocus, { passive: true }),
 			on(node, 'wheel', stopFollowing, { passive: true }),
 			on(node, 'touchmove', stopFollowing, { passive: true })
@@ -424,6 +447,24 @@
 		};
 	});
 
+	/**
+	 * The invisible words have to sit exactly on top of the printed ones, or the
+	 * selection the browser paints lands beside the text it is selecting. Their
+	 * boxes are known; what is not is how wide the same string renders in the
+	 * font this view can actually use, so each is measured once and squeezed to
+	 * fit — which is what pdf.js's own text layer does, and for the same reason.
+	 */
+	const MEASURE_FONT = 'sans-serif';
+	let measurer: CanvasRenderingContext2D | null | undefined;
+
+	function widthScale(word: SelectableWord): number {
+		if (measurer === undefined) measurer = document.createElement('canvas').getContext('2d');
+		if (!measurer || !word.width || !word.height) return 1;
+		measurer.font = `${word.height}px ${MEASURE_FONT}`;
+		const natural = measurer.measureText(word.text).width;
+		return natural > 0 ? word.width / natural : 1;
+	}
+
 	function pageWidth(page: number): number {
 		return sizes[page - 1]?.width || FALLBACK_WIDTH;
 	}
@@ -521,7 +562,13 @@
 			return;
 		}
 		const range = selection.getRangeAt(0);
-		if (!scroller.contains(range.commonAncestorContainer)) return;
+		// A selection made elsewhere — the sidebar, the player's label — leaves
+		// nothing here to act on, and the actions must go with it. Returning
+		// quietly left them stranded on the page with no way to dismiss them.
+		if (!scroller.contains(range.commonAncestorContainer)) {
+			onSelect?.(undefined);
+			return;
+		}
 		const claimed = [...scroller.querySelectorAll<HTMLElement>('.page-text span[data-segment-id]')]
 			.filter((span) => range.intersectsNode(span))
 			.map((span) => ({
@@ -680,7 +727,7 @@
 						{#each words.get(size.page) ?? [] as word, index (index)}<span
 								data-segment-id={word.segmentId}
 								data-word-index={word.wordIndex}
-								style={`left:${word.x}px;top:${word.y}px;width:${word.width}px;height:${word.height}px;font-size:${word.height}px`}
+								style={`left:${word.x}px;top:${word.y}px;font-size:${word.height}px;transform:scaleX(${widthScale(word)})`}
 								>{word.text}</span
 							>{word.endsLine ? '\n' : ' '}{/each}
 					</div>
@@ -779,6 +826,9 @@
 		position: absolute;
 		top: 0;
 		left: 0;
+		/* Pinned: each word is squeezed to its box by a measurement taken in
+		   this same family. */
+		font-family: sans-serif;
 		/* The spaces and newlines between words are there so a copied selection
 		   reads properly, but they are the only children in normal flow — at any
 		   inherited size they stack up as a visible column of blank lines down
@@ -794,15 +844,17 @@
 
 	.page-text span {
 		position: absolute;
-		overflow: hidden;
 		white-space: pre;
 		transform-origin: 0 0;
 	}
 
-	/* The highlight the browser paints for a selection, kept faint: the passage
-	   marks underneath are the ones doing the talking. */
+	/* A selection paints its text in the browser's own colour, which overrides
+	   `color: transparent` and prints a second copy of every selected word over
+	   the picture of it. The highlight is wanted; the ghost text is not. */
 	.page-text ::selection {
-		background: color-mix(in srgb, var(--primary) 26%, transparent);
+		background: color-mix(in srgb, var(--primary) 34%, transparent);
+		color: transparent;
+		-webkit-text-fill-color: transparent;
 	}
 
 	/* Multiply keeps the marks under the ink: a highlighted line stays as

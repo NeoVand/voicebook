@@ -1971,14 +1971,109 @@ test('selects text on an original page and acts on it', async ({ page }) => {
 	await actions.getByRole('button', { name: /^Highlight/ }).click();
 	await expect.poll(async () => page.locator('.mark.annotated').count()).toBeGreaterThan(0);
 
-	// And a selection can be played from where it was printed.
-	await page.mouse.move(drag!.x1, drag!.y1);
-	await page.mouse.down();
-	await page.mouse.move(drag!.x2, drag!.y2, { steps: 10 });
-	await page.mouse.up();
-	await expect(actions).toBeVisible();
+	// Clicking away puts the actions away — whether the click lands on the page
+	// or anywhere else. The selection is watched on the document for exactly
+	// this: a click on the sidebar drops it, and used to leave them stranded.
+	const select = async () => {
+		await page.mouse.move(drag!.x1, drag!.y1);
+		await page.mouse.down();
+		await page.mouse.move(drag!.x2, drag!.y2, { steps: 10 });
+		await page.mouse.up();
+		await expect(actions).toBeVisible();
+	};
+	await select();
+	await page.mouse.click(drag!.x1 + 20, drag!.y1 + 120);
+	await expect(actions).toHaveCount(0);
+
+	await select();
+	// Pressed on the header rather than on a link: the point is that a press
+	// outside the page drops the selection, not that navigating away does.
+	const bar = await page.locator('.reader-commandbar').boundingBox();
+	await page.mouse.click(bar!.x + 6, bar!.y + bar!.height / 2);
+	await expect(actions).toHaveCount(0);
+
+	// And a selection can be played from where it was printed. Last, because
+	// playing scrolls the page and moves everything measured above.
+	await select();
 	await actions.getByRole('button', { name: /^Play the selected/ }).click();
 	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 20_000 });
+});
+
+test('selecting an original page does not print the words twice', async ({ page }) => {
+	await openReadyLibrary(page);
+	const pdf = await PDFDocument.create();
+	const font = await pdf.embedFont(StandardFonts.Helvetica);
+	const sheet = pdf.addPage([612, 792]);
+	sheet.drawText('Ledgers of the Coast', { x: 72, y: 720, size: 22, font });
+	sheet.drawText('The harbour master kept a ledger of every tide.', {
+		x: 72,
+		y: 660,
+		size: 12,
+		font
+	});
+	await page.locator('#document-upload').setInputFiles({
+		name: 'ledgers.pdf',
+		mimeType: 'application/pdf',
+		buffer: Buffer.from(await pdf.save())
+	});
+	await expect(page.locator('.reading-canvas')).toBeVisible({ timeout: 60_000 });
+	await page.getByRole('button', { name: /Switch view/ }).click();
+	const slot = page.locator('.page-slot[data-page="1"]');
+	await expect
+		.poll(async () => slot.locator('canvas').evaluate((node: HTMLCanvasElement) => node.width), {
+			timeout: 30_000
+		})
+		.toBeGreaterThan(400);
+	await expect.poll(async () => slot.locator('.page-text span').count()).toBeGreaterThan(5);
+
+	// A selection paints its text in the browser's own colour unless told not
+	// to, which prints a second copy of every selected word over the picture of
+	// it. Ink is the lightest thing on a dark page, so a ghost shows up as new
+	// light pixels appearing where there were none.
+	const region = await page.evaluate(() => {
+		const words = [
+			...document.querySelectorAll<HTMLElement>('.page-slot[data-page="1"] .page-text span')
+		];
+		const start = words.find((word) => word.textContent === 'harbour');
+		const end = words.find((word) => word.textContent === 'ledger');
+		if (!start || !end) return null;
+		const a = start.getBoundingClientRect();
+		const b = end.getBoundingClientRect();
+		return {
+			x1: a.x + 1,
+			y1: a.y + a.height / 2,
+			x2: b.right - 1,
+			y2: b.y + b.height / 2,
+			clip: { x: a.x - 8, y: a.y - 8, width: b.right - a.x + 16, height: a.height + 16 }
+		};
+	});
+	expect(region).not.toBeNull();
+	const inkPixels = async () => {
+		const shot = await page.screenshot({ clip: region!.clip });
+		const { createCanvas, loadImage } = await import('@napi-rs/canvas');
+		const image = await loadImage(shot);
+		const canvas = createCanvas(image.width, image.height);
+		const context = canvas.getContext('2d');
+		context.drawImage(image, 0, 0);
+		const { data } = context.getImageData(0, 0, image.width, image.height);
+		let light = 0;
+		for (let index = 0; index < data.length; index += 4) {
+			if (0.2126 * data[index] + 0.7152 * data[index + 1] + 0.0722 * data[index + 2] > 200) {
+				light += 1;
+			}
+		}
+		return light;
+	};
+	const before = await inkPixels();
+	await page.mouse.move(region!.x1, region!.y1);
+	await page.mouse.down();
+	await page.mouse.move(region!.x2, region!.y2, { steps: 10 });
+	await page.mouse.up();
+	await expect(page.getByRole('group', { name: 'Actions for the selected text' })).toBeVisible();
+	const after = await inkPixels();
+	// The highlight is a wash well below ink brightness, so selecting should not
+	// add light pixels at all; a ghost copy of the words would add thousands.
+	expect(after).toBeLessThan(before * 1.15 + 50);
 });
 
 test('draws each original page once while the reader scrolls back and forth', async ({ page }) => {
