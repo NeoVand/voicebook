@@ -1404,6 +1404,141 @@
 	</div>
 {/snippet}
 
+<!-- The explain panel, defined here so both views can render it inside
+     their own scroll — its coordinates belong to whichever is showing. -->
+{#snippet explainPanel()}
+	{#if explainBox}
+		<div
+			class="explain-box"
+			class:below={explainBox.placement === 'below'}
+			style:left={`${explainBox.left}px`}
+			style:top={`${explainBox.top}px`}
+			role="dialog"
+			aria-label="Explain the selected passage"
+		>
+			<div class="explain-head">
+				<Icon icon={Sparkles} size={12} aria-hidden="true" />
+				<span class="explain-excerpt">{explainBox.selection}</span>
+				<button
+					class="explain-close"
+					type="button"
+					aria-label="Close the explain panel"
+					onclick={closeExplainBox}
+				>
+					<Icon icon={X} size={13} />
+				</button>
+			</div>
+			<div class="explain-row">
+				<textarea
+					rows="1"
+					placeholder="What are you wondering? (optional)"
+					aria-label="Your question about the selection"
+					disabled={explainStatus !== 'idle'}
+					bind:value={explainQuestion}
+					onkeydown={handleExplainKeydown}
+					{@attach focusExplainInput}></textarea>
+				{#if explainStatus === 'idle'}
+					<button
+						class="explain-run"
+						type="button"
+						aria-label="Explain aloud"
+						title="Explain aloud"
+						onclick={() => void runExplain()}
+					>
+						<Icon icon={Sparkles} size={13} />
+					</button>
+				{:else}
+					<button
+						class="explain-run thinking"
+						type="button"
+						aria-label="Cancel"
+						title="Cancel"
+						onclick={closeExplainBox}
+					>
+						<Icon icon={LoaderCircle} class="spin" size={13} />
+					</button>
+				{/if}
+			</div>
+			{#if explainError}
+				<p class="explain-error" role="alert">{explainError}</p>
+			{/if}
+		</div>
+	{/if}
+{/snippet}
+
+<!-- What the page view renders inside its own scroll: the same selection
+     actions and explain panel the reflowed canvas shows, positioned in that
+     view's coordinates. -->
+{#snippet pageOverlay()}
+	{@render selectionActions()}
+	{@render explainPanel()}
+{/snippet}
+
+<!-- The bar that appears over a selection. Defined here rather than inline
+     because both views need it: the reflowed canvas renders it directly, and
+     the page view is handed it to render inside its own scroll. -->
+{#snippet selectionActions()}
+	{#if narrationStartAction}
+		{@const selectedSegment = book?.segments.find(
+			(segment) => segment.id === narrationStartAction?.segmentId
+		)}
+		{#if selectedSegment}
+			<div
+				class="selection-actions"
+				class:below={narrationStartAction.placement === 'below'}
+				style:left={`${narrationStartAction.left}px`}
+				style:top={`${narrationStartAction.top}px`}
+				role="group"
+				aria-label="Actions for the selected text"
+			>
+				<button
+					class="selection-action"
+					type="button"
+					aria-label={`Play the selected text: ${narrationStartAction.excerpt}`}
+					onpointerdown={(event) => event.preventDefault()}
+					onclick={playSelectedPassage}
+				>
+					<Icon icon={Play} size={12} fill="currentColor" />
+					Play selection
+				</button>
+				<span class="selection-actions-divider" aria-hidden="true"></span>
+				<button
+					class="selection-action"
+					type="button"
+					aria-label={`Explain the selected text: ${narrationStartAction.excerpt}`}
+					onpointerdown={(event) => event.preventDefault()}
+					onclick={openExplainBox}
+				>
+					<Icon icon={Sparkles} size={12} />
+					Explain
+				</button>
+				<span class="selection-actions-divider" aria-hidden="true"></span>
+				<button
+					class="selection-action"
+					type="button"
+					aria-label={`Highlight the selected text: ${narrationStartAction.excerpt}`}
+					onpointerdown={(event) => event.preventDefault()}
+					onclick={() => annotateSelection(false)}
+				>
+					<Icon icon={Highlighter} size={12} />
+					Highlight
+				</button>
+				<span class="selection-actions-divider" aria-hidden="true"></span>
+				<button
+					class="selection-action"
+					type="button"
+					aria-label={`Add a margin note to the selected text: ${narrationStartAction.excerpt}`}
+					onpointerdown={(event) => event.preventDefault()}
+					onclick={() => annotateSelection(true)}
+				>
+					<Icon icon={StickyNote} size={12} />
+					Note
+				</button>
+			</div>
+		{/if}
+	{/if}
+{/snippet}
+
 {#snippet renderSegment(block: DocumentBlock, segment: SpeechSegment)}
 	{@const isActive = activeSegmentId === segment.id}
 	<span
@@ -2102,6 +2237,8 @@
 					follow={player.autoFollow}
 					onPlaySegment={playPlacedSegment}
 					onManualScroll={() => (player.autoFollow = false)}
+					onSelect={(selection) => (narrationStartAction = selection)}
+					overlay={pageOverlay}
 				/>
 			{:else}
 				<article
@@ -2145,65 +2282,7 @@
 						{/each}
 					</div>
 
-					{#if narrationStartAction}
-						{@const selectedSegment = book.segments.find(
-							(segment) => segment.id === narrationStartAction?.segmentId
-						)}
-						{#if selectedSegment}
-							<div
-								class="selection-actions"
-								class:below={narrationStartAction.placement === 'below'}
-								style:left={`${narrationStartAction.left}px`}
-								style:top={`${narrationStartAction.top}px`}
-								role="group"
-								aria-label="Actions for the selected text"
-							>
-								<button
-									class="selection-action"
-									type="button"
-									aria-label={`Play the selected text: ${narrationStartAction.excerpt}`}
-									onpointerdown={(event) => event.preventDefault()}
-									onclick={playSelectedPassage}
-								>
-									<Icon icon={Play} size={12} fill="currentColor" />
-									Play selection
-								</button>
-								<span class="selection-actions-divider" aria-hidden="true"></span>
-								<button
-									class="selection-action"
-									type="button"
-									aria-label={`Explain the selected text: ${narrationStartAction.excerpt}`}
-									onpointerdown={(event) => event.preventDefault()}
-									onclick={openExplainBox}
-								>
-									<Icon icon={Sparkles} size={12} />
-									Explain
-								</button>
-								<span class="selection-actions-divider" aria-hidden="true"></span>
-								<button
-									class="selection-action"
-									type="button"
-									aria-label={`Highlight the selected text: ${narrationStartAction.excerpt}`}
-									onpointerdown={(event) => event.preventDefault()}
-									onclick={() => annotateSelection(false)}
-								>
-									<Icon icon={Highlighter} size={12} />
-									Highlight
-								</button>
-								<span class="selection-actions-divider" aria-hidden="true"></span>
-								<button
-									class="selection-action"
-									type="button"
-									aria-label={`Add a margin note to the selected text: ${narrationStartAction.excerpt}`}
-									onpointerdown={(event) => event.preventDefault()}
-									onclick={() => annotateSelection(true)}
-								>
-									<Icon icon={StickyNote} size={12} />
-									Note
-								</button>
-							</div>
-						{/if}
-					{/if}
+					{@render selectionActions()}
 
 					{#each annotationMarkers as marker (marker.id)}
 						<button
@@ -2273,63 +2352,7 @@
 						</div>
 					{/if}
 
-					{#if explainBox}
-						<div
-							class="explain-box"
-							class:below={explainBox.placement === 'below'}
-							style:left={`${explainBox.left}px`}
-							style:top={`${explainBox.top}px`}
-							role="dialog"
-							aria-label="Explain the selected passage"
-						>
-							<div class="explain-head">
-								<Icon icon={Sparkles} size={12} aria-hidden="true" />
-								<span class="explain-excerpt">{explainBox.selection}</span>
-								<button
-									class="explain-close"
-									type="button"
-									aria-label="Close the explain panel"
-									onclick={closeExplainBox}
-								>
-									<Icon icon={X} size={13} />
-								</button>
-							</div>
-							<div class="explain-row">
-								<textarea
-									rows="1"
-									placeholder="What are you wondering? (optional)"
-									aria-label="Your question about the selection"
-									disabled={explainStatus !== 'idle'}
-									bind:value={explainQuestion}
-									onkeydown={handleExplainKeydown}
-									{@attach focusExplainInput}></textarea>
-								{#if explainStatus === 'idle'}
-									<button
-										class="explain-run"
-										type="button"
-										aria-label="Explain aloud"
-										title="Explain aloud"
-										onclick={() => void runExplain()}
-									>
-										<Icon icon={Sparkles} size={13} />
-									</button>
-								{:else}
-									<button
-										class="explain-run thinking"
-										type="button"
-										aria-label="Cancel"
-										title="Cancel"
-										onclick={closeExplainBox}
-									>
-										<Icon icon={LoaderCircle} class="spin" size={13} />
-									</button>
-								{/if}
-							</div>
-							{#if explainError}
-								<p class="explain-error" role="alert">{explainError}</p>
-							{/if}
-						</div>
-					{/if}
+					{@render explainPanel()}
 				</article>
 			{/if}
 			<p class="sr-only" aria-live="polite">{narrationAnnouncement}</p>

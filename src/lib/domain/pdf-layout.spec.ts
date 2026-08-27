@@ -7,6 +7,7 @@ import {
 	pageWordBoxes,
 	placeSegments,
 	readingOrder,
+	selectableWords,
 	segmentsForPage,
 	type PageWordBox,
 	type PlaceableSegment
@@ -397,5 +398,84 @@ describe('segmentsForPage', () => {
 		const prose = segment('prose', 'a sentence of its own', 2);
 		const placeables = segmentsForPage([prose], 2, new Map([['b1', 'a sentence of its own']]));
 		expect(placeables[0].matchText).toBeUndefined();
+	});
+});
+
+describe('selectableWords', () => {
+	const page = [
+		...line('The harbour master kept a ledger', 100),
+		...line('of every tide that entered', 120)
+	];
+
+	it('tags each word with the passage it belongs to', () => {
+		const [placement] = placeSegments(page, [placeable('s1', 'The harbour master')], 1);
+		const words = selectableWords(page, [placement]);
+		expect(words.slice(0, 3).map((word) => [word.text, word.segmentId, word.wordIndex])).toEqual([
+			['The', 's1', 0],
+			['harbour', 's1', 1],
+			['master', 's1', 2]
+		]);
+	});
+
+	it('keeps words no passage claimed, so they still select and copy', () => {
+		const [placement] = placeSegments(page, [placeable('s1', 'The harbour master')], 1);
+		const words = selectableWords(page, [placement]);
+		const orphan = words.find((word) => word.text === 'ledger');
+		expect(orphan).toBeDefined();
+		expect(orphan?.segmentId).toBeUndefined();
+	});
+
+	it('marks where a line ends, so copied text breaks where the page does', () => {
+		const words = selectableWords(page, []);
+		expect(words.find((word) => word.text === 'ledger')?.endsLine).toBe(true);
+		expect(words.find((word) => word.text === 'harbour')?.endsLine).toBeUndefined();
+		expect(words[words.length - 1].endsLine).toBe(true);
+	});
+
+	it('gives the earlier passage the word where two placements overlap', () => {
+		// Placement itself is monotonic and cannot produce this, but a table row
+		// and the paragraph it interrupts can end up claiming the same ground.
+		const shared = { x: 0, y: 100, width: 400, height: 12 };
+		const claim = (segmentId: string) => ({
+			segmentId,
+			page: 1,
+			rects: [shared],
+			wordRects: [shared],
+			coverage: 1
+		});
+		const words = selectableWords(line('one', 100), [claim('first'), claim('second')]);
+		expect(words[0].segmentId).toBe('first');
+	});
+
+	it('attributes the words of a passage placed only as a region', () => {
+		// A table row is placed by its cells, not by the words of its reading,
+		// so it carries rectangles but no per-word boxes.
+		const table = line('Self-Attention Onnd Restricted', 200);
+		const [placement] = placeSegments(
+			table,
+			[
+				placeable('row', 'Layer Type: Self-Attention.', {
+					matchText: 'Self-Attention Onnd Restricted'
+				})
+			],
+			1
+		);
+		expect(placement.wordRects.every((rect) => rect === undefined)).toBe(true);
+		const words = selectableWords(table, [placement]);
+		expect(words.map((word) => word.segmentId)).toEqual(['row', 'row', 'row']);
+		expect(words.map((word) => word.wordIndex)).toEqual([0, 0, 0]);
+	});
+
+	it('prefers a word’s own box to a region that also covers it', () => {
+		const rect = { x: 0, y: 100, width: 400, height: 12 };
+		const words = selectableWords(line('one', 100), [
+			{ segmentId: 'region', page: 1, rects: [rect], wordRects: [undefined], coverage: 1 },
+			{ segmentId: 'exact', page: 1, rects: [rect], wordRects: [rect], coverage: 1 }
+		]);
+		expect(words[0].segmentId).toBe('exact');
+	});
+
+	it('has nothing to offer for a page with no words', () => {
+		expect(selectableWords([], [])).toEqual([]);
 	});
 });

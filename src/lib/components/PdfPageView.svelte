@@ -1,8 +1,14 @@
 <script lang="ts">
 	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import type { Snippet } from 'svelte';
 	import type { NormalizedDocument, SpeechSegment } from '$lib/domain/types';
-	import type { PageRect, SegmentPlacement } from '$lib/domain/pdf-layout';
+	import {
+		selectableWords,
+		type PageRect,
+		type SegmentPlacement,
+		type SelectableWord
+	} from '$lib/domain/pdf-layout';
 	import { openPdfRenderer } from '$lib/services/pdf-pages';
 	import { openPdfLayout } from '$lib/services/pdf-layout';
 	import { parseColor, type Rgb } from '$lib/domain/page-tone';
@@ -27,6 +33,27 @@
 		onPlaySegment: (segmentId: string) => void;
 		/** The reader scrolled by hand; whatever was following should stop. */
 		onManualScroll?: () => void;
+		/** A selection was made over the page, or cleared. Positions are in this
+		 * view's scroll space, which is why they are worked out here. */
+		onSelect?: (selection: PageSelection | undefined) => void;
+		/** What the reader lays over a selection — its actions, its explain
+		 * panel — rendered inside this view's scroll so it travels with the
+		 * page and is positioned in the same coordinates. */
+		overlay?: Snippet;
+	}
+
+	/** What a selection over the paper amounts to, in the terms the reader
+	 * already speaks: a passage and word to start from, one to stop at, and
+	 * where to put the actions. */
+	export interface PageSelection {
+		segmentId: string;
+		wordIndex: number;
+		endSegmentId: string;
+		endWordIndex: number;
+		excerpt: string;
+		left: number;
+		top: number;
+		placement: 'above' | 'below';
 	}
 
 	let {
@@ -40,7 +67,9 @@
 		assistantPointId,
 		follow = true,
 		onPlaySegment,
-		onManualScroll
+		onManualScroll,
+		onSelect,
+		overlay
 	}: Props = $props();
 
 	/** US Letter, for a document whose parse recorded no page sizes. */
@@ -66,6 +95,9 @@
 		{ width: number; tone: { paper: Rgb; ink: Rgb } | undefined }
 	>();
 	const placements = new SvelteMap<number, Map<string, SegmentPlacement>>();
+	/** Each page's words, tagged with the passage they belong to — the layer
+	 * that makes the paper selectable. */
+	const words = new SvelteMap<number, SelectableWord[]>();
 	let hovered = $state<{ page: number; segmentId: string }>();
 
 	let sizes = $derived.by(() => {
@@ -175,7 +207,10 @@
 			owedFollow = undefined;
 			onManualScroll?.();
 		};
+		const afterSelection = () => requestAnimationFrame(readSelection);
 		const removeListeners = [
+			on(node, 'pointerup', afterSelection),
+			on(node, 'keyup', afterSelection),
 			on(node, 'scroll', measureFocus, { passive: true }),
 			on(node, 'wheel', stopFollowing, { passive: true }),
 			on(node, 'touchmove', stopFollowing, { passive: true })
@@ -369,13 +404,19 @@
 		if (placedAgainst !== currentSegments) {
 			placedAgainst = currentSegments;
 			placements.clear();
+			words.clear();
 		}
 		const layout = openPdfLayout(book);
 		let cancelled = false;
 		for (const page of pages) {
 			if (placements.has(page)) continue;
-			void layout.placements(page, pageCount, currentSegments, blockText).then((placed) => {
-				if (!cancelled && placedAgainst === currentSegments) placements.set(page, placed);
+			void Promise.all([
+				layout.placements(page, pageCount, currentSegments, blockText),
+				layout.pageLayout(page, pageCount)
+			]).then(([placed, geometry]) => {
+				if (cancelled || placedAgainst !== currentSegments) return;
+				placements.set(page, placed);
+				words.set(page, selectableWords(geometry?.boxes ?? [], [...placed.values()]));
 			});
 		}
 		return () => {
@@ -460,6 +501,60 @@
 		const segmentId = segmentAt(page, x, y);
 		if (hovered?.segmentId === segmentId && hovered?.page === page) return;
 		hovered = segmentId ? { page, segmentId } : undefined;
+	}
+
+	/**
+	 * Read the browser's selection back as passages.
+	 *
+	 * Every word carries the passage it belongs to, so this is a matter of
+	 * asking the endpoints of the range what they are rather than working it
+	 * out from geometry. A selection that starts or ends on a word no passage
+	 * claimed — an axis label, part of an equation — falls back to the nearest
+	 * claimed word inside the range, and if there is none there is nothing to
+	 * play or annotate.
+	 */
+	function readSelection(): void {
+		if (!scroller) return;
+		const selection = window.getSelection();
+		if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+			onSelect?.(undefined);
+			return;
+		}
+		const range = selection.getRangeAt(0);
+		if (!scroller.contains(range.commonAncestorContainer)) return;
+		const claimed = [...scroller.querySelectorAll<HTMLElement>('.page-text span[data-segment-id]')]
+			.filter((span) => range.intersectsNode(span))
+			.map((span) => ({
+				segmentId: span.dataset.segmentId ?? '',
+				wordIndex: Number(span.dataset.wordIndex ?? 0)
+			}));
+		if (!claimed.length) {
+			onSelect?.(undefined);
+			return;
+		}
+		const first = claimed[0];
+		const last = claimed[claimed.length - 1];
+		const bounds = range.getBoundingClientRect();
+		const stack = scroller.getBoundingClientRect();
+		const placement = bounds.top - stack.top >= 54 ? 'above' : 'below';
+		onSelect?.({
+			segmentId: first.segmentId,
+			wordIndex: first.wordIndex,
+			endSegmentId: last.segmentId,
+			endWordIndex: last.wordIndex,
+			excerpt: selection.toString().replace(/\s+/g, ' ').trim(),
+			left: Math.max(
+				120,
+				Math.min(
+					scroller.clientWidth - 120,
+					scroller.scrollLeft + bounds.left + bounds.width / 2 - stack.left
+				)
+			),
+			top:
+				scroller.scrollTop +
+				(placement === 'above' ? bounds.top - stack.top - 8 : bounds.bottom - stack.top + 8),
+			placement
+		});
 	}
 
 	function handleActivate(event: MouseEvent, page: number): void {
@@ -577,6 +672,18 @@
 				<canvas {@attach trackCanvas(size.page)} aria-label={`Page ${size.page} of ${book.title}`}
 				></canvas>
 				{#if live.has(size.page)}
+					<!-- The words, invisible, over the picture of them: this is what
+					     the browser selects, and each one already knows the passage
+					     it belongs to. Laid out in PDF points and scaled with the
+					     sheet, so zooming moves it without rebuilding it. -->
+					<div class="page-text" style:transform={`scale(${scale})`}>
+						{#each words.get(size.page) ?? [] as word, index (index)}<span
+								data-segment-id={word.segmentId}
+								data-word-index={word.wordIndex}
+								style={`left:${word.x}px;top:${word.y}px;width:${word.width}px;height:${word.height}px;font-size:${word.height}px`}
+								>{word.text}</span
+							>{word.endsLine ? '\n' : ' '}{/each}
+					</div>
 					<div class="page-marks" aria-hidden="true">
 						{#each marksFor(size.page, placed) as mark (mark.key)}
 							<span class="mark {mark.kind}" style={styleFor(mark.rect, size.page)}></span>
@@ -589,10 +696,14 @@
 			</div>
 		</div>
 	{/each}
+	{@render overlay?.()}
 </div>
 
 <style>
 	.page-stack {
+		/* The selection actions are absolutely positioned against this, and it
+		   is this scroll their coordinates are measured in. */
+		position: relative;
 		display: flex;
 		flex: 1;
 		flex-direction: column;
@@ -660,6 +771,40 @@
 		height: 100%;
 	}
 
+	/* Positioned in PDF points and scaled as a whole, so a zoom is a transform
+	   rather than a thousand style recalculations. The text is invisible and
+	   sized to its own box: what matters is that the browser's selection lands
+	   exactly on the word the page prints there. */
+	.page-text {
+		position: absolute;
+		top: 0;
+		left: 0;
+		/* The spaces and newlines between words are there so a copied selection
+		   reads properly, but they are the only children in normal flow — at any
+		   inherited size they stack up as a visible column of blank lines down
+		   the corner of the page. The words set their own size. */
+		font-size: 0;
+		line-height: 1;
+		white-space: pre;
+		transform-origin: 0 0;
+		color: transparent;
+		cursor: text;
+		user-select: text;
+	}
+
+	.page-text span {
+		position: absolute;
+		overflow: hidden;
+		white-space: pre;
+		transform-origin: 0 0;
+	}
+
+	/* The highlight the browser paints for a selection, kept faint: the passage
+	   marks underneath are the ones doing the talking. */
+	.page-text ::selection {
+		background: color-mix(in srgb, var(--primary) 26%, transparent);
+	}
+
 	/* Multiply keeps the marks under the ink: a highlighted line stays as
 	   readable as an unhighlighted one, which is the whole point of reading
 	   the original. */
@@ -667,6 +812,9 @@
 		position: absolute;
 		mix-blend-mode: multiply;
 		inset: 0;
+		/* Painted over the words, so it must not stand between them and the
+		   pointer that is trying to select them. */
+		pointer-events: none;
 	}
 
 	.mark {

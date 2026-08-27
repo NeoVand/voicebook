@@ -1903,6 +1903,84 @@ test('reads a PDF as its own pages, with the spoken passage painted on', async (
  * other — it steps through them one at a time. */
 const THEME_COUNT = 12;
 
+test('selects text on an original page and acts on it', async ({ page }) => {
+	await openReadyLibrary(page);
+	const pdf = await PDFDocument.create();
+	const font = await pdf.embedFont(StandardFonts.Helvetica);
+	const sheet = pdf.addPage([612, 792]);
+	sheet.drawText('Ledgers of the Coast', { x: 72, y: 720, size: 22, font });
+	sheet.drawText('The harbour master kept a ledger of every tide.', {
+		x: 72,
+		y: 660,
+		size: 12,
+		font
+	});
+	sheet.drawText('Each entry recorded the hour and the weather.', {
+		x: 72,
+		y: 640,
+		size: 12,
+		font
+	});
+	await page.locator('#document-upload').setInputFiles({
+		name: 'ledgers.pdf',
+		mimeType: 'application/pdf',
+		buffer: Buffer.from(await pdf.save())
+	});
+	await expect(page.locator('.reading-canvas')).toBeVisible({ timeout: 60_000 });
+	await page.getByRole('button', { name: /Switch view/ }).click();
+	const slot = page.locator('.page-slot[data-page="1"]');
+	await expect
+		.poll(async () => slot.locator('canvas').evaluate((node: HTMLCanvasElement) => node.width), {
+			timeout: 30_000
+		})
+		.toBeGreaterThan(400);
+
+	// The paper carries a word for every word printed on it, and almost all of
+	// them know which passage they belong to.
+	const spans = slot.locator('.page-text span');
+	await expect.poll(async () => spans.count()).toBeGreaterThan(10);
+	expect(await slot.locator('.page-text span[data-segment-id]').count()).toBeGreaterThan(
+		(await spans.count()) * 0.8
+	);
+
+	// Drag across part of the first body line.
+	const drag = await page.evaluate(() => {
+		const words = [
+			...document.querySelectorAll<HTMLElement>('.page-slot[data-page="1"] .page-text span')
+		];
+		const start = words.find((word) => word.textContent === 'harbour');
+		const end = words.find((word) => word.textContent === 'ledger');
+		if (!start || !end) return null;
+		const a = start.getBoundingClientRect();
+		const b = end.getBoundingClientRect();
+		return { x1: a.x + 1, y1: a.y + a.height / 2, x2: b.right - 1, y2: b.y + b.height / 2 };
+	});
+	expect(drag).not.toBeNull();
+	await page.mouse.move(drag!.x1, drag!.y1);
+	await page.mouse.down();
+	await page.mouse.move(drag!.x2, drag!.y2, { steps: 10 });
+	await page.mouse.up();
+	expect(await page.evaluate(() => getSelection()?.toString() ?? '')).toContain('harbour');
+
+	// The actions travel with the page, in its own scroll.
+	const actions = page.getByRole('group', { name: 'Actions for the selected text' });
+	await expect(actions).toBeVisible();
+	expect(await page.locator('.page-stack .selection-actions').count()).toBe(1);
+
+	// Highlighting from the paper leaves a mark on the paper.
+	await actions.getByRole('button', { name: /^Highlight/ }).click();
+	await expect.poll(async () => page.locator('.mark.annotated').count()).toBeGreaterThan(0);
+
+	// And a selection can be played from where it was printed.
+	await page.mouse.move(drag!.x1, drag!.y1);
+	await page.mouse.down();
+	await page.mouse.move(drag!.x2, drag!.y2, { steps: 10 });
+	await page.mouse.up();
+	await expect(actions).toBeVisible();
+	await actions.getByRole('button', { name: /^Play the selected/ }).click();
+	await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible({ timeout: 20_000 });
+});
+
 test('draws each original page once while the reader scrolls back and forth', async ({ page }) => {
 	await openReadyLibrary(page);
 	const pdf = await PDFDocument.create();

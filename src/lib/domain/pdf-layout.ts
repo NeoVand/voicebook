@@ -680,6 +680,82 @@ export function placeSegments(
  * to find the sentences that actually landed on it. */
 const SPILL_WORDS = 400;
 
+/** One word of a page, ready to be laid out as selectable text over it. */
+export interface SelectableWord extends PageRect {
+	text: string;
+	/** The passage this word belongs to, when placement found one. Words with
+	 * no passage — an axis label, an equation's characters, a running head —
+	 * are still selectable and still copy; they simply have nothing to play. */
+	segmentId?: string;
+	wordIndex?: number;
+	/** True when the next word begins a new line, so copied text breaks where
+	 * the page breaks. */
+	endsLine?: boolean;
+}
+
+/**
+ * The page's words, tagged with the passage each belongs to.
+ *
+ * This is what makes an original page selectable. Rather than laying pdf.js's
+ * own text layer over the canvas and then working out what a selection means,
+ * the layer is built from the same boxes the placement used — so a selected
+ * word already knows its passage and its position within it, and the reader's
+ * existing "play from here", "highlight" and "explain" paths take it exactly
+ * as they take a selection made in the reflowed view.
+ *
+ * A word is attributed to whichever placed passage's box contains its centre.
+ * Passages are considered in document order, so where two placements overlap —
+ * a table row and the paragraph it interrupts — the earlier one wins, which is
+ * the order a reader would read them in.
+ */
+export function selectableWords(
+	boxes: PageWordBox[],
+	placements: SegmentPlacement[]
+): SelectableWord[] {
+	const contains = (rect: PageRect, x: number, y: number) =>
+		x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+	const targets: Array<{ rect: PageRect; segmentId: string; wordIndex: number }> = [];
+	// Region claims stand in where a passage has no per-word boxes at all: a
+	// table row is placed by its cells rather than by the words of its reading,
+	// so its words know their passage but not their position within it. Without
+	// this they would be the one part of the page that cannot be selected into
+	// a passage — and on a paper's title page that is most of it.
+	const regions: Array<{ rect: PageRect; segmentId: string }> = [];
+	for (const placement of placements) {
+		let placed = false;
+		placement.wordRects.forEach((rect, wordIndex) => {
+			if (!rect) return;
+			placed = true;
+			targets.push({ rect, segmentId: placement.segmentId, wordIndex });
+		});
+		if (placed) continue;
+		for (const rect of placement.rects) regions.push({ rect, segmentId: placement.segmentId });
+	}
+	return boxes.map((box, index) => {
+		const centerX = box.x + box.width / 2;
+		const centerY = box.y + box.height / 2;
+		const target =
+			targets.find(({ rect }) => contains(rect, centerX, centerY)) ??
+			regions
+				.filter(({ rect }) => contains(rect, centerX, centerY))
+				.map(({ segmentId }) => ({ segmentId, wordIndex: 0 }))[0];
+		const next = boxes[index + 1];
+		const endsLine =
+			!next ||
+			Math.abs(next.y + next.height / 2 - centerY) >= Math.max(box.height, next.height) / 2 ||
+			next.x + next.width < box.x;
+		return {
+			text: box.text,
+			x: box.x,
+			y: box.y,
+			width: box.width,
+			height: box.height,
+			...(target ? { segmentId: target.segmentId, wordIndex: target.wordIndex } : {}),
+			...(endsLine ? { endsLine: true } : {})
+		};
+	});
+}
+
 /** The passages to align against one page: everything anchored to it, plus a
  * stretch of each neighbour so a paragraph straddling the page break is placed
  * from whichever side is looking.
