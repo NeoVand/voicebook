@@ -11,6 +11,21 @@ export type ReaderView = 'reading' | 'page';
 
 export const READER_VIEWS: ReaderView[] = ['reading', 'page'];
 
+/**
+ * How bright the original pages are allowed to be. Paper is the page as
+ * printed; dimmed takes the glare off white paper without touching what the
+ * figures look like; night inverts it, so the paper is dark and the ink
+ * light. Unset follows the theme — a dark theme should not open a document
+ * by shining a white page at the reader.
+ */
+export type PageTone = 'paper' | 'dim' | 'night';
+
+export const PAGE_TONES: PageTone[] = ['paper', 'dim', 'night'];
+
+function isPageTone(value: unknown): value is PageTone {
+	return PAGE_TONES.includes(value as PageTone);
+}
+
 function isReaderView(value: unknown): value is ReaderView {
 	return READER_VIEWS.includes(value as ReaderView);
 }
@@ -23,6 +38,8 @@ class ReaderChromeState {
 	/** The preferred view, remembered across documents. A document with no
 	 * original pages falls back to reading without changing this. */
 	readerView = $state<ReaderView>('reading');
+	/** Undefined until the reader chooses: see `pageToneFor`. */
+	pageTone = $state<PageTone>();
 	/** The listening mode new imports start in. Per-document overrides live on
 	 * the document itself and take precedence in the reader. */
 	defaultListeningMode = $state<ListeningMode>(DEFAULT_LISTENING_MODE);
@@ -49,8 +66,27 @@ class ReaderChromeState {
 		if (isListeningMode(mode)) this.defaultListeningMode = mode;
 		const view = window.localStorage.getItem('voicebook:reader-view');
 		if (isReaderView(view)) this.readerView = view;
+		const tone = window.localStorage.getItem('voicebook:page-tone');
+		if (isPageTone(tone)) this.pageTone = tone;
 		this.assistantCaptions = window.localStorage.getItem('voicebook:assistant-captions') !== '0';
 		this.spokenChatReplies = window.localStorage.getItem('voicebook:spoken-chat-replies') !== '0';
+	}
+
+	/** The tone in force, given whether the current theme is a dark one. */
+	pageToneFor(darkTheme: boolean): PageTone {
+		return this.pageTone ?? (darkTheme ? 'dim' : 'paper');
+	}
+
+	cyclePageTone(darkTheme: boolean): void {
+		const current = this.pageToneFor(darkTheme);
+		this.setPageTone(PAGE_TONES[(PAGE_TONES.indexOf(current) + 1) % PAGE_TONES.length]);
+	}
+
+	setPageTone(tone: PageTone): void {
+		this.pageTone = tone;
+		if (typeof window !== 'undefined') {
+			window.localStorage.setItem('voicebook:page-tone', tone);
+		}
 	}
 
 	/** Steps to the next view. A cycle rather than a flip, so a third view can

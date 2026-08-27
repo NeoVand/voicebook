@@ -5,6 +5,7 @@
 	import type { PageRect, SegmentPlacement } from '$lib/domain/pdf-layout';
 	import { openPdfRenderer } from '$lib/services/pdf-pages';
 	import { openPdfLayout } from '$lib/services/pdf-layout';
+	import { appearanceState } from '$lib/state/appearance.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 
 	interface Props {
@@ -78,6 +79,8 @@
 
 	/** The room the stack has for a page, in CSS pixels. */
 	let available = $state(0);
+
+	let tone = $derived(readerChrome.pageToneFor(appearanceState.themeSpec.dark));
 
 	/**
 	 * The width a page is drawn at. At 100% a page fits the pane, however
@@ -508,7 +511,7 @@
 	});
 </script>
 
-<div class="page-stack" {@attach trackStack}>
+<div class="page-stack" data-tone={tone} {@attach trackStack}>
 	{#each sizes as size (size.page)}
 		{@const scale = pageScale(size.page)}
 		{@const placed = placements.get(size.page)}
@@ -583,6 +586,21 @@
 		border-radius: 3px;
 		background: white;
 		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+	}
+
+	/* Toning is applied to the whole sheet, marks included, so the highlights
+	   are still worked out against white paper the way a highlighter behaves
+	   and only then follow the page into the dark. */
+	[data-tone='dim'] .page-sheet {
+		filter: brightness(0.72) contrast(1.02);
+	}
+
+	/* Inverting and rotating the hue back keeps the figures' colors roughly
+	   themselves while the paper turns dark and the ink light. Not quite to
+	   black: pure black paper under white type is its own kind of glare. */
+	[data-tone='night'] .page-sheet {
+		box-shadow: none;
+		filter: invert(0.92) hue-rotate(180deg);
 	}
 
 	.page-sheet.over-passage {

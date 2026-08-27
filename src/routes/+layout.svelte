@@ -11,6 +11,7 @@
 		PanelLeftOpen,
 		BookOpenText,
 		BrainCircuit,
+		Contrast,
 		CircleHelp,
 		Fullscreen,
 		RefreshCw,
@@ -21,6 +22,8 @@
 		FileUp,
 		Search,
 		Shrink,
+		Moon,
+		Sun,
 		Link2,
 		List,
 		Menu,
@@ -79,6 +82,8 @@
 		readerBook?.sourceKind === 'pdf' && Boolean(readerBook.sourcePath || readerBook.sourceBlob)
 	);
 	const viewLabels = { reading: 'Reading view', page: 'Original pages' } as const;
+	const toneLabels = { paper: 'Paper', dim: 'Dimmed paper', night: 'Night paper' } as const;
+	let pageTone = $derived(readerChrome.pageToneFor(appearanceState.themeSpec.dark));
 
 	let tourContext = $derived<TourContext>(
 		isReader
@@ -300,6 +305,24 @@
 							<Icon icon={FileText} size={16} strokeWidth={1.6} />
 						{:else}
 							<Icon icon={BookOpenText} size={16} strokeWidth={1.6} />
+						{/if}
+					</button>
+				{/if}
+				{#if originalPagesAvailable && readerChrome.readerView === 'page'}
+					<button
+						class="icon-button"
+						class:active={pageTone !== 'paper'}
+						type="button"
+						aria-label={`${toneLabels[pageTone]}. Change how bright the page is`}
+						title={`${toneLabels[pageTone]} · click to change`}
+						onclick={() => readerChrome.cyclePageTone(appearanceState.themeSpec.dark)}
+					>
+						{#if pageTone === 'night'}
+							<Icon icon={Moon} size={16} strokeWidth={1.6} />
+						{:else if pageTone === 'dim'}
+							<Icon icon={Contrast} size={16} strokeWidth={1.6} />
+						{:else}
+							<Icon icon={Sun} size={16} strokeWidth={1.6} />
 						{/if}
 					</button>
 				{/if}

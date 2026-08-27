@@ -28,6 +28,7 @@ import {
 	CloudRainIcon,
 	CoffeeIcon,
 	CollapseIcon,
+	ContrastIcon,
 	CopyIcon,
 	CpuIcon,
 	DatabaseIcon,
@@ -119,6 +120,7 @@ export const Clock3 = Clock03Icon;
 export const Cloud = CloudIcon;
 export const CloudRain = CloudRainIcon;
 export const Coffee = CoffeeIcon;
+export const Contrast = ContrastIcon;
 export const Copy = CopyIcon;
 export const Cpu = CpuIcon;
 export const Database = DatabaseIcon;

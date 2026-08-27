@@ -1989,16 +1989,41 @@ test('draws each original page once while the reader scrolls back and forth', as
 	});
 	await page.getByRole('button', { name: /Document zoom/ }).click();
 	const zoom = page.getByRole('slider', { name: 'Document zoom' });
+	// The drawing has to grow with its sheet on every step of the drag. Pinned
+	// to the pixel size it was last drawn at, it stayed put while the sheet grew
+	// around it and then jumped when the redraw landed — with the highlights
+	// hanging in the gap, since those follow the sheet.
+	const lag: number[] = [];
 	for (let percent = 100; percent <= 140; percent += 4) {
 		await zoom.fill(String(percent));
 		await page.waitForTimeout(30);
+		lag.push(
+			await page.evaluate(() => {
+				const slot = document.querySelector('.page-slot[data-page="1"]');
+				const sheet = slot?.querySelector('.page-sheet')?.getBoundingClientRect().width ?? 0;
+				const canvas = slot?.querySelector('canvas')?.getBoundingClientRect().width ?? 0;
+				return Math.round(sheet - canvas);
+			})
+		);
 	}
+	// Only the sheet's own border sits between the two.
+	expect(Math.max(...lag)).toBeLessThanOrEqual(2);
 	await page.keyboard.press('Escape');
 	const [blank, samples] = await page.evaluate(() =>
 		(window as unknown as { __blank: () => number[] }).__blank()
 	);
 	expect(samples).toBeGreaterThan(0);
 	expect(blank).toBe(0);
+	// The page can be toned down instead of shining white paper out of a dark
+	// theme, and the control says which tone is in force.
+	const toneButton = page.getByRole('button', { name: /Change how bright/ });
+	await expect(toneButton).toHaveAccessibleName(/Dimmed paper/);
+	await toneButton.click();
+	await expect(toneButton).toHaveAccessibleName(/Night paper/);
+	await expect(page.locator('.page-stack')).toHaveAttribute('data-tone', 'night');
+	await toneButton.click();
+	await expect(page.locator('.page-stack')).toHaveAttribute('data-tone', 'paper');
+
 	await expect
 		.poll(
 			async () =>

@@ -7,8 +7,13 @@ const MAX_PIXELS = 16 * 1024 * 1024;
 
 export interface PageRasterizer {
 	readonly pageCount: number;
-	/** Draws a page (1-based) into `canvas` sized for `cssWidth` CSS pixels at
-	 * the device pixel ratio. Sets the canvas buffer and style sizes.
+	/** Draws a page (1-based) into `canvas` at the device pixel ratio, for a
+	 * display width of `cssWidth`, and reports the CSS size the result wants to
+	 * be shown at. It does NOT set that size on the canvas: a caller whose
+	 * canvas is sized by its own layout (the page view stretches one to fill its
+	 * sheet) must be free to resize the drawing between draws, and pinning it in
+	 * pixels here left the picture at its old size while everything around it
+	 * had already grown.
 	 *
 	 * The page is painted off-screen and handed over whole, so `canvas` keeps
 	 * whatever it was showing until the new picture is finished. Painting into
@@ -25,7 +30,7 @@ export interface PageRasterizer {
 		canvas: HTMLCanvasElement,
 		cssWidth: number,
 		signal?: AbortSignal
-	): Promise<void>;
+	): Promise<{ width: number; height: number }>;
 	/** Renders a page (1-based) to an OffscreenCanvas at `scale`× the page's
 	 * natural point size — the OCR path's rasterizer. */
 	rasterize(page: number, scale: number): Promise<OffscreenCanvas>;
@@ -114,8 +119,10 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 				// one anybody asked for, so leave the canvas as it was.
 				signal?.throwIfAborted();
 				present(canvas, offscreen);
-				canvas.style.width = `${Math.round(viewport.width / ratio)}px`;
-				canvas.style.height = `${Math.round(viewport.height / ratio)}px`;
+				return {
+					width: Math.round(viewport.width / ratio),
+					height: Math.round(viewport.height / ratio)
+				};
 			}),
 		rasterize: (pageNumber, scale) =>
 			serialize(async () => {
