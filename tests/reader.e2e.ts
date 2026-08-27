@@ -1785,6 +1785,309 @@ test('imports a PDF with page markers, page navigation, and the original-page vi
 	await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
+test('reads a PDF as its own pages, with the spoken passage painted on', async ({ page }) => {
+	await openReadyLibrary(page);
+	const pdf = await PDFDocument.create();
+	const font = await pdf.embedFont(StandardFonts.Helvetica);
+	const sourcePages = [
+		[
+			'Ledgers of the Coast',
+			'The harbour master kept a ledger of every tide that entered the bay.',
+			'Each entry recorded the hour, the depth, and the weather over the water.'
+		],
+		[
+			'The Second Winter',
+			'By the second winter the ledger had outgrown its binding entirely.',
+			'A cooper in the town sewed the loose pages into a heavier cover.'
+		]
+	];
+	for (const [heading, first, second] of sourcePages) {
+		const sheet = pdf.addPage([612, 792]);
+		sheet.drawText(heading, { x: 72, y: 720, size: 22, font });
+		sheet.drawText(first, { x: 72, y: 660, size: 12, font });
+		sheet.drawText(second, { x: 72, y: 640, size: 12, font });
+	}
+	await page.locator('#document-upload').setInputFiles({
+		name: 'ledgers.pdf',
+		mimeType: 'application/pdf',
+		buffer: Buffer.from(await pdf.save())
+	});
+	await expect(page.getByRole('heading', { name: 'Ledgers of the Coast' })).toBeVisible();
+
+	// The view control only appears for a document that still has its file.
+	const viewSwitch = page.getByRole('button', { name: /Switch view/ });
+	await expect(viewSwitch).toHaveAccessibleName(/Reading view/);
+	await viewSwitch.click();
+	await expect(page.locator('.reading-canvas')).toHaveCount(0);
+	await expect(viewSwitch).toHaveAccessibleName(/Original pages/);
+
+	// Every page is laid out up front, and the near ones actually draw.
+	await expect(page.locator('.page-slot')).toHaveCount(2);
+	const firstPage = page.locator('.page-slot[data-page="1"]');
+	await expect
+		.poll(
+			async () => firstPage.locator('canvas').evaluate((node: HTMLCanvasElement) => node.width),
+			{ timeout: 30_000 }
+		)
+		.toBeGreaterThan(400);
+
+	// Double-clicking a sentence on the paper plays it, and it lights up where
+	// it was printed rather than anywhere the reflowed text would have put it.
+	const sheet = firstPage.locator('.page-sheet');
+	const sheetBox = await sheet.boundingBox();
+	expect(sheetBox).not.toBeNull();
+	// The first body line's baseline sits at 660pt from the foot of a 792pt
+	// page, so its type occupies roughly 123–135pt from the head.
+	const scale = sheetBox!.width / 612;
+	await sheet.dblclick({ position: { x: 200 * scale, y: 129 * scale } });
+	const marks = firstPage.locator('.mark.passage');
+	await expect.poll(async () => marks.count(), { timeout: 30_000 }).toBeGreaterThan(0);
+	const painted = await marks.first().boundingBox();
+	expect(painted).not.toBeNull();
+	// Painted over the line that was clicked, not over the heading above it.
+	expect(painted!.y - sheetBox!.y).toBeGreaterThan(100 * scale);
+	expect(painted!.y - sheetBox!.y).toBeLessThan(160 * scale);
+	expect(painted!.x - sheetBox!.x).toBeGreaterThan(60 * scale);
+
+	// Reading ahead of the narration must stay where it was put. Pages place
+	// as they scroll into view, and re-following the playhead on each of those
+	// updates snapped the document back to it every time.
+	const stack = page.locator('.page-stack');
+	await page.mouse.move(700, 400);
+	await page.mouse.wheel(0, 2400);
+	await expect.poll(async () => stack.evaluate((node) => node.scrollTop)).toBeGreaterThan(1200);
+	const settledAt = await stack.evaluate((node) => node.scrollTop);
+	// Long enough for the pages now in view to finish placing.
+	await page.waitForTimeout(2500);
+	expect(await stack.evaluate((node) => node.scrollTop)).toBe(settledAt);
+
+	// Following resumes on request, and brings the passage being spoken back
+	// into view.
+	await page.getByRole('button', { name: 'Follow narration' }).click();
+	await expect
+		.poll(
+			async () => {
+				const port = await stack.boundingBox();
+				const mark = await page.locator('.mark.passage').first().boundingBox();
+				if (!port || !mark) return false;
+				return mark.y >= port.y && mark.y + mark.height <= port.y + port.height;
+			},
+			{ timeout: 10_000 }
+		)
+		.toBe(true);
+
+	const pageViewA11y = await new AxeBuilder({ page }).analyze();
+	expect(
+		pageViewA11y.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))
+	).toEqual([]);
+
+	// The contents panel addresses a page rather than an element here, so the
+	// heading it names still moves the stack.
+	await page.getByRole('button', { name: /Open document outline/ }).click();
+	await page.getByRole('button', { name: 'The Second Winter', exact: true }).click();
+	await expect
+		.poll(async () => page.locator('.page-stack').evaluate((node) => node.scrollTop), {
+			timeout: 10_000
+		})
+		.toBeGreaterThan(sheetBox!.height / 2);
+
+	// The preference survives leaving and reopening the document.
+	await page.getByRole('link', { name: 'Library' }).first().click();
+	await page.getByRole('link', { name: 'Ledgers of the Coast' }).first().click();
+	await expect(page.locator('.page-slot')).toHaveCount(2);
+	await page.getByRole('button', { name: /Switch view/ }).click();
+	await expect(page.locator('.reading-canvas')).toBeVisible();
+});
+
+/** Enough clicks of the header's theme button to reach any theme from any
+ * other — it steps through them one at a time. */
+const THEME_COUNT = 12;
+
+test('draws each original page once while the reader scrolls back and forth', async ({ page }) => {
+	await openReadyLibrary(page);
+	const pdf = await PDFDocument.create();
+	const font = await pdf.embedFont(StandardFonts.Helvetica);
+	// Each page says something of its own: pages that differ only by a number
+	// read as a running header, and the importer strips those.
+	const bodies = [
+		'The harbour master kept a ledger of every tide that entered the bay.',
+		'A cooper in the town sewed the loose pages into a heavier cover.',
+		'Winter storms are recorded in a hand that grows steadily smaller.',
+		'By spring the entries return to their usual patient width again.',
+		'The last volume breaks off in the middle of an ordinary morning.',
+		'Nobody wrote down why the record stops where it does.'
+	];
+	for (const [index, body] of bodies.entries()) {
+		const sheet = pdf.addPage([612, 792]);
+		sheet.drawText(`Section ${index + 1}`, { x: 72, y: 720, size: 20, font });
+		sheet.drawText(body, { x: 72, y: 680, size: 12, font });
+	}
+	await page.locator('#document-upload').setInputFiles({
+		name: 'survey.pdf',
+		mimeType: 'application/pdf',
+		buffer: Buffer.from(await pdf.save())
+	});
+	await expect(page.locator('.reading-canvas')).toBeVisible({ timeout: 60_000 });
+	await page.getByRole('button', { name: /Switch view/ }).click();
+	await expect(page.locator('.page-slot')).toHaveCount(6);
+	await expect
+		.poll(
+			async () =>
+				page
+					.locator('.page-slot[data-page="1"] canvas')
+					.evaluate((node: HTMLCanvasElement) => node.width),
+			{ timeout: 30_000 }
+		)
+		.toBeGreaterThan(400);
+
+	// Count the moments a page's bitmap is thrown away. Releasing one is only
+	// meant to happen under memory pressure, which six letter pages come
+	// nowhere near — releasing them as they leave the scrollport instead meant
+	// every sweep redrew the lot, and a page of dense vector art could not
+	// survive that.
+	await page.evaluate(() => {
+		let released = 0;
+		const widths = new Map<number, number>();
+		(window as unknown as { __released: () => number }).__released = () => released;
+		setInterval(() => {
+			for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.page-slot canvas')) {
+				const number = Number(canvas.closest<HTMLElement>('.page-slot')?.dataset.page);
+				const was = widths.get(number);
+				if (was && was > 1 && canvas.width <= 1) released += 1;
+				widths.set(number, canvas.width);
+			}
+		}, 40);
+	});
+
+	await page.mouse.move(700, 400);
+	for (let sweep = 0; sweep < 3; sweep += 1) {
+		for (let step = 0; step < 12; step += 1) await page.mouse.wheel(0, 800);
+		await page.waitForTimeout(250);
+		for (let step = 0; step < 12; step += 1) await page.mouse.wheel(0, -800);
+		await page.waitForTimeout(250);
+	}
+	await page.waitForTimeout(1500);
+	expect(
+		await page.evaluate(() => (window as unknown as { __released: () => number }).__released())
+	).toBe(0);
+	// And every page is drawn, at the size it is shown.
+	const drawn = await page.evaluate(
+		() =>
+			[...document.querySelectorAll<HTMLCanvasElement>('.page-slot canvas')].filter(
+				(canvas) => canvas.width > 400
+			).length
+	);
+	expect(drawn).toBe(6);
+
+	// Zooming abandons whatever draws were in flight for the old size. A page in
+	// view must never be left blank while that happens: the slider reports every
+	// percent it passes through, and clearing the pages on each one reads as a
+	// strobe.
+	await page.evaluate(() => {
+		let blank = 0;
+		let samples = 0;
+		(window as unknown as { __blank: () => number[] }).__blank = () => [blank, samples];
+		setInterval(() => {
+			for (const slot of document.querySelectorAll<HTMLElement>('.page-slot')) {
+				if (!slot.querySelector('.page-marks')) continue;
+				samples += 1;
+				const canvas = slot.querySelector<HTMLCanvasElement>('canvas');
+				if (!canvas || canvas.width <= 1) blank += 1;
+			}
+		}, 40);
+	});
+	await page.getByRole('button', { name: /Document zoom/ }).click();
+	const zoom = page.getByRole('slider', { name: 'Document zoom' });
+	// The drawing has to grow with its sheet on every step of the drag. Pinned
+	// to the pixel size it was last drawn at, it stayed put while the sheet grew
+	// around it and then jumped when the redraw landed — with the highlights
+	// hanging in the gap, since those follow the sheet.
+	const lag: number[] = [];
+	for (let percent = 100; percent <= 140; percent += 4) {
+		await zoom.fill(String(percent));
+		await page.waitForTimeout(30);
+		lag.push(
+			await page.evaluate(() => {
+				const slot = document.querySelector('.page-slot[data-page="1"]');
+				const sheet = slot?.querySelector('.page-sheet')?.getBoundingClientRect().width ?? 0;
+				const canvas = slot?.querySelector('canvas')?.getBoundingClientRect().width ?? 0;
+				return Math.round(sheet - canvas);
+			})
+		);
+	}
+	// Only the sheet's own border sits between the two.
+	expect(Math.max(...lag)).toBeLessThanOrEqual(2);
+	await page.keyboard.press('Escape');
+	const [blank, samples] = await page.evaluate(() =>
+		(window as unknown as { __blank: () => number[] }).__blank()
+	);
+	expect(samples).toBeGreaterThan(0);
+	expect(blank).toBe(0);
+	// The paper is turned dark under a dark theme and left as printed under a
+	// light one, following the theme the reader already chose rather than a
+	// control of its own.
+	const stack = page.locator('.page-stack');
+	await expect(stack).toHaveClass(/\bdarkened\b/);
+	// And the paper really is the theme's paper: a pixel of margin, well away
+	// from any type, comes back as the colour the reading view uses.
+	const marginPixel = async () =>
+		page.evaluate(() => {
+			const canvas = document.querySelector<HTMLCanvasElement>('.page-slot[data-page="1"] canvas');
+			const stack = document.querySelector<HTMLElement>('.page-stack');
+			if (!canvas || !stack) return null;
+			const scratch = document.createElement('canvas');
+			scratch.width = 1;
+			scratch.height = 1;
+			scratch.getContext('2d')?.drawImage(canvas, 8, 8, 1, 1, 0, 0, 1, 1);
+			const [red, green, blue] = scratch.getContext('2d')!.getImageData(0, 0, 1, 1).data;
+			return {
+				paper: [red, green, blue],
+				theme: getComputedStyle(stack).getPropertyValue('--reader')
+			};
+		});
+	const printed = await marginPixel();
+	expect(printed).not.toBeNull();
+	const themePaper = /#(\w{2})(\w{2})(\w{2})/.exec(printed!.theme.trim());
+	expect(themePaper).not.toBeNull();
+	for (let channel = 0; channel < 3; channel += 1) {
+		expect(
+			Math.abs(printed!.paper[channel] - Number.parseInt(themePaper![channel + 1], 16))
+		).toBeLessThanOrEqual(6);
+	}
+	const theme = page.getByRole('button', { name: /Switch to .* theme/ });
+	for (let click = 0; click < THEME_COUNT; click += 1) {
+		if ((await theme.getAttribute('aria-label'))?.includes('Theme: Sunny')) break;
+		await theme.click();
+	}
+	await expect(theme).toHaveAccessibleName(/Theme: Sunny/);
+	await expect(stack).not.toHaveClass(/\bdarkened\b/);
+
+	await expect
+		.poll(
+			async () =>
+				page.evaluate(() => {
+					const slots = [...document.querySelectorAll<HTMLElement>('.page-slot')];
+					// A page renders its marks layer only while it is in play.
+					const inPlay = slots.filter((slot) => slot.querySelector('.page-marks'));
+					if (!inPlay.length) return null;
+					const widths = inPlay.map(
+						(slot) => slot.querySelector<HTMLCanvasElement>('canvas')?.width ?? 0
+					);
+					const sheet = inPlay[0].querySelector<HTMLElement>('.page-sheet');
+					const shown = Math.round(sheet?.getBoundingClientRect().width ?? 0);
+					const distinct = [...new Set(widths)];
+					return {
+						// One size, and it is the size the page is being shown at
+						// (the bitmap floors to a whole pixel).
+						sizes: distinct.length,
+						matchesSheet: distinct.every((width) => Math.abs(width - shown) <= 1)
+					};
+				}),
+			{ timeout: 20_000 }
+		)
+		.toEqual({ sizes: 1, matchesSheet: true });
+});
+
 test('recognizes a scanned PDF with on-device text recognition', async ({ page }) => {
 	// Import covers a ~7 MB engine download (local assets) plus recognition.
 	test.setTimeout(180_000);

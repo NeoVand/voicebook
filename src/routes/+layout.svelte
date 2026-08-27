@@ -9,6 +9,7 @@
 	import {
 		PanelLeftClose,
 		PanelLeftOpen,
+		BookOpenText,
 		BrainCircuit,
 		CircleHelp,
 		Fullscreen,
@@ -72,6 +73,13 @@
 	let readerBook = $derived(
 		isReader ? appState.documents.find((document) => document.id === readerDocumentId) : undefined
 	);
+	/** The page view needs the original file, which only a PDF import keeps —
+	 * and only while the bytes are still on this device. */
+	let originalPagesAvailable = $derived(
+		readerBook?.sourceKind === 'pdf' && Boolean(readerBook.sourcePath || readerBook.sourceBlob)
+	);
+	const viewLabels = { reading: 'Reading view', page: 'Original pages' } as const;
+
 	let tourContext = $derived<TourContext>(
 		isReader
 			? 'reader'
@@ -278,6 +286,23 @@
 				>
 					<Icon icon={List} size={16} strokeWidth={1.6} />
 				</button>
+				{#if originalPagesAvailable}
+					<button
+						class="icon-button"
+						class:active={readerChrome.readerView === 'page'}
+						type="button"
+						data-tour="reader-view"
+						aria-label={`${viewLabels[readerChrome.readerView]}. Switch view`}
+						title={`${viewLabels[readerChrome.readerView]} · click to switch`}
+						onclick={() => readerChrome.cycleReaderView()}
+					>
+						{#if readerChrome.readerView === 'page'}
+							<Icon icon={FileText} size={16} strokeWidth={1.6} />
+						{:else}
+							<Icon icon={BookOpenText} size={16} strokeWidth={1.6} />
+						{/if}
+					</button>
+				{/if}
 				<div class="document-zoom" role="group" aria-label="Document zoom">
 					<div class="zoom-control" bind:this={zoomRoot}>
 						<button

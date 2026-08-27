@@ -50,6 +50,7 @@
 	import ModelInstallPrompt from '$lib/components/ModelInstallPrompt.svelte';
 	import PageMarker from '$lib/components/PageMarker.svelte';
 	import PdfPagePeek from '$lib/components/PdfPagePeek.svelte';
+	import PdfPageView from '$lib/components/PdfPageView.svelte';
 	import SafeHtml from '$lib/components/SafeHtml.svelte';
 	import VolumeControl from '$lib/components/VolumeControl.svelte';
 	import type {
@@ -70,6 +71,7 @@
 	import { breadcrumbFor, outlineText } from '$lib/domain/document-lens';
 	import { generateExplanation } from '$lib/services/explain';
 	import { pageCount, pageStartMap } from '$lib/domain/pages';
+	import { releasePdfLayout } from '$lib/services/pdf-layout';
 	import { releasePdfRenderer } from '$lib/services/pdf-pages';
 	import { readerTourSeen, startTour } from '$lib/services/tours';
 	import { appState } from '$lib/state/app-state.svelte';
@@ -447,6 +449,18 @@
 		book?.sourceKind === 'pdf' && Boolean(book.sourcePath || book.sourceBlob)
 	);
 	let pagePeek = $state<{ page: number }>();
+	let pageView = $state<ReturnType<typeof PdfPageView>>();
+	// The original-page view needs both the file and a page count to lay out;
+	// a document missing either reads as markdown whatever the preference says.
+	let pageViewActive = $derived(
+		readerChrome.readerView === 'page' && peekAvailable && documentPageCount !== undefined
+	);
+
+	/** Play the passage the reader picked out on the original page. */
+	function playPlacedSegment(segmentId: string): void {
+		const index = segmentIndexes.get(segmentId);
+		if (index !== undefined) void player.playFromSegment(index);
+	}
 
 	function childBlocks(block: DocumentBlock): DocumentBlock[] {
 		return (block.children ?? [])
@@ -572,6 +586,7 @@
 		activeOutlineBlockId = undefined;
 		pagePeek = undefined;
 		void releasePdfRenderer();
+		releasePdfLayout();
 		if (!next) {
 			openingTitle = undefined;
 			book = null;
@@ -858,14 +873,18 @@
 	}
 
 	function navigateToOutlineBlock(block: DocumentBlock): void {
-		const element = elementInReader(block.id);
-		if (!element) return;
+		// In the page view there is no element for a heading — the document is a
+		// picture of paper. Its page number is the address instead, and the
+		// passage that follows re-centres once it has been placed.
+		const element = pageViewActive ? undefined : elementInReader(block.id);
+		if (!element && !pageViewActive) return;
 
 		const compactOutline = window.matchMedia('(max-width: 820px)').matches;
 		outlineNavigationBlockId = block.id;
 		activeOutlineBlockId = block.id;
 		outlineAnnouncement = `Moved to ${block.text}`;
-		scrollReaderTo(element, compactOutline);
+		if (element) scrollReaderTo(element, compactOutline);
+		else if (block.anchor.page) pageView?.goToPage(block.anchor.page);
 		if (compactOutline) readerChrome.outlineOpen = false;
 
 		const index = firstSegmentIndex(block);
@@ -2069,229 +2088,250 @@
 				</div>
 			{/if}
 
-			<article
-				class="reading-canvas"
-				class:scrollbar-active={scrollbarActive}
-				style:--document-zoom={readerChrome.documentZoom}
-				style:--document-canvas-width={`${readerChrome.documentCanvasWidth}px`}
-				aria-label={book.title}
-				onpointerover={trackHoveredSegment}
-				{@attach trackReadingCanvas}
-			>
-				<header class="document-heading" id={titleBlock?.id} tabindex="-1">
-					<span>{book.sourceKind.toUpperCase()} · Local library</span>
-					<h1>
-						{#if titleBlock}
-							{#each segmentsByBlock.get(titleBlock.id) ?? [] as segment (segment.id)}
-								{@render renderSegment(titleBlock, segment)}
-							{/each}
-						{:else}
-							{book.title}
-						{/if}
-					</h1>
-					<p>
-						{Math.max(1, Math.round(player.totalDuration / 60))} min read · {book.segments.length}
-						passages{#if documentPageCount}&nbsp;· {documentPageCount} pages{/if}
-					</p>
-				</header>
+			{#if pageViewActive && documentPageCount}
+				<PdfPageView
+					bind:this={pageView}
+					document={book}
+					pageCount={documentPageCount}
+					segments={book.segments}
+					{activeSegmentId}
+					activeWordIndex={player.currentWordIndex}
+					annotatedSegmentIds={annotationPaint.segmentIds}
+					{assistantSegmentIds}
+					{assistantPointId}
+					follow={player.autoFollow}
+					onPlaySegment={playPlacedSegment}
+					onManualScroll={() => (player.autoFollow = false)}
+				/>
+			{:else}
+				<article
+					class="reading-canvas"
+					class:scrollbar-active={scrollbarActive}
+					style:--document-zoom={readerChrome.documentZoom}
+					style:--document-canvas-width={`${readerChrome.documentCanvasWidth}px`}
+					aria-label={book.title}
+					onpointerover={trackHoveredSegment}
+					{@attach trackReadingCanvas}
+				>
+					<header class="document-heading" id={titleBlock?.id} tabindex="-1">
+						<span>{book.sourceKind.toUpperCase()} · Local library</span>
+						<h1>
+							{#if titleBlock}
+								{#each segmentsByBlock.get(titleBlock.id) ?? [] as segment (segment.id)}
+									{@render renderSegment(titleBlock, segment)}
+								{/each}
+							{:else}
+								{book.title}
+							{/if}
+						</h1>
+						<p>
+							{Math.max(1, Math.round(player.totalDuration / 60))} min read · {book.segments.length}
+							passages{#if documentPageCount}&nbsp;· {documentPageCount} pages{/if}
+						</p>
+					</header>
 
-				<div class="document-body" {@attach trackDocumentBody}>
-					{#each rootBlocks as block (block.id)}
-						{@const markerPage = pageStartsById.get(block.id)}
-						<!-- The document's start needs no separator above it. -->
-						{#if markerPage !== undefined && block.id !== rootBlocks[0]?.id}
-							<PageMarker page={markerPage} onPeek={peekAvailable ? openPagePeek : undefined} />
-						{/if}
-						{#if block.kind === 'list-item'}
-							<ul class="document-list legacy-list">{@render renderBlock(block)}</ul>
-						{:else}
-							{@render renderBlock(block)}
-						{/if}
-					{/each}
-				</div>
+					<div class="document-body" {@attach trackDocumentBody}>
+						{#each rootBlocks as block (block.id)}
+							{@const markerPage = pageStartsById.get(block.id)}
+							<!-- The document's start needs no separator above it. -->
+							{#if markerPage !== undefined && block.id !== rootBlocks[0]?.id}
+								<PageMarker page={markerPage} onPeek={peekAvailable ? openPagePeek : undefined} />
+							{/if}
+							{#if block.kind === 'list-item'}
+								<ul class="document-list legacy-list">{@render renderBlock(block)}</ul>
+							{:else}
+								{@render renderBlock(block)}
+							{/if}
+						{/each}
+					</div>
 
-				{#if narrationStartAction}
-					{@const selectedSegment = book.segments.find(
-						(segment) => segment.id === narrationStartAction?.segmentId
-					)}
-					{#if selectedSegment}
-						<div
-							class="selection-actions"
-							class:below={narrationStartAction.placement === 'below'}
-							style:left={`${narrationStartAction.left}px`}
-							style:top={`${narrationStartAction.top}px`}
-							role="group"
-							aria-label="Actions for the selected text"
+					{#if narrationStartAction}
+						{@const selectedSegment = book.segments.find(
+							(segment) => segment.id === narrationStartAction?.segmentId
+						)}
+						{#if selectedSegment}
+							<div
+								class="selection-actions"
+								class:below={narrationStartAction.placement === 'below'}
+								style:left={`${narrationStartAction.left}px`}
+								style:top={`${narrationStartAction.top}px`}
+								role="group"
+								aria-label="Actions for the selected text"
+							>
+								<button
+									class="selection-action"
+									type="button"
+									aria-label={`Play the selected text: ${narrationStartAction.excerpt}`}
+									onpointerdown={(event) => event.preventDefault()}
+									onclick={playSelectedPassage}
+								>
+									<Icon icon={Play} size={12} fill="currentColor" />
+									Play selection
+								</button>
+								<span class="selection-actions-divider" aria-hidden="true"></span>
+								<button
+									class="selection-action"
+									type="button"
+									aria-label={`Explain the selected text: ${narrationStartAction.excerpt}`}
+									onpointerdown={(event) => event.preventDefault()}
+									onclick={openExplainBox}
+								>
+									<Icon icon={Sparkles} size={12} />
+									Explain
+								</button>
+								<span class="selection-actions-divider" aria-hidden="true"></span>
+								<button
+									class="selection-action"
+									type="button"
+									aria-label={`Highlight the selected text: ${narrationStartAction.excerpt}`}
+									onpointerdown={(event) => event.preventDefault()}
+									onclick={() => annotateSelection(false)}
+								>
+									<Icon icon={Highlighter} size={12} />
+									Highlight
+								</button>
+								<span class="selection-actions-divider" aria-hidden="true"></span>
+								<button
+									class="selection-action"
+									type="button"
+									aria-label={`Add a margin note to the selected text: ${narrationStartAction.excerpt}`}
+									onpointerdown={(event) => event.preventDefault()}
+									onclick={() => annotateSelection(true)}
+								>
+									<Icon icon={StickyNote} size={12} />
+									Note
+								</button>
+							</div>
+						{/if}
+					{/if}
+
+					{#each annotationMarkers as marker (marker.id)}
+						<button
+							class="annotation-marker"
+							class:has-note={marker.hasNote}
+							style:left={`${marker.left}px`}
+							style:top={`${marker.top}px`}
+							type="button"
+							aria-label={marker.label}
+							onclick={(event) =>
+								annotationEditor?.id === marker.id
+									? closeAnnotationEditor()
+									: openAnnotationEditor(marker.id, event.currentTarget.getBoundingClientRect())}
 						>
-							<button
-								class="selection-action"
-								type="button"
-								aria-label={`Play the selected text: ${narrationStartAction.excerpt}`}
-								onpointerdown={(event) => event.preventDefault()}
-								onclick={playSelectedPassage}
-							>
-								<Icon icon={Play} size={12} fill="currentColor" />
-								Play selection
-							</button>
-							<span class="selection-actions-divider" aria-hidden="true"></span>
-							<button
-								class="selection-action"
-								type="button"
-								aria-label={`Explain the selected text: ${narrationStartAction.excerpt}`}
-								onpointerdown={(event) => event.preventDefault()}
-								onclick={openExplainBox}
-							>
-								<Icon icon={Sparkles} size={12} />
-								Explain
-							</button>
-							<span class="selection-actions-divider" aria-hidden="true"></span>
-							<button
-								class="selection-action"
-								type="button"
-								aria-label={`Highlight the selected text: ${narrationStartAction.excerpt}`}
-								onpointerdown={(event) => event.preventDefault()}
-								onclick={() => annotateSelection(false)}
-							>
-								<Icon icon={Highlighter} size={12} />
-								Highlight
-							</button>
-							<span class="selection-actions-divider" aria-hidden="true"></span>
-							<button
-								class="selection-action"
-								type="button"
-								aria-label={`Add a margin note to the selected text: ${narrationStartAction.excerpt}`}
-								onpointerdown={(event) => event.preventDefault()}
-								onclick={() => annotateSelection(true)}
-							>
-								<Icon icon={StickyNote} size={12} />
-								Note
-							</button>
+							{#if marker.hasNote}
+								<Icon icon={StickyNote} size={12} aria-hidden="true" />
+							{:else}
+								<span class="annotation-dot" aria-hidden="true"></span>
+							{/if}
+						</button>
+					{/each}
+
+					{#if annotationEditor}
+						{@const editor = annotationEditor}
+						<div
+							class="annotation-editor"
+							class:below={editor.placement === 'below'}
+							style:left={`${editor.left}px`}
+							style:top={`${editor.top}px`}
+							role="dialog"
+							aria-label="Edit the annotation"
+						>
+							<div class="annotation-editor-head">
+								<Icon icon={Highlighter} size={12} aria-hidden="true" />
+								<span class="annotation-excerpt">{annotationEditorExcerpt}</span>
+								<button
+									class="annotation-editor-close"
+									type="button"
+									aria-label="Close the annotation card"
+									onclick={() => closeAnnotationEditor()}
+								>
+									<Icon icon={X} size={13} />
+								</button>
+							</div>
+							<textarea
+								rows="2"
+								placeholder="Add a margin note…"
+								aria-label="Margin note text"
+								bind:value={annotationDraft}
+								{@attach focusExplainInput}></textarea>
+							<footer>
+								<button
+									class="annotation-remove"
+									type="button"
+									onclick={() => deleteAnnotation(editor.id)}
+								>
+									Remove
+								</button>
+								<button
+									class="annotation-done"
+									type="button"
+									onclick={() => closeAnnotationEditor()}
+								>
+									Done
+								</button>
+							</footer>
 						</div>
 					{/if}
-				{/if}
 
-				{#each annotationMarkers as marker (marker.id)}
-					<button
-						class="annotation-marker"
-						class:has-note={marker.hasNote}
-						style:left={`${marker.left}px`}
-						style:top={`${marker.top}px`}
-						type="button"
-						aria-label={marker.label}
-						onclick={(event) =>
-							annotationEditor?.id === marker.id
-								? closeAnnotationEditor()
-								: openAnnotationEditor(marker.id, event.currentTarget.getBoundingClientRect())}
-					>
-						{#if marker.hasNote}
-							<Icon icon={StickyNote} size={12} aria-hidden="true" />
-						{:else}
-							<span class="annotation-dot" aria-hidden="true"></span>
-						{/if}
-					</button>
-				{/each}
-
-				{#if annotationEditor}
-					{@const editor = annotationEditor}
-					<div
-						class="annotation-editor"
-						class:below={editor.placement === 'below'}
-						style:left={`${editor.left}px`}
-						style:top={`${editor.top}px`}
-						role="dialog"
-						aria-label="Edit the annotation"
-					>
-						<div class="annotation-editor-head">
-							<Icon icon={Highlighter} size={12} aria-hidden="true" />
-							<span class="annotation-excerpt">{annotationEditorExcerpt}</span>
-							<button
-								class="annotation-editor-close"
-								type="button"
-								aria-label="Close the annotation card"
-								onclick={() => closeAnnotationEditor()}
-							>
-								<Icon icon={X} size={13} />
-							</button>
-						</div>
-						<textarea
-							rows="2"
-							placeholder="Add a margin note…"
-							aria-label="Margin note text"
-							bind:value={annotationDraft}
-							{@attach focusExplainInput}></textarea>
-						<footer>
-							<button
-								class="annotation-remove"
-								type="button"
-								onclick={() => deleteAnnotation(editor.id)}
-							>
-								Remove
-							</button>
-							<button class="annotation-done" type="button" onclick={() => closeAnnotationEditor()}>
-								Done
-							</button>
-						</footer>
-					</div>
-				{/if}
-
-				{#if explainBox}
-					<div
-						class="explain-box"
-						class:below={explainBox.placement === 'below'}
-						style:left={`${explainBox.left}px`}
-						style:top={`${explainBox.top}px`}
-						role="dialog"
-						aria-label="Explain the selected passage"
-					>
-						<div class="explain-head">
-							<Icon icon={Sparkles} size={12} aria-hidden="true" />
-							<span class="explain-excerpt">{explainBox.selection}</span>
-							<button
-								class="explain-close"
-								type="button"
-								aria-label="Close the explain panel"
-								onclick={closeExplainBox}
-							>
-								<Icon icon={X} size={13} />
-							</button>
-						</div>
-						<div class="explain-row">
-							<textarea
-								rows="1"
-								placeholder="What are you wondering? (optional)"
-								aria-label="Your question about the selection"
-								disabled={explainStatus !== 'idle'}
-								bind:value={explainQuestion}
-								onkeydown={handleExplainKeydown}
-								{@attach focusExplainInput}></textarea>
-							{#if explainStatus === 'idle'}
+					{#if explainBox}
+						<div
+							class="explain-box"
+							class:below={explainBox.placement === 'below'}
+							style:left={`${explainBox.left}px`}
+							style:top={`${explainBox.top}px`}
+							role="dialog"
+							aria-label="Explain the selected passage"
+						>
+							<div class="explain-head">
+								<Icon icon={Sparkles} size={12} aria-hidden="true" />
+								<span class="explain-excerpt">{explainBox.selection}</span>
 								<button
-									class="explain-run"
+									class="explain-close"
 									type="button"
-									aria-label="Explain aloud"
-									title="Explain aloud"
-									onclick={() => void runExplain()}
-								>
-									<Icon icon={Sparkles} size={13} />
-								</button>
-							{:else}
-								<button
-									class="explain-run thinking"
-									type="button"
-									aria-label="Cancel"
-									title="Cancel"
+									aria-label="Close the explain panel"
 									onclick={closeExplainBox}
 								>
-									<Icon icon={LoaderCircle} class="spin" size={13} />
+									<Icon icon={X} size={13} />
 								</button>
+							</div>
+							<div class="explain-row">
+								<textarea
+									rows="1"
+									placeholder="What are you wondering? (optional)"
+									aria-label="Your question about the selection"
+									disabled={explainStatus !== 'idle'}
+									bind:value={explainQuestion}
+									onkeydown={handleExplainKeydown}
+									{@attach focusExplainInput}></textarea>
+								{#if explainStatus === 'idle'}
+									<button
+										class="explain-run"
+										type="button"
+										aria-label="Explain aloud"
+										title="Explain aloud"
+										onclick={() => void runExplain()}
+									>
+										<Icon icon={Sparkles} size={13} />
+									</button>
+								{:else}
+									<button
+										class="explain-run thinking"
+										type="button"
+										aria-label="Cancel"
+										title="Cancel"
+										onclick={closeExplainBox}
+									>
+										<Icon icon={LoaderCircle} class="spin" size={13} />
+									</button>
+								{/if}
+							</div>
+							{#if explainError}
+								<p class="explain-error" role="alert">{explainError}</p>
 							{/if}
 						</div>
-						{#if explainError}
-							<p class="explain-error" role="alert">{explainError}</p>
-						{/if}
-					</div>
-				{/if}
-			</article>
+					{/if}
+				</article>
+			{/if}
 			<p class="sr-only" aria-live="polite">{narrationAnnouncement}</p>
 
 			{#if !player.autoFollow}

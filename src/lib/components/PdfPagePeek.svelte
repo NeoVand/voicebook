@@ -33,7 +33,11 @@
 				return;
 			}
 			try {
-				await renderer.renderPage(target, canvas!, cssWidth);
+				// The peek sizes its canvas from the drawing itself — it has no
+				// layout of its own to stretch into.
+				const size = await renderer.renderPage(target, canvas!, cssWidth);
+				canvas!.style.width = `${size.width}px`;
+				canvas!.style.height = `${size.height}px`;
 				if (token === renderToken) status = 'ready';
 			} catch {
 				if (token === renderToken) status = 'unavailable';

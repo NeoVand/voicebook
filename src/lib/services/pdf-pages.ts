@@ -1,4 +1,5 @@
 import type { NormalizedDocument } from '../domain/types';
+import { toneDistance, tonePixels, type Rgb } from '../domain/page-tone';
 import { getSource } from './repository';
 
 /** Safari caps canvases around 4096×4096 / 16M pixels; render within that. */
@@ -7,9 +8,30 @@ const MAX_PIXELS = 16 * 1024 * 1024;
 
 export interface PageRasterizer {
 	readonly pageCount: number;
-	/** Draws a page (1-based) into `canvas` sized for `cssWidth` CSS pixels at
-	 * the device pixel ratio. Sets the canvas buffer and style sizes. */
-	renderPage(page: number, canvas: HTMLCanvasElement, cssWidth: number): Promise<void>;
+	/** Draws a page (1-based) into `canvas` at the device pixel ratio, for a
+	 * display width of `cssWidth`, and reports the CSS size the result wants to
+	 * be shown at. It does NOT set that size on the canvas: a caller whose
+	 * canvas is sized by its own layout (the page view stretches one to fill its
+	 * sheet) must be free to resize the drawing between draws, and pinning it in
+	 * pixels here left the picture at its old size while everything around it
+	 * had already grown.
+	 *
+	 * The page is painted off-screen and handed over whole, so `canvas` keeps
+	 * whatever it was showing until the new picture is finished. Painting into
+	 * it directly means clearing it first and then filling it in over however
+	 * many frames the page takes — which reads as a flash on every redraw, and
+	 * as a strobe while a zoom slider is being dragged.
+	 *
+	 * Aborting `signal` abandons the draw — while it is still queued, or partway
+	 * through. A page of dense vector art can take seconds to paint, and renders
+	 * run one at a time, so a reader who has scrolled past one must not leave it
+	 * holding the queue against every page they are actually looking at. */
+	renderPage(
+		page: number,
+		canvas: HTMLCanvasElement,
+		cssWidth: number,
+		options?: { signal?: AbortSignal; tone?: { paper: Rgb; ink: Rgb } }
+	): Promise<{ width: number; height: number }>;
 	/** Renders a page (1-based) to an OffscreenCanvas at `scale`× the page's
 	 * natural point size — the OCR path's rasterizer. */
 	rasterize(page: number, scale: number): Promise<OffscreenCanvas>;
@@ -46,11 +68,30 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 		return result;
 	};
 
+	type Page = Awaited<ReturnType<typeof pdf.getPage>>;
+	const renderPageInto = async (
+		page: Page,
+		canvas: OffscreenCanvas,
+		viewport: ReturnType<Page['getViewport']>,
+		signal?: AbortSignal
+	) => {
+		const task = page.render({ canvas: canvas as unknown as HTMLCanvasElement, viewport });
+		const abort = () => task.cancel();
+		signal?.addEventListener('abort', abort, { once: true });
+		try {
+			await task.promise;
+		} finally {
+			signal?.removeEventListener('abort', abort);
+		}
+	};
+
 	const renderInto = async (
 		pageNumber: number,
 		canvas: HTMLCanvasElement | OffscreenCanvas,
-		requestedScale: number
+		requestedScale: number,
+		signal?: AbortSignal
 	) => {
+		signal?.throwIfAborted();
 		const page = await pdf.getPage(pageNumber);
 		try {
 			const base = page.getViewport({ scale: 1 });
@@ -59,10 +100,17 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 			});
 			canvas.width = Math.floor(viewport.width);
 			canvas.height = Math.floor(viewport.height);
-			await page.render({
+			const task = page.render({
 				canvas: canvas as HTMLCanvasElement,
 				viewport
-			}).promise;
+			});
+			const abort = () => task.cancel();
+			signal?.addEventListener('abort', abort, { once: true });
+			try {
+				await task.promise;
+			} finally {
+				signal?.removeEventListener('abort', abort);
+			}
 			return viewport;
 		} finally {
 			page.cleanup();
@@ -71,15 +119,34 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 
 	return {
 		pageCount: pdf.numPages,
-		renderPage: (pageNumber, canvas, cssWidth) =>
+		renderPage: (pageNumber, canvas, cssWidth, options = {}) =>
 			serialize(async () => {
+				const { signal, tone } = options;
+				signal?.throwIfAborted();
 				const page = await pdf.getPage(pageNumber);
-				const width = page.getViewport({ scale: 1 }).width;
-				page.cleanup();
-				const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
-				const viewport = await renderInto(pageNumber, canvas, (cssWidth / width) * ratio);
-				canvas.style.width = `${Math.round(viewport.width / ratio)}px`;
-				canvas.style.height = `${Math.round(viewport.height / ratio)}px`;
+				try {
+					const base = page.getViewport({ scale: 1 });
+					const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
+					const viewport = page.getViewport({
+						scale: clampedScale(base.width, base.height, (cssWidth / base.width) * ratio)
+					});
+					const offscreen = new OffscreenCanvas(
+						Math.floor(viewport.width),
+						Math.floor(viewport.height)
+					);
+					await renderPageInto(page, offscreen, viewport, signal);
+					// Abandoned while it painted: the finished picture is no longer
+					// the one anybody asked for, so leave the canvas as it was.
+					signal?.throwIfAborted();
+					if (tone) await printOnto(pdfjs, page, offscreen, viewport, tone);
+					present(canvas, offscreen);
+					return {
+						width: Math.round(viewport.width / ratio),
+						height: Math.round(viewport.height / ratio)
+					};
+				} finally {
+					page.cleanup();
+				}
 			}),
 		rasterize: (pageNumber, scale) =>
 			serialize(async () => {
@@ -93,6 +160,157 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 			await loadingTask.destroy();
 		}
 	};
+}
+
+/**
+ * Reprint a drawn page onto the reader's paper, in place.
+ *
+ * The ramp itself lives in domain/page-tone.ts; what belongs here is knowing
+ * which parts of the page it may touch. Photographs and rendered figures must
+ * be left exactly as the author made them — running paper-and-ink arithmetic
+ * over a photograph produces a negative — and the page's operator list says
+ * precisely where each image object lands, so those rectangles are lifted out
+ * beforehand and put back after.
+ *
+ * Line art, rules and type are not images and do take the ramp, which is what
+ * lets a page become genuinely dark rather than merely dimmed.
+ *
+ * A page that is already dark is left alone: the ramp reads lightness as
+ * paper, so a dark plate would come back inverted.
+ */
+async function printOnto(
+	pdfjs: typeof import('pdfjs-dist'),
+	page: { getOperatorList: () => Promise<{ fnArray: number[]; argsArray: unknown[][] }> },
+	surface: OffscreenCanvas,
+	viewport: { transform: number[] },
+	tone: { paper: Rgb; ink: Rgb }
+): Promise<void> {
+	// Under a theme whose paper is already white under black ink there is
+	// nothing to do, and a full-page pixel pass is not free.
+	if (toneDistance(tone.paper, tone.ink) < 0.06) return;
+	if (!isLightPage(surface)) return;
+	const context = surface.getContext('2d', { willReadFrequently: true });
+	if (!context) return;
+	const pictures = (await imageRects(pdfjs, page, viewport, surface)).map((rect) => ({
+		rect,
+		pixels: context.getImageData(rect.x, rect.y, rect.width, rect.height)
+	}));
+	const page_ = context.getImageData(0, 0, surface.width, surface.height);
+	tonePixels(page_.data, tone.paper, tone.ink);
+	context.putImageData(page_, 0, 0);
+	for (const picture of pictures)
+		context.putImageData(picture.pixels, picture.rect.x, picture.rect.y);
+}
+
+/** Sampled down to a thumbnail: paper is overwhelmingly the lightest thing on
+ * a printed page, so a mean this high means there is paper to invert. */
+function isLightPage(source: OffscreenCanvas): boolean {
+	const size = 24;
+	const thumbnail = new OffscreenCanvas(size, size);
+	const context = thumbnail.getContext('2d', { willReadFrequently: true });
+	if (!context) return true;
+	context.drawImage(source, 0, 0, size, size);
+	const { data } = context.getImageData(0, 0, size, size);
+	let total = 0;
+	for (let index = 0; index < data.length; index += 4) {
+		total += 0.2126 * data[index] + 0.7152 * data[index + 1] + 0.0722 * data[index + 2];
+	}
+	return total / (size * size) > 140;
+}
+
+/** [a, b, c, d, e, f] ∘ [a, b, c, d, e, f]. */
+function concat(outer: number[], inner: number[]): number[] {
+	return [
+		outer[0] * inner[0] + outer[2] * inner[1],
+		outer[1] * inner[0] + outer[3] * inner[1],
+		outer[0] * inner[2] + outer[2] * inner[3],
+		outer[1] * inner[2] + outer[3] * inner[3],
+		outer[0] * inner[4] + outer[2] * inner[5] + outer[4],
+		outer[1] * inner[4] + outer[3] * inner[5] + outer[5]
+	];
+}
+
+function apply(x: number, y: number, matrix: number[]): [number, number] {
+	return [matrix[0] * x + matrix[2] * y + matrix[4], matrix[1] * x + matrix[3] * y + matrix[5]];
+}
+
+/** Where each image object on the page landed, in canvas pixels. Images are
+ * drawn into the unit square, so the current transform is the placement; the
+ * operator list has to be walked with a transform stack to know what it was. */
+async function imageRects(
+	pdfjs: typeof import('pdfjs-dist'),
+	page: { getOperatorList: () => Promise<{ fnArray: number[]; argsArray: unknown[][] }> },
+	viewport: { transform: number[] },
+	source: OffscreenCanvas
+): Promise<Array<{ x: number; y: number; width: number; height: number }>> {
+	const { OPS } = pdfjs;
+	const paints = new Set([
+		OPS.paintImageXObject,
+		OPS.paintImageXObjectRepeat,
+		OPS.paintInlineImageXObject,
+		OPS.paintImageMaskXObject
+	]);
+	let operators: { fnArray: number[]; argsArray: unknown[][] };
+	try {
+		operators = await page.getOperatorList();
+	} catch {
+		return [];
+	}
+	const rects: Array<{ x: number; y: number; width: number; height: number }> = [];
+	const stack: number[][] = [];
+	let transform = viewport.transform;
+	for (let index = 0; index < operators.fnArray.length; index += 1) {
+		const operator = operators.fnArray[index];
+		if (operator === OPS.save) stack.push(transform);
+		else if (operator === OPS.restore) transform = stack.pop() ?? transform;
+		else if (operator === OPS.transform) {
+			transform = concat(transform, operators.argsArray[index] as number[]);
+		} else if (paints.has(operator)) {
+			const corners = [
+				[0, 0],
+				[1, 0],
+				[0, 1],
+				[1, 1]
+			].map(([x, y]) => apply(x, y, transform));
+			const left = Math.floor(Math.min(...corners.map((point) => point[0])));
+			const top = Math.floor(Math.min(...corners.map((point) => point[1])));
+			const right = Math.ceil(Math.max(...corners.map((point) => point[0])));
+			const bottom = Math.ceil(Math.max(...corners.map((point) => point[1])));
+			const x = Math.max(0, left);
+			const y = Math.max(0, top);
+			const width = Math.min(source.width, right) - x;
+			const height = Math.min(source.height, bottom) - y;
+			if (width > 1 && height > 1) rects.push({ x, y, width, height });
+		}
+	}
+	return rects;
+}
+
+/**
+ * Put a finished off-screen page onto a visible canvas in one step. A bitmap
+ * renderer takes ownership of the pixels outright; where that context is not
+ * available the pixels are copied instead, which costs a blit but still swaps
+ * the whole page at once.
+ */
+function present(canvas: HTMLCanvasElement, source: OffscreenCanvas): void {
+	const bitmap = source.transferToImageBitmap();
+	try {
+		const renderer = canvas.getContext('bitmaprenderer');
+		if (renderer) {
+			// Sized explicitly: transferring a bitmap swaps what the canvas shows
+			// without touching its width and height attributes, and those are what
+			// the page view measures its memory against.
+			canvas.width = bitmap.width;
+			canvas.height = bitmap.height;
+			renderer.transferFromImageBitmap(bitmap);
+			return;
+		}
+		canvas.width = bitmap.width;
+		canvas.height = bitmap.height;
+		canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+	} finally {
+		bitmap.close();
+	}
 }
 
 let openRenderer: { documentId: string; rasterizer: Promise<PageRasterizer | null> } | undefined;

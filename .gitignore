@@ -43,3 +43,4 @@ skills-lock.json
 
 # Local test fixtures (user-provided, not committed)
 test_documents/
+.probe/
