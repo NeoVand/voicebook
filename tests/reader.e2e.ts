@@ -1969,6 +1969,37 @@ test('draws each original page once while the reader scrolls back and forth', as
 			).length
 	);
 	expect(drawn).toBe(6);
+
+	// Zooming abandons whatever draws were in flight for the old size. The pages
+	// in view must come back at the new one — an abandoned draw that left its
+	// half-finished bitmap in place would show as a torn page here.
+	await page.getByRole('button', { name: /Document zoom/ }).click();
+	await page.getByRole('slider', { name: 'Document zoom' }).fill('140');
+	await page.keyboard.press('Escape');
+	await expect
+		.poll(
+			async () =>
+				page.evaluate(() => {
+					const slots = [...document.querySelectorAll<HTMLElement>('.page-slot')];
+					// A page renders its marks layer only while it is in play.
+					const inPlay = slots.filter((slot) => slot.querySelector('.page-marks'));
+					if (!inPlay.length) return null;
+					const widths = inPlay.map(
+						(slot) => slot.querySelector<HTMLCanvasElement>('canvas')?.width ?? 0
+					);
+					const sheet = inPlay[0].querySelector<HTMLElement>('.page-sheet');
+					const shown = Math.round(sheet?.getBoundingClientRect().width ?? 0);
+					const distinct = [...new Set(widths)];
+					return {
+						// One size, and it is the size the page is being shown at
+						// (the bitmap floors to a whole pixel).
+						sizes: distinct.length,
+						matchesSheet: distinct.every((width) => Math.abs(width - shown) <= 1)
+					};
+				}),
+			{ timeout: 20_000 }
+		)
+		.toEqual({ sizes: 1, matchesSheet: true });
 });
 
 test('recognizes a scanned PDF with on-device text recognition', async ({ page }) => {

@@ -190,11 +190,14 @@
 	}
 
 	/**
-	 * Bitmaps to keep, as a pixel budget rather than a page count: a page of A4
-	 * at 200% is four times the memory of one at 100%, and it is the megabytes
-	 * that crash a tab, not the number of pages. Roughly 200 MB of RGBA.
+	 * Bitmaps to keep, as a pixel budget rather than a page count: a page at
+	 * 200% zoom is four times the memory of the same page at 100%, and on a
+	 * retina display four times again — it is the megabytes that take a tab
+	 * down, not the number of pages. About 130 MB of canvas, which on a retina
+	 * display is still half a dozen pages kept either side of the two or three
+	 * actually on screen.
 	 */
-	const RENDERED_PIXEL_BUDGET = 48_000_000;
+	const RENDERED_PIXEL_BUDGET = 32_000_000;
 
 	/** Pages being drawn right now: the width each draw is for, and the handle
 	 * that abandons it. Deliberately NOT a SvelteMap — the draw loop consults it
@@ -235,10 +238,16 @@
 
 		// Release bitmaps once they add up to more than the budget, furthest from
 		// the reader first. A page in view or mid-draw is never released.
-		const rendered = [...drawnWidths.keys()].filter(
-			(page) => !pages.has(page) && !drawing.has(page)
+		//
+		// Counted over the canvases, not over the pages recorded as drawn: a
+		// canvas is sized the moment its draw begins, so an abandoned draw leaves
+		// a full-size bitmap behind with nothing recorded against it. Budgeting
+		// by the record instead of the pixels let those accumulate unseen — 300 MB
+		// of them after a few sweeps of a twenty-page paper on a retina display.
+		const rendered = [...canvases.keys()].filter(
+			(page) => drawnPixels(page) > 1 && !pages.has(page) && !drawing.has(page)
 		);
-		let held = [...drawnWidths.keys()].reduce((total, page) => total + drawnPixels(page), 0);
+		let held = [...canvases.keys()].reduce((total, page) => total + drawnPixels(page), 0);
 		const focus = focusPage;
 		rendered.sort((left, right) => Math.abs(right - focus) - Math.abs(left - focus));
 		for (const page of rendered) {
@@ -272,8 +281,12 @@
 					await renderer.renderPage(page, canvas, width, draw.controller.signal);
 					drawnWidths.set(page, width);
 				} catch {
-					// Abandoned, or a page that will not draw: leave it blank rather
-					// than recording a size it was never drawn at. The rest still read.
+					// Abandoned, or a page that will not draw. Either way the canvas
+					// is holding a bitmap of a picture nobody will see, so give it
+					// back now rather than leaving it for the budget to find.
+					canvas.width = 0;
+					canvas.height = 0;
+					drawnWidths.delete(page);
 				} finally {
 					if (drawing.get(page) === draw) drawing.delete(page);
 				}
