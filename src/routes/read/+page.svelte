@@ -449,6 +449,7 @@
 		book?.sourceKind === 'pdf' && Boolean(book.sourcePath || book.sourceBlob)
 	);
 	let pagePeek = $state<{ page: number }>();
+	let pageView = $state<ReturnType<typeof PdfPageView>>();
 	// The original-page view needs both the file and a page count to lay out;
 	// a document missing either reads as markdown whatever the preference says.
 	let pageViewActive = $derived(
@@ -872,14 +873,18 @@
 	}
 
 	function navigateToOutlineBlock(block: DocumentBlock): void {
-		const element = elementInReader(block.id);
-		if (!element) return;
+		// In the page view there is no element for a heading — the document is a
+		// picture of paper. Its page number is the address instead, and the
+		// passage that follows re-centres once it has been placed.
+		const element = pageViewActive ? undefined : elementInReader(block.id);
+		if (!element && !pageViewActive) return;
 
 		const compactOutline = window.matchMedia('(max-width: 820px)').matches;
 		outlineNavigationBlockId = block.id;
 		activeOutlineBlockId = block.id;
 		outlineAnnouncement = `Moved to ${block.text}`;
-		scrollReaderTo(element, compactOutline);
+		if (element) scrollReaderTo(element, compactOutline);
+		else if (block.anchor.page) pageView?.goToPage(block.anchor.page);
 		if (compactOutline) readerChrome.outlineOpen = false;
 
 		const index = firstSegmentIndex(block);
@@ -2085,6 +2090,7 @@
 
 			{#if pageViewActive && documentPageCount}
 				<PdfPageView
+					bind:this={pageView}
 					document={book}
 					pageCount={documentPageCount}
 					segments={book.segments}

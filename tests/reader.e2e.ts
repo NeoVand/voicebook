@@ -1849,6 +1849,16 @@ test('reads a PDF as its own pages, with the spoken passage painted on', async (
 	expect(painted!.y - sheetBox!.y).toBeLessThan(160 * scale);
 	expect(painted!.x - sheetBox!.x).toBeGreaterThan(60 * scale);
 
+	// The contents panel addresses a page rather than an element here, so the
+	// heading it names still moves the stack.
+	await page.getByRole('button', { name: /Open document outline/ }).click();
+	await page.getByRole('button', { name: 'The Second Winter', exact: true }).click();
+	await expect
+		.poll(async () => page.locator('.page-stack').evaluate((node) => node.scrollTop), {
+			timeout: 10_000
+		})
+		.toBeGreaterThan(sheetBox!.height / 2);
+
 	// The preference survives leaving and reopening the document.
 	await page.getByRole('link', { name: 'Library' }).first().click();
 	await page.getByRole('link', { name: 'Ledgers of the Coast' }).first().click();

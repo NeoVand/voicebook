@@ -305,12 +305,14 @@
 	// Follow playback. A passage already comfortably on screen stays put:
 	// re-centring every sentence would drag the page under the reader's eyes.
 	$effect(() => {
-		if (!follow || !activeSegmentId || !scroller) return;
-		const page = pageBySegment.get(activeSegmentId);
-		const placement = activePlacement;
+		// Playback leads; when it is not running, the assistant's fingertip does.
+		const followed = activeSegmentId ?? assistantPointId;
+		if (!follow || !followed || !scroller) return;
+		const page = pageBySegment.get(followed);
+		const placement = activePlacement ?? placements.get(page ?? -1)?.get(followed);
 		const target = page === undefined ? undefined : scroller.querySelector(`[data-page="${page}"]`);
 		if (page === undefined || !(target instanceof HTMLElement)) {
-			const anchored = segments.find((segment) => segment.id === activeSegmentId)?.anchor.page;
+			const anchored = segments.find((segment) => segment.id === followed)?.anchor.page;
 			if (anchored) goToPage(anchored);
 			return;
 		}
