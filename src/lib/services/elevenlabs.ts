@@ -7,7 +7,7 @@
 import { wordsFor } from '$lib/domain/speech-words';
 import type { TimingMap, WordTiming } from '$lib/domain/types';
 import type { SynthesisResult } from './tts-client';
-import type { ElevenLabsVoice } from '$lib/domain/provider-catalog';
+import { getElevenLabsModel, type ElevenLabsVoice } from '$lib/domain/provider-catalog';
 
 const API = 'https://api.elevenlabs.io';
 const SAMPLE_RATE = 24_000;
@@ -118,17 +118,30 @@ export interface ElevenLabsSynthesisRequest {
 	voiceId: string;
 	modelId: string;
 	text: string;
+	/** Built by elevenLabsVoiceSettings — omitted while the user has not
+	 * moved any knob, which leaves the voice's own saved settings in force. */
+	voiceSettings?: Record<string, number | boolean>;
 	signal?: AbortSignal;
 }
 
 /**
  * Timestamped synthesis at PCM 24 kHz — drops straight into the player's
- * AudioBuffer/word-highlight pipeline with native timing confidence.
+ * AudioBuffer/word-highlight pipeline with native timing confidence. Every
+ * catalog model returns character alignment here, v3 included.
  */
 export async function synthesizeElevenLabs(
 	options: ElevenLabsSynthesisRequest
 ): Promise<SynthesisResult> {
 	const started = performance.now();
+	// Passages are capped far below every model's limit; this catches a
+	// mismatch (say a 5,000-character v3 request) with a readable message
+	// instead of a bare 422 from the API.
+	const spec = getElevenLabsModel(options.modelId);
+	if (spec && options.text.length > spec.maxCharacters) {
+		throw new ElevenLabsError(
+			`This passage is ${options.text.length.toLocaleString()} characters — ${spec.label} accepts ${spec.maxCharacters.toLocaleString()} per request.`
+		);
+	}
 	const timeout = AbortSignal.timeout(90_000);
 	const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
 	const data = (await request(
@@ -136,7 +149,11 @@ export async function synthesizeElevenLabs(
 		options.apiKey,
 		{
 			method: 'POST',
-			body: JSON.stringify({ text: options.text, model_id: options.modelId }),
+			body: JSON.stringify({
+				text: options.text,
+				model_id: options.modelId,
+				...(options.voiceSettings ? { voice_settings: options.voiceSettings } : {})
+			}),
 			signal
 		}
 	)) as {

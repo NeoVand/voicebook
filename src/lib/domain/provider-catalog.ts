@@ -96,28 +96,248 @@ export function isCloudLlmProvider(value: string): value is CloudLlmProvider {
 
 /* ── ElevenLabs speech ───────────────────────────────────────────────────── */
 
+/** v3 is a different generation with its own controls — grouped in the UI and
+ * gated separately when building the request body. */
+export type ElevenLabsFamily = 'v3' | 'v2';
+
+/** Which voice_settings a model actually honours. Probed against
+ * GET /v1/models (can_use_style, can_use_speaker_boost) and by measuring
+ * generated audio — v3 accepts `speed` but ignores it, so it is off here. */
+export interface ElevenLabsModelOptionSupport {
+	/** v3 exposes three named stability points; v2 takes any 0–1 value. */
+	stability: 'discrete' | 'continuous';
+	similarity: boolean;
+	style: boolean;
+	speed: boolean;
+	speakerBoost: boolean;
+}
+
 export interface ElevenLabsModelSpec {
 	id: string;
 	label: string;
 	tagline: string;
+	family: ElevenLabsFamily;
+	/** Per-request cap from the model's maximum_text_length_per_request.
+	 * Passages are capped far below this; the guard is for safety. */
+	maxCharacters: number;
+	options: ElevenLabsModelOptionSupport;
 }
 
-/** TTS models that support the with-timestamps endpoint (word highlighting
- * needs character alignment, so v3 alpha is deliberately absent). First entry
- * is the default. */
+/** Every TTS model that returns character alignment from the with-timestamps
+ * endpoint — word highlighting depends on it, which v3 now supports too.
+ * DEFAULT_ELEVENLABS_MODEL, not the array order, picks the default. */
 export const ELEVENLABS_MODELS: ElevenLabsModelSpec[] = [
+	{
+		id: 'eleven_v3',
+		label: 'Eleven v3',
+		tagline: 'most expressive · 70+ languages',
+		family: 'v3',
+		maxCharacters: 5_000,
+		options: {
+			stability: 'discrete',
+			similarity: false,
+			style: false,
+			speed: false,
+			speakerBoost: false
+		}
+	},
+	{
+		id: 'eleven_v3_conversational',
+		label: 'Eleven v3 Conversational',
+		tagline: 'expressive · half the credits',
+		family: 'v3',
+		maxCharacters: 5_000,
+		options: {
+			stability: 'discrete',
+			similarity: false,
+			style: false,
+			speed: false,
+			speakerBoost: true
+		}
+	},
 	{
 		id: 'eleven_flash_v2_5',
 		label: 'Flash v2.5',
-		tagline: 'half the credits · recommended'
+		tagline: 'half the credits · recommended',
+		family: 'v2',
+		maxCharacters: 40_000,
+		options: {
+			stability: 'continuous',
+			similarity: true,
+			style: false,
+			speed: true,
+			speakerBoost: false
+		}
 	},
-	{ id: 'eleven_turbo_v2_5', label: 'Turbo v2.5', tagline: 'fast · half the credits' },
+	{
+		id: 'eleven_turbo_v2_5',
+		label: 'Turbo v2.5',
+		tagline: 'fast · half the credits',
+		family: 'v2',
+		maxCharacters: 40_000,
+		options: {
+			stability: 'continuous',
+			similarity: true,
+			style: false,
+			speed: true,
+			speakerBoost: false
+		}
+	},
 	{
 		id: 'eleven_multilingual_v2',
 		label: 'Multilingual v2',
-		tagline: 'highest quality · double credits'
+		tagline: 'steadiest long-form read',
+		family: 'v2',
+		maxCharacters: 10_000,
+		options: {
+			stability: 'continuous',
+			similarity: true,
+			style: true,
+			speed: true,
+			speakerBoost: true
+		}
 	}
 ];
+
+/** Flash v2.5 stays the default: cheapest per character and the steadiest on
+ * the short passages the segmenter produces. v3 is one click away. */
+export const DEFAULT_ELEVENLABS_MODEL = 'eleven_flash_v2_5';
+
+export function getElevenLabsModel(id: string): ElevenLabsModelSpec | null {
+	return ELEVENLABS_MODELS.find((model) => model.id === id) ?? null;
+}
+
+/** The catalog in display order: v3 first, then the v2 generation. */
+export const ELEVENLABS_FAMILIES: Array<{
+	id: ElevenLabsFamily;
+	label: string;
+	note: string;
+	models: ElevenLabsModelSpec[];
+}> = [
+	{
+		id: 'v3',
+		label: 'Eleven v3',
+		note: 'Newest generation — richer delivery, more variation between takes.',
+		models: ELEVENLABS_MODELS.filter((model) => model.family === 'v3')
+	},
+	{
+		id: 'v2',
+		label: 'Eleven v2',
+		note: 'Predictable and cheap — the steady choice for a long read.',
+		models: ELEVENLABS_MODELS.filter((model) => model.family === 'v2')
+	}
+];
+
+/** The three stability points the v3 models expose, in ElevenLabs' order. */
+export const ELEVENLABS_V3_STABILITY: Array<{
+	value: number;
+	label: string;
+	tagline: string;
+}> = [
+	{ value: 0, label: 'Creative', tagline: 'most emotion · can drift' },
+	{ value: 0.5, label: 'Natural', tagline: 'closest to the voice' },
+	{ value: 1, label: 'Robust', tagline: 'steadiest · least directable' }
+];
+
+/** Per-model synthesis knobs. Values match the ElevenLabs defaults, so an
+ * untouched set is indistinguishable from sending nothing. */
+export interface ElevenLabsVoiceOptions {
+	stability: number;
+	similarity: number;
+	style: number;
+	speed: number;
+	speakerBoost: boolean;
+}
+
+export const DEFAULT_ELEVENLABS_OPTIONS: ElevenLabsVoiceOptions = {
+	stability: 0.5,
+	similarity: 0.75,
+	style: 0,
+	speed: 1,
+	speakerBoost: true
+};
+
+/** Snap to the nearest of the three v3 stability points. */
+function snapStability(value: number): number {
+	return ELEVENLABS_V3_STABILITY.reduce((best, point) =>
+		Math.abs(point.value - value) < Math.abs(best.value - value) ? point : best
+	).value;
+}
+
+function clamp(value: number, low: number, high: number, fallback: number): number {
+	if (!Number.isFinite(value)) return fallback;
+	return Math.min(high, Math.max(low, value));
+}
+
+/**
+ * Fill in and clamp a stored option set for one model. Knobs the model does
+ * not honour are forced back to their default so they can never leak into a
+ * request (or into the cache signature) for a model that ignores them.
+ */
+export function normalizeElevenLabsOptions(
+	model: ElevenLabsModelSpec,
+	stored?: Partial<ElevenLabsVoiceOptions> | null
+): ElevenLabsVoiceOptions {
+	const raw = { ...DEFAULT_ELEVENLABS_OPTIONS, ...(stored ?? {}) };
+	const stability = clamp(raw.stability, 0, 1, DEFAULT_ELEVENLABS_OPTIONS.stability);
+	const support = model.options;
+	return {
+		stability: support.stability === 'discrete' ? snapStability(stability) : stability,
+		similarity: support.similarity
+			? clamp(raw.similarity, 0, 1, DEFAULT_ELEVENLABS_OPTIONS.similarity)
+			: DEFAULT_ELEVENLABS_OPTIONS.similarity,
+		style: support.style ? clamp(raw.style, 0, 1, DEFAULT_ELEVENLABS_OPTIONS.style) : 0,
+		speed: support.speed ? clamp(raw.speed, 0.7, 1.2, DEFAULT_ELEVENLABS_OPTIONS.speed) : 1,
+		speakerBoost: support.speakerBoost
+			? Boolean(raw.speakerBoost)
+			: DEFAULT_ELEVENLABS_OPTIONS.speakerBoost
+	};
+}
+
+export function isDefaultElevenLabsOptions(options: ElevenLabsVoiceOptions): boolean {
+	return (
+		options.stability === DEFAULT_ELEVENLABS_OPTIONS.stability &&
+		options.similarity === DEFAULT_ELEVENLABS_OPTIONS.similarity &&
+		options.style === DEFAULT_ELEVENLABS_OPTIONS.style &&
+		options.speed === DEFAULT_ELEVENLABS_OPTIONS.speed &&
+		options.speakerBoost === DEFAULT_ELEVENLABS_OPTIONS.speakerBoost
+	);
+}
+
+/** The voice_settings body, or undefined to let the voice's own saved
+ * settings apply — which is what an untouched set has always meant, so
+ * audio cached before these controls existed still matches. */
+export function elevenLabsVoiceSettings(
+	model: ElevenLabsModelSpec,
+	options: ElevenLabsVoiceOptions
+): Record<string, number | boolean> | undefined {
+	const normalized = normalizeElevenLabsOptions(model, options);
+	if (isDefaultElevenLabsOptions(normalized)) return undefined;
+	const settings: Record<string, number | boolean> = { stability: normalized.stability };
+	if (model.options.similarity) settings.similarity_boost = normalized.similarity;
+	if (model.options.style) settings.style = normalized.style;
+	if (model.options.speed) settings.speed = normalized.speed;
+	if (model.options.speakerBoost) settings.use_speaker_boost = normalized.speakerBoost;
+	return settings;
+}
+
+/**
+ * Cache-key fragment for a model plus its options: the bare model id while the
+ * options are untouched (so audio generated before the controls shipped keeps
+ * matching), and a stable suffix once any knob moves.
+ */
+export function elevenLabsRevision(
+	model: ElevenLabsModelSpec,
+	options: ElevenLabsVoiceOptions
+): string {
+	const settings = elevenLabsVoiceSettings(model, options);
+	if (!settings) return model.id;
+	const suffix = Object.keys(settings)
+		.sort()
+		.map((key) => `${key}=${settings[key]}`)
+		.join(',');
+	return `${model.id}#${suffix}`;
+}
 
 /** George — a warm narrator that suits long-form reading. */
 export const DEFAULT_ELEVENLABS_VOICE = 'JBFqnCBsd6RMkjVDRZzb';
