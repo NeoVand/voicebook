@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { on } from 'svelte/events';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import type { NormalizedDocument, SpeechSegment } from '$lib/domain/types';
 	import type { PageRect, SegmentPlacement } from '$lib/domain/pdf-layout';
@@ -22,6 +23,8 @@
 		/** Whether playback should pull the page along with it. */
 		follow?: boolean;
 		onPlaySegment: (segmentId: string) => void;
+		/** The reader scrolled by hand; whatever was following should stop. */
+		onManualScroll?: () => void;
 	}
 
 	let {
@@ -34,7 +37,8 @@
 		assistantSegmentIds,
 		assistantPointId,
 		follow = true,
-		onPlaySegment
+		onPlaySegment,
+		onManualScroll
 	}: Props = $props();
 
 	/** US Letter, for a document whose parse recorded no page sizes. */
@@ -91,8 +95,19 @@
 			available = node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
 		});
 		observer.observe(node);
+		// Reading ahead of the narration wins over following it, the same way it
+		// does on the reflowed canvas.
+		const stopFollowing = () => {
+			owedFollow = undefined;
+			onManualScroll?.();
+		};
+		const removeListeners = [
+			on(node, 'wheel', stopFollowing, { passive: true }),
+			on(node, 'touchmove', stopFollowing, { passive: true })
+		];
 		return () => {
 			observer.disconnect();
+			for (const removeListener of removeListeners) removeListener();
 			if (scroller === node) scroller = undefined;
 		};
 	}
@@ -302,25 +317,60 @@
 		element?.scrollIntoView({ block: 'start', behavior: 'auto' });
 	}
 
-	// Follow playback. A passage already comfortably on screen stays put:
-	// re-centring every sentence would drag the page under the reader's eyes.
+	/**
+	 * Following is edge-triggered: one passage becoming current earns at most
+	 * one jump to its page and one settle onto its line, and nothing else moves
+	 * the scroll.
+	 *
+	 * This has to be a debt rather than a plain effect, because the effect's
+	 * inputs change constantly for reasons that have nothing to do with the
+	 * playhead — every page that finishes placing as the reader scrolls updates
+	 * `placements`. Re-running the scroll on those was the bug that made the
+	 * document snap back to the playhead each time you tried to read ahead.
+	 */
+	let owedFollow = $state<string>();
+	let jumpedToPage = false;
+	let followedLast: string | undefined;
+	// Undefined until the first run, so mounting counts as a change and an
+	// already-current passage is followed on open.
+	let followLast: boolean | undefined;
+
 	$effect(() => {
 		// Playback leads; when it is not running, the assistant's fingertip does.
 		const followed = activeSegmentId ?? assistantPointId;
+		if (followed !== followedLast || follow !== followLast) {
+			followedLast = followed;
+			followLast = follow;
+			// Re-enabling follow owes a scroll too: that is the whole point of the
+			// "Follow narration" button.
+			owedFollow = follow ? followed : undefined;
+			jumpedToPage = false;
+		}
+	});
+
+	$effect(() => {
+		const followed = owedFollow;
 		if (!follow || !followed || !scroller) return;
 		const page = pageBySegment.get(followed);
-		const placement = activePlacement ?? placements.get(page ?? -1)?.get(followed);
-		const target = page === undefined ? undefined : scroller.querySelector(`[data-page="${page}"]`);
+		const target = page === undefined ? null : scroller.querySelector(`[data-page="${page}"]`);
 		if (page === undefined || !(target instanceof HTMLElement)) {
+			// The passage has not been placed yet — its page may not even have
+			// been read. Go to where it is anchored, once, and settle onto the
+			// line itself if and when the placement arrives.
+			if (jumpedToPage) return;
 			const anchored = segments.find((segment) => segment.id === followed)?.anchor.page;
+			jumpedToPage = true;
 			if (anchored) goToPage(anchored);
 			return;
 		}
-		const rect = placement?.rects[0];
+		const rect = placements.get(page)?.get(followed)?.rects[0];
 		if (!rect) return;
+		owedFollow = undefined;
 		const scale = pageScale(page);
 		const top = target.offsetTop + rect.y * scale;
 		const height = rect.height * scale;
+		// A passage already comfortably on screen stays put: re-centring every
+		// sentence would drag the page under the reader's eyes.
 		const settled = 72;
 		const visibleFrom = scroller.scrollTop + settled;
 		const visibleTo = scroller.scrollTop + scroller.clientHeight - settled;

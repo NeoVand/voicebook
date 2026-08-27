@@ -1849,6 +1849,33 @@ test('reads a PDF as its own pages, with the spoken passage painted on', async (
 	expect(painted!.y - sheetBox!.y).toBeLessThan(160 * scale);
 	expect(painted!.x - sheetBox!.x).toBeGreaterThan(60 * scale);
 
+	// Reading ahead of the narration must stay where it was put. Pages place
+	// as they scroll into view, and re-following the playhead on each of those
+	// updates snapped the document back to it every time.
+	const stack = page.locator('.page-stack');
+	await page.mouse.move(700, 400);
+	await page.mouse.wheel(0, 2400);
+	await expect.poll(async () => stack.evaluate((node) => node.scrollTop)).toBeGreaterThan(1200);
+	const settledAt = await stack.evaluate((node) => node.scrollTop);
+	// Long enough for the pages now in view to finish placing.
+	await page.waitForTimeout(2500);
+	expect(await stack.evaluate((node) => node.scrollTop)).toBe(settledAt);
+
+	// Following resumes on request, and brings the passage being spoken back
+	// into view.
+	await page.getByRole('button', { name: 'Follow narration' }).click();
+	await expect
+		.poll(
+			async () => {
+				const port = await stack.boundingBox();
+				const mark = await page.locator('.mark.passage').first().boundingBox();
+				if (!port || !mark) return false;
+				return mark.y >= port.y && mark.y + mark.height <= port.y + port.height;
+			},
+			{ timeout: 10_000 }
+		)
+		.toBe(true);
+
 	// The contents panel addresses a page rather than an element here, so the
 	// heading it names still moves the stack.
 	await page.getByRole('button', { name: /Open document outline/ }).click();

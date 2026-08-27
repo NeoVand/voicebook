@@ -2101,6 +2101,7 @@
 					{assistantPointId}
 					follow={player.autoFollow}
 					onPlaySegment={playPlacedSegment}
+					onManualScroll={() => (player.autoFollow = false)}
 				/>
 			{:else}
 				<article
