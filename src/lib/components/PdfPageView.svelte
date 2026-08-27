@@ -211,28 +211,52 @@
 		// else — the sidebar, the player, the header — drops the selection, and
 		// the actions have to go with it. Listening only here left them stranded
 		// on the page with nothing that would dismiss them.
+		//
+		// A drag, though, is one gesture and not a stream of selections. The
+		// browser reports a new one on every frame of it, and offering each one
+		// back sent the actions chasing the pointer across the page, flashing
+		// as they went. Nothing is offered while a pointer is down; the whole
+		// gesture is read once, when it ends.
+		let selecting = false;
 		let queued = false;
 		const afterSelection = () => {
-			if (queued) return;
+			if (selecting || queued) return;
 			queued = true;
 			requestAnimationFrame(() => {
 				queued = false;
 				readSelection();
 			});
 		};
-		// Pressing on a blank part of the page — a margin, a figure, the gap
-		// between paragraphs — puts no caret anywhere, because there is no text
-		// node under the pointer to put one in. The browser therefore leaves the
-		// old selection standing, and with it the actions, which is what made
-		// them feel impossible to dismiss. Clearing it by hand is what clicking
-		// off a selection does everywhere else.
-		const clearOnEmptyPress = (event: PointerEvent) => {
+		const startPress = (event: PointerEvent) => {
 			const target = event.target as HTMLElement | null;
-			if (target?.closest('.page-text span, .selection-actions, .explain-box')) return;
+			// A press on the actions themselves is aimed at a button, and taking
+			// them away underneath it would mean the button was never clicked.
+			if (target?.closest('.selection-actions, .explain-box')) return;
+			selecting = true;
+			// Whatever is selected now is about to be replaced, so the actions
+			// go with the press rather than hovering over a selection that is
+			// being redrawn beneath them.
+			onSelect?.(undefined);
+			// Pressing on a blank part of the page — a margin, a figure, the gap
+			// between paragraphs — puts no caret anywhere, because there is no
+			// text node under the pointer to put one in. The browser therefore
+			// leaves the old selection standing, which is what made it feel
+			// impossible to dismiss. Clearing it by hand is what clicking off a
+			// selection does everywhere else.
+			if (target?.closest('.page-text span')) return;
 			window.getSelection()?.removeAllRanges();
 		};
+		// On the document, not the stack: a drag that starts on the page often
+		// ends off it, and the release is what the actions are waiting for.
+		const endPress = () => {
+			if (!selecting) return;
+			selecting = false;
+			afterSelection();
+		};
 		const removeListeners = [
-			on(node, 'pointerdown', clearOnEmptyPress),
+			on(node, 'pointerdown', startPress),
+			on(document, 'pointerup', endPress),
+			on(document, 'pointercancel', endPress),
 			on(document, 'selectionchange', afterSelection),
 			on(node, 'scroll', measureFocus, { passive: true }),
 			on(node, 'wheel', stopFollowing, { passive: true }),

@@ -1959,6 +1959,12 @@ test('selects text on an original page and acts on it', async ({ page }) => {
 	await page.mouse.move(drag!.x1, drag!.y1);
 	await page.mouse.down();
 	await page.mouse.move(drag!.x2, drag!.y2, { steps: 10 });
+	// Mid-drag the selection is still being drawn, and the actions must not be
+	// chasing the pointer across the page. They wait for the release.
+	await page.evaluate(
+		() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+	);
+	expect(await page.locator('.selection-actions').count()).toBe(0);
 	await page.mouse.up();
 	expect(await page.evaluate(() => getSelection()?.toString() ?? '')).toContain('harbour');
 
