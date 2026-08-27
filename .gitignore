@@ -44,6 +44,3 @@ skills-lock.json
 # Local test fixtures (user-provided, not committed)
 test_documents/
 .probe/
-
-# Locally staged preview fixtures (never committed)
-static/attention.pdf

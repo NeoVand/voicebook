@@ -1876,6 +1876,11 @@ test('reads a PDF as its own pages, with the spoken passage painted on', async (
 		)
 		.toBe(true);
 
+	const pageViewA11y = await new AxeBuilder({ page }).analyze();
+	expect(
+		pageViewA11y.violations.filter((item) => ['critical', 'serious'].includes(item.impact ?? ''))
+	).toEqual([]);
+
 	// The contents panel addresses a page rather than an element here, so the
 	// heading it names still moves the stack.
 	await page.getByRole('button', { name: /Open document outline/ }).click();

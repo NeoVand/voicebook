@@ -542,7 +542,19 @@
 	});
 </script>
 
-<div class="page-stack" class:darkened={appearanceState.themeSpec.dark} {@attach trackStack}>
+<!-- Focusable because it scrolls: the pages themselves are pictures with
+     nothing to tab to, so without this a keyboard has no way to move the
+     document at all. The lint rule is about controls; a scroll container is
+     the case WCAG 2.1.1 requires this for. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<div
+	class="page-stack"
+	class:darkened={appearanceState.themeSpec.dark}
+	role="region"
+	aria-label={`${book.title}, original pages`}
+	tabindex="0"
+	{@attach trackStack}
+>
 	{#each sizes as size (size.page)}
 		{@const scale = pageScale(size.page)}
 		{@const placed = placements.get(size.page)}
@@ -591,6 +603,11 @@
 		overflow: auto;
 		padding: calc(var(--app-header-height) + 22px) 20px calc(var(--player-height) + 32px);
 		scroll-padding-block: calc(var(--app-header-height) + 22px) calc(var(--player-height) + 32px);
+	}
+
+	.page-stack:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: -4px;
 	}
 
 	.page-slot {
