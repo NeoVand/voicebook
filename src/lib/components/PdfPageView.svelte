@@ -49,12 +49,17 @@
 	const PREPARE_MARGIN = '150% 0px';
 
 	let scroller = $state<HTMLElement>();
+	/** The page under the middle of the scrollport: what to draw first, and
+	 * what to measure distance from when releasing bitmaps. */
+	let focusPage = $state(1);
 	const canvases = new SvelteMap<number, HTMLCanvasElement>();
 	/** Pages near enough the scrollport to be worth drawing. */
 	const live = new SvelteSet<number>();
-	/** Page → CSS pixels per PDF point, read back from the rendered canvas so
-	 * the overlay follows the bitmap rather than a predicted size. */
-	const scales = new SvelteMap<number, number>();
+	/** Page → the width its bitmap was drawn for. Only the draw loop and the
+	 * memory budget care: layout never does, because the canvas is stretched to
+	 * whatever size its sheet is, so a page drawn at another zoom is briefly
+	 * soft rather than the wrong size. */
+	const drawnWidths = new SvelteMap<number, number>();
 	const placements = new SvelteMap<number, Map<string, SegmentPlacement>>();
 	let hovered = $state<{ page: number; segmentId: string }>();
 
@@ -95,6 +100,25 @@
 			available = node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
 		});
 		observer.observe(node);
+		let measuring = false;
+		const measureFocus = () => {
+			if (measuring) return;
+			measuring = true;
+			requestAnimationFrame(() => {
+				measuring = false;
+				const middle = node.scrollTop + node.clientHeight / 2;
+				let nearest = focusPage;
+				let best = Infinity;
+				for (const slot of node.querySelectorAll<HTMLElement>('.page-slot')) {
+					const distance = Math.abs(slot.offsetTop + slot.offsetHeight / 2 - middle);
+					if (distance >= best) continue;
+					best = distance;
+					nearest = Number(slot.dataset.page);
+				}
+				if (Number.isFinite(nearest)) focusPage = nearest;
+			});
+		};
+		measureFocus();
 		// Reading ahead of the narration wins over following it, the same way it
 		// does on the reflowed canvas.
 		const stopFollowing = () => {
@@ -102,6 +126,7 @@
 			onManualScroll?.();
 		};
 		const removeListeners = [
+			on(node, 'scroll', measureFocus, { passive: true }),
 			on(node, 'wheel', stopFollowing, { passive: true }),
 			on(node, 'touchmove', stopFollowing, { passive: true })
 		];
@@ -159,38 +184,98 @@
 			canvases.set(page, node);
 			return () => {
 				canvases.delete(page);
-				scales.delete(page);
+				drawnWidths.delete(page);
 			};
 		};
 	}
 
-	// Draw the pages that are in play, at the current zoom. Re-runs on zoom
-	// because the bitmap is rendered at the display size, not scaled up from a
-	// smaller one — a PDF page enlarged from a stale raster is a blurry page.
+	/**
+	 * Bitmaps to keep, as a pixel budget rather than a page count: a page of A4
+	 * at 200% is four times the memory of one at 100%, and it is the megabytes
+	 * that crash a tab, not the number of pages. Roughly 200 MB of RGBA.
+	 */
+	const RENDERED_PIXEL_BUDGET = 48_000_000;
+
+	/** Pages being drawn right now: the width each draw is for, and the handle
+	 * that abandons it. Deliberately NOT a SvelteMap — the draw loop consults it
+	 * but must not be re-run by it, or recording the start of a draw would
+	 * restart the effect that started the draw. Every write here is paired with
+	 * a reactive one (`drawnWidths`) when the draw actually lands. */
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity
+	const drawing = new Map<number, { width: number; controller: AbortController }>();
+
+	function drawnPixels(page: number): number {
+		const canvas = canvases.get(page);
+		return canvas ? canvas.width * canvas.height : 0;
+	}
+
+	/**
+	 * Draw the pages that are in play, at the current zoom. Re-runs on zoom
+	 * because the bitmap is rendered at the display size, not scaled up from a
+	 * smaller one — a PDF page enlarged from a stale raster is a blurry page.
+	 *
+	 * Three rules keep a heavy page from taking the view down with it, all
+	 * learned from one paper with a 163,000-operation vector figure on page 12:
+	 * a page already being drawn is never queued again, a page the reader has
+	 * left is abandoned mid-draw, and bitmaps are released against a memory
+	 * budget instead of the moment a page leaves the scrollport. Without the
+	 * last one, scrolling back and forth across that figure re-drew it every
+	 * pass; without the first two, those draws piled up in a queue that runs
+	 * one at a time, and every other page stopped appearing behind it.
+	 */
 	$effect(() => {
 		const width = renderWidth;
 		const pages = new Set(live);
-		// A page that has scrolled well away gives its bitmap back: a long
-		// document would otherwise accumulate one full-size raster per page
-		// visited, which is where a page view runs out of memory.
-		for (const [page, canvas] of canvases) {
-			if (pages.has(page) || !scales.has(page)) continue;
+
+		// Abandon draws nobody is waiting for any more: the reader has scrolled
+		// past the page, or has zoomed, which makes the size being drawn wrong.
+		for (const [page, draw] of drawing) {
+			if (!pages.has(page) || draw.width !== width) draw.controller.abort();
+		}
+
+		// Release bitmaps once they add up to more than the budget, furthest from
+		// the reader first. A page in view or mid-draw is never released.
+		const rendered = [...drawnWidths.keys()].filter(
+			(page) => !pages.has(page) && !drawing.has(page)
+		);
+		let held = [...drawnWidths.keys()].reduce((total, page) => total + drawnPixels(page), 0);
+		const focus = focusPage;
+		rendered.sort((left, right) => Math.abs(right - focus) - Math.abs(left - focus));
+		for (const page of rendered) {
+			if (held <= RENDERED_PIXEL_BUDGET) break;
+			const canvas = canvases.get(page);
+			if (!canvas) continue;
+			held -= drawnPixels(page);
 			canvas.width = 0;
 			canvas.height = 0;
-			scales.delete(page);
+			drawnWidths.delete(page);
 		}
+
 		let cancelled = false;
+		// Nearest the reader first: draws run one at a time, and a page of dense
+		// vector art can hold the queue for seconds. Whoever is waiting should be
+		// waiting for the page they are looking at.
+		const order = [...pages].sort(
+			(left, right) => Math.abs(left - focusPage) - Math.abs(right - focusPage)
+		);
 		void openPdfRenderer(book).then(async (renderer) => {
 			if (!renderer || cancelled) return;
-			for (const page of pages) {
+			for (const page of order) {
 				if (cancelled) return;
 				const canvas = canvases.get(page);
-				if (!canvas || scales.get(page) === width / pageWidth(page)) continue;
+				// Already drawn at this size, or already being drawn: queueing it
+				// again would only make the reader wait behind their own request.
+				if (!canvas || drawing.has(page) || drawnWidths.get(page) === width) continue;
+				const draw = { width, controller: new AbortController() };
+				drawing.set(page, draw);
 				try {
-					await renderer.renderPage(page, canvas, width);
-					if (!cancelled) scales.set(page, width / pageWidth(page));
+					await renderer.renderPage(page, canvas, width, draw.controller.signal);
+					drawnWidths.set(page, width);
 				} catch {
-					// A page that will not draw stays blank; the rest still read.
+					// Abandoned, or a page that will not draw: leave it blank rather
+					// than recording a size it was never drawn at. The rest still read.
+				} finally {
+					if (drawing.get(page) === draw) drawing.delete(page);
 				}
 			}
 		});
@@ -230,7 +315,7 @@
 	}
 
 	function pageScale(page: number): number {
-		return scales.get(page) ?? renderWidth / pageWidth(page);
+		return renderWidth / pageWidth(page);
 	}
 
 	function styleFor(rect: PageRect, page: number): string {

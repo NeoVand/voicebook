@@ -1894,6 +1894,83 @@ test('reads a PDF as its own pages, with the spoken passage painted on', async (
 	await expect(page.locator('.reading-canvas')).toBeVisible();
 });
 
+test('draws each original page once while the reader scrolls back and forth', async ({ page }) => {
+	await openReadyLibrary(page);
+	const pdf = await PDFDocument.create();
+	const font = await pdf.embedFont(StandardFonts.Helvetica);
+	// Each page says something of its own: pages that differ only by a number
+	// read as a running header, and the importer strips those.
+	const bodies = [
+		'The harbour master kept a ledger of every tide that entered the bay.',
+		'A cooper in the town sewed the loose pages into a heavier cover.',
+		'Winter storms are recorded in a hand that grows steadily smaller.',
+		'By spring the entries return to their usual patient width again.',
+		'The last volume breaks off in the middle of an ordinary morning.',
+		'Nobody wrote down why the record stops where it does.'
+	];
+	for (const [index, body] of bodies.entries()) {
+		const sheet = pdf.addPage([612, 792]);
+		sheet.drawText(`Section ${index + 1}`, { x: 72, y: 720, size: 20, font });
+		sheet.drawText(body, { x: 72, y: 680, size: 12, font });
+	}
+	await page.locator('#document-upload').setInputFiles({
+		name: 'survey.pdf',
+		mimeType: 'application/pdf',
+		buffer: Buffer.from(await pdf.save())
+	});
+	await expect(page.locator('.reading-canvas')).toBeVisible({ timeout: 60_000 });
+	await page.getByRole('button', { name: /Switch view/ }).click();
+	await expect(page.locator('.page-slot')).toHaveCount(6);
+	await expect
+		.poll(
+			async () =>
+				page
+					.locator('.page-slot[data-page="1"] canvas')
+					.evaluate((node: HTMLCanvasElement) => node.width),
+			{ timeout: 30_000 }
+		)
+		.toBeGreaterThan(400);
+
+	// Count the moments a page's bitmap is thrown away. Releasing one is only
+	// meant to happen under memory pressure, which six letter pages come
+	// nowhere near — releasing them as they leave the scrollport instead meant
+	// every sweep redrew the lot, and a page of dense vector art could not
+	// survive that.
+	await page.evaluate(() => {
+		let released = 0;
+		const widths = new Map<number, number>();
+		(window as unknown as { __released: () => number }).__released = () => released;
+		setInterval(() => {
+			for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.page-slot canvas')) {
+				const number = Number(canvas.closest<HTMLElement>('.page-slot')?.dataset.page);
+				const was = widths.get(number);
+				if (was && was > 1 && canvas.width <= 1) released += 1;
+				widths.set(number, canvas.width);
+			}
+		}, 40);
+	});
+
+	await page.mouse.move(700, 400);
+	for (let sweep = 0; sweep < 3; sweep += 1) {
+		for (let step = 0; step < 12; step += 1) await page.mouse.wheel(0, 800);
+		await page.waitForTimeout(250);
+		for (let step = 0; step < 12; step += 1) await page.mouse.wheel(0, -800);
+		await page.waitForTimeout(250);
+	}
+	await page.waitForTimeout(1500);
+	expect(
+		await page.evaluate(() => (window as unknown as { __released: () => number }).__released())
+	).toBe(0);
+	// And every page is drawn, at the size it is shown.
+	const drawn = await page.evaluate(
+		() =>
+			[...document.querySelectorAll<HTMLCanvasElement>('.page-slot canvas')].filter(
+				(canvas) => canvas.width > 400
+			).length
+	);
+	expect(drawn).toBe(6);
+});
+
 test('recognizes a scanned PDF with on-device text recognition', async ({ page }) => {
 	// Import covers a ~7 MB engine download (local assets) plus recognition.
 	test.setTimeout(180_000);

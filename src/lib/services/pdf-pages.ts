@@ -8,8 +8,18 @@ const MAX_PIXELS = 16 * 1024 * 1024;
 export interface PageRasterizer {
 	readonly pageCount: number;
 	/** Draws a page (1-based) into `canvas` sized for `cssWidth` CSS pixels at
-	 * the device pixel ratio. Sets the canvas buffer and style sizes. */
-	renderPage(page: number, canvas: HTMLCanvasElement, cssWidth: number): Promise<void>;
+	 * the device pixel ratio. Sets the canvas buffer and style sizes.
+	 *
+	 * Aborting `signal` abandons the draw — while it is still queued, or partway
+	 * through. A page of dense vector art can take seconds to paint, and renders
+	 * run one at a time, so a reader who has scrolled past one must not leave it
+	 * holding the queue against every page they are actually looking at. */
+	renderPage(
+		page: number,
+		canvas: HTMLCanvasElement,
+		cssWidth: number,
+		signal?: AbortSignal
+	): Promise<void>;
 	/** Renders a page (1-based) to an OffscreenCanvas at `scale`× the page's
 	 * natural point size — the OCR path's rasterizer. */
 	rasterize(page: number, scale: number): Promise<OffscreenCanvas>;
@@ -49,8 +59,10 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 	const renderInto = async (
 		pageNumber: number,
 		canvas: HTMLCanvasElement | OffscreenCanvas,
-		requestedScale: number
+		requestedScale: number,
+		signal?: AbortSignal
 	) => {
+		signal?.throwIfAborted();
 		const page = await pdf.getPage(pageNumber);
 		try {
 			const base = page.getViewport({ scale: 1 });
@@ -59,10 +71,17 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 			});
 			canvas.width = Math.floor(viewport.width);
 			canvas.height = Math.floor(viewport.height);
-			await page.render({
+			const task = page.render({
 				canvas: canvas as HTMLCanvasElement,
 				viewport
-			}).promise;
+			});
+			const abort = () => task.cancel();
+			signal?.addEventListener('abort', abort, { once: true });
+			try {
+				await task.promise;
+			} finally {
+				signal?.removeEventListener('abort', abort);
+			}
 			return viewport;
 		} finally {
 			page.cleanup();
@@ -71,13 +90,14 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 
 	return {
 		pageCount: pdf.numPages,
-		renderPage: (pageNumber, canvas, cssWidth) =>
+		renderPage: (pageNumber, canvas, cssWidth, signal) =>
 			serialize(async () => {
+				signal?.throwIfAborted();
 				const page = await pdf.getPage(pageNumber);
 				const width = page.getViewport({ scale: 1 }).width;
 				page.cleanup();
 				const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
-				const viewport = await renderInto(pageNumber, canvas, (cssWidth / width) * ratio);
+				const viewport = await renderInto(pageNumber, canvas, (cssWidth / width) * ratio, signal);
 				canvas.style.width = `${Math.round(viewport.width / ratio)}px`;
 				canvas.style.height = `${Math.round(viewport.height / ratio)}px`;
 			}),
