@@ -80,7 +80,7 @@ Useful shortcuts:
 
 The free on-device engine is **Supertonic 3** through ONNX Runtime in a dedicated browser worker. The model is downloaded from Hugging Face only after you accept its OpenRAIL-M terms; once installed, speech generation runs locally with WebGPU acceleration when available. Generation quality is adjustable from 2 to 16 steps, with 10 steps as the default. Voicebook generates the current passage first, buffers upcoming passages, and stores generated audio locally so it does not need to repeat work.
 
-Prefer premium voices? Paste an **ElevenLabs** API key and pick any of your voices — no download, native word-level timing for read-along highlighting, and the economical Flash v2.5 model by default.
+Prefer premium voices? Paste an **ElevenLabs** API key and pick any of your voices — no download and native word-level timing for read-along highlighting. Both generations are available: **Eleven v3** and **Eleven v3 Conversational** for the most expressive read, or the **v2** models (Flash v2.5, Turbo v2.5, Multilingual v2) for a cheaper, steadier one. Flash v2.5 is the default, and each model keeps its own settings — stability, similarity, style, speed, and speaker boost, wherever that model honours them.
 
 ## Spoken descriptions
 

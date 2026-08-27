@@ -10,10 +10,15 @@
  * bundle contains none of this (the DEV branch is compiled out).
  */
 import {
+	DEFAULT_ELEVENLABS_MODEL,
 	DEFAULT_ELEVENLABS_VOICE,
 	DEFAULT_REALTIME_EFFORT,
 	DEFAULT_REALTIME_VOICE,
 	ELEVENLABS_MODELS,
+	elevenLabsRevision,
+	elevenLabsVoiceSettings,
+	getElevenLabsModel,
+	normalizeElevenLabsOptions,
 	REALTIME_MODELS,
 	REALTIME_VOICES,
 	defaultCloudLlmModel,
@@ -24,7 +29,9 @@ import {
 	type ApiProvider,
 	type CloudLlmProvider,
 	type DescriptionEngine,
+	type ElevenLabsModelSpec,
 	type ElevenLabsVoice,
+	type ElevenLabsVoiceOptions,
 	type RealtimeEffort,
 	type SpeechEngine,
 	type StudyEngine
@@ -71,8 +78,10 @@ export class ProvidersState {
 	realtimeModelId = $state<string>(REALTIME_MODELS[0].id);
 	realtimeVoice = $state<string>(DEFAULT_REALTIME_VOICE);
 	realtimeEffort = $state<RealtimeEffort>(DEFAULT_REALTIME_EFFORT);
-	elevenLabsModelId = $state<string>(ELEVENLABS_MODELS[0].id);
+	elevenLabsModelId = $state<string>(DEFAULT_ELEVENLABS_MODEL);
 	elevenLabsVoiceId = $state<string>(DEFAULT_ELEVENLABS_VOICE);
+	/** Synthesis knobs kept per model id — v3 and v2 tune independently. */
+	private elevenLabsOptions = $state<Record<string, Partial<ElevenLabsVoiceOptions>>>({});
 	/** Cached voice list (refreshed whenever settings opens with a key). */
 	elevenLabsVoices = $state<ElevenLabsVoice[]>([]);
 	private voicesLoad?: Promise<ElevenLabsVoice[]>;
@@ -94,6 +103,7 @@ export class ProvidersState {
 				elModel,
 				elVoice,
 				elVoices,
+				elOptions,
 				realtimeModel,
 				rtVoice,
 				rtEffort,
@@ -104,9 +114,10 @@ export class ProvidersState {
 				getSetting<string>('description-engine', 'local'),
 				getSetting<Partial<Record<CloudLlmProvider, string>>>('cloud-llm-models', {}),
 				getSetting<string>('speech-engine', 'local'),
-				getSetting<string>('elevenlabs-model', ELEVENLABS_MODELS[0].id),
+				getSetting<string>('elevenlabs-model', DEFAULT_ELEVENLABS_MODEL),
 				getSetting<string>('elevenlabs-voice', DEFAULT_ELEVENLABS_VOICE),
 				getSetting<ElevenLabsVoice[]>('elevenlabs-voices-cache', []),
+				getSetting<Record<string, Partial<ElevenLabsVoiceOptions>>>('elevenlabs-model-options', {}),
 				getSetting<string>('realtime-model', REALTIME_MODELS[0].id),
 				getSetting<string>('realtime-voice', DEFAULT_REALTIME_VOICE),
 				getSetting<string>('realtime-effort', DEFAULT_REALTIME_EFFORT),
@@ -122,9 +133,10 @@ export class ProvidersState {
 			this.speechEngine = speech === 'elevenlabs' ? 'elevenlabs' : 'local';
 			this.elevenLabsModelId = ELEVENLABS_MODELS.some((model) => model.id === elModel)
 				? elModel
-				: ELEVENLABS_MODELS[0].id;
+				: DEFAULT_ELEVENLABS_MODEL;
 			this.elevenLabsVoiceId = elVoice || DEFAULT_ELEVENLABS_VOICE;
 			this.elevenLabsVoices = elVoices ?? [];
+			this.elevenLabsOptions = elOptions ?? {};
 			this.realtimeModelId = REALTIME_MODELS.some((model) => model.id === realtimeModel)
 				? realtimeModel
 				: REALTIME_MODELS[0].id;
@@ -282,6 +294,63 @@ export class ProvidersState {
 	async setElevenLabsModel(modelId: string): Promise<void> {
 		this.elevenLabsModelId = modelId;
 		await setSetting('elevenlabs-model', modelId);
+	}
+
+	/** The selected model's spec, falling back to the default if a stored id
+	 * ever outlives the catalog. */
+	get elevenLabsModel(): ElevenLabsModelSpec {
+		return (
+			getElevenLabsModel(this.elevenLabsModelId) ??
+			(getElevenLabsModel(DEFAULT_ELEVENLABS_MODEL) as ElevenLabsModelSpec)
+		);
+	}
+
+	/** Fully-populated, clamped options for one model — knobs it does not
+	 * honour read back as their defaults. */
+	elevenLabsOptionsFor(modelId: string): ElevenLabsVoiceOptions {
+		const model = getElevenLabsModel(modelId);
+		if (!model) return normalizeElevenLabsOptions(this.elevenLabsModel, null);
+		return normalizeElevenLabsOptions(model, this.elevenLabsOptions[modelId]);
+	}
+
+	/** voice_settings for the active model, or undefined to let the voice's
+	 * own saved settings apply. */
+	get elevenLabsVoiceSettings(): Record<string, number | boolean> | undefined {
+		const model = this.elevenLabsModel;
+		return elevenLabsVoiceSettings(model, this.elevenLabsOptionsFor(model.id));
+	}
+
+	/** Cache-key fragment: the model id, plus a suffix once options move. */
+	get elevenLabsRevision(): string {
+		const model = this.elevenLabsModel;
+		return elevenLabsRevision(model, this.elevenLabsOptionsFor(model.id));
+	}
+
+	async setElevenLabsOptions(
+		modelId: string,
+		patch: Partial<ElevenLabsVoiceOptions>
+	): Promise<void> {
+		const model = getElevenLabsModel(modelId);
+		if (!model) return;
+		const next = normalizeElevenLabsOptions(model, {
+			...this.elevenLabsOptionsFor(modelId),
+			...patch
+		});
+		this.elevenLabsOptions = { ...this.elevenLabsOptions, [modelId]: next };
+		await this.persistElevenLabsOptions();
+	}
+
+	async resetElevenLabsOptions(modelId: string): Promise<void> {
+		const next = { ...this.elevenLabsOptions };
+		delete next[modelId];
+		this.elevenLabsOptions = next;
+		await this.persistElevenLabsOptions();
+	}
+
+	/** The stored records are nested objects, so they read back as $state
+	 * proxies — IndexedDB cannot structured-clone those. Snapshot first. */
+	private async persistElevenLabsOptions(): Promise<void> {
+		await setSetting('elevenlabs-model-options', $state.snapshot(this.elevenLabsOptions));
 	}
 
 	async setElevenLabsVoice(voiceId: string): Promise<void> {

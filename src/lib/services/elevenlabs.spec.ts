@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { pcm16ToFloat32, wordTimingsFromAlignment } from './elevenlabs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+	ElevenLabsError,
+	pcm16ToFloat32,
+	synthesizeElevenLabs,
+	wordTimingsFromAlignment
+} from './elevenlabs';
 
 describe('word timings from character alignment', () => {
 	it('groups characters into whitespace-delimited words with span timing', () => {
@@ -71,5 +76,79 @@ describe('pcm decoding', () => {
 	it('tolerates a trailing odd byte', () => {
 		const bytes = new Uint8Array([0, 64, 7]);
 		expect(pcm16ToFloat32(bytes).length).toBe(1);
+	});
+});
+
+describe('synthesis request', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	function stubFetch(): ReturnType<typeof vi.fn> {
+		const samples = new Int16Array([0, 128, -128, 0]);
+		const bytes = new Uint8Array(samples.buffer);
+		const fetchMock = vi.fn(async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({
+				audio_base64: btoa(String.fromCharCode(...bytes)),
+				alignment: {
+					characters: ['H', 'i'],
+					character_start_times_seconds: [0, 0.1],
+					character_end_times_seconds: [0.1, 0.2]
+				}
+			})
+		}));
+		vi.stubGlobal('fetch', fetchMock);
+		return fetchMock;
+	}
+
+	function bodyOf(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+		const init = fetchMock.mock.calls[0][1] as RequestInit;
+		return JSON.parse(init.body as string) as Record<string, unknown>;
+	}
+
+	it('sends the bare model id and omits voice_settings when none are given', async () => {
+		const fetchMock = stubFetch();
+		const result = await synthesizeElevenLabs({
+			apiKey: 'k',
+			voiceId: 'v',
+			modelId: 'eleven_v3',
+			text: 'Hi'
+		});
+		expect(fetchMock.mock.calls[0][0]).toContain('/v1/text-to-speech/v/with-timestamps');
+		expect(bodyOf(fetchMock)).toEqual({ text: 'Hi', model_id: 'eleven_v3' });
+		expect(result.timing.confidence).toBe('native');
+		expect(result.timing.words.map((word) => word.word)).toEqual(['Hi']);
+	});
+
+	it('forwards voice settings verbatim when the user has tuned them', async () => {
+		const fetchMock = stubFetch();
+		await synthesizeElevenLabs({
+			apiKey: 'k',
+			voiceId: 'v',
+			modelId: 'eleven_v3',
+			text: 'Hi',
+			voiceSettings: { stability: 1 }
+		});
+		expect(bodyOf(fetchMock)).toEqual({
+			text: 'Hi',
+			model_id: 'eleven_v3',
+			voice_settings: { stability: 1 }
+		});
+	});
+
+	it('refuses a passage longer than the model accepts before spending credits', async () => {
+		const fetchMock = stubFetch();
+		await expect(
+			synthesizeElevenLabs({
+				apiKey: 'k',
+				voiceId: 'v',
+				// v3 caps at 5,000 characters where Flash takes 40,000.
+				modelId: 'eleven_v3',
+				text: 'x'.repeat(5_001)
+			})
+		).rejects.toThrow(ElevenLabsError);
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

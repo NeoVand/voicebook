@@ -31,7 +31,7 @@
 	import { LLM_CATALOG, type LlmModelSpec } from '$lib/domain/llm-catalog';
 	import {
 		CLOUD_LLM_PROVIDERS,
-		ELEVENLABS_MODELS,
+		ELEVENLABS_FAMILIES,
 		REALTIME_EFFORTS,
 		REALTIME_MODELS,
 		REALTIME_VOICES,
@@ -45,6 +45,7 @@
 		getCloudLlmProvider
 	} from '$lib/domain/provider-catalog';
 	import ApiKeyField from '$lib/components/ApiKeyField.svelte';
+	import ElevenLabsOptions from '$lib/components/ElevenLabsOptions.svelte';
 	import { verifyCloudLlmKey } from '$lib/services/cloud-llm';
 	import { elevenLabsUsage, type ElevenLabsUsage } from '$lib/services/elevenlabs';
 	import { player } from '$lib/state/player.svelte';
@@ -743,20 +744,36 @@
 					</button>
 					{#if providersState.speechEngine === 'elevenlabs'}
 						<div class="engine-config">
-							<div class="engine-models" role="group" aria-label="ElevenLabs model">
-								{#each ELEVENLABS_MODELS as model (model.id)}
-									<button
-										type="button"
-										class="engine-model"
-										class:selected={providersState.elevenLabsModelId === model.id}
-										aria-pressed={providersState.elevenLabsModelId === model.id}
-										onclick={() => void providersState.setElevenLabsModel(model.id)}
-									>
-										<strong>{model.label}</strong>
-										<small>{model.tagline}</small>
-									</button>
-								{/each}
-							</div>
+							{#each ELEVENLABS_FAMILIES as family (family.id)}
+								<div class="el-family">
+									<div class="el-family-label">
+										<strong>{family.label}</strong>
+										<small>{family.note}</small>
+									</div>
+									<div class="engine-models" role="group" aria-label={`${family.label} model`}>
+										{#each family.models as model (model.id)}
+											<button
+												type="button"
+												class="engine-model"
+												class:selected={providersState.elevenLabsModelId === model.id}
+												aria-pressed={providersState.elevenLabsModelId === model.id}
+												onclick={() => void providersState.setElevenLabsModel(model.id)}
+											>
+												<strong>{model.label}</strong>
+												<small>{model.tagline}</small>
+											</button>
+										{/each}
+									</div>
+								</div>
+							{/each}
+							<ElevenLabsOptions
+								model={providersState.elevenLabsModel}
+								options={providersState.elevenLabsOptionsFor(providersState.elevenLabsModelId)}
+								onChange={(patch) =>
+									providersState.setElevenLabsOptions(providersState.elevenLabsModelId, patch)}
+								onReset={() =>
+									providersState.resetElevenLabsOptions(providersState.elevenLabsModelId)}
+							/>
 							<ApiKeyField
 								label="ElevenLabs API key"
 								placeholder="sk_…"
@@ -2248,6 +2265,23 @@
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 		gap: 8px;
+	}
+
+	.el-family {
+		display: grid;
+		gap: 7px;
+	}
+
+	.el-family-label strong {
+		font-size: 9.5px;
+		font-weight: 650;
+	}
+
+	.el-family-label small {
+		display: block;
+		margin-top: 1px;
+		color: var(--faint);
+		font-size: 8.5px;
 	}
 
 	.assistant-group {

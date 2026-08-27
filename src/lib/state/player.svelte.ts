@@ -28,7 +28,6 @@ import {
 import { encodeDocumentMp3, mp3Filename } from '$lib/services/mp3-export';
 import { ttsClient, type SynthesisResult } from '$lib/services/tts-client';
 import { synthesizeElevenLabs } from '$lib/services/elevenlabs';
-import { ELEVENLABS_MODELS } from '$lib/domain/provider-catalog';
 import { generationPlan } from '$lib/services/generation-plan';
 import {
 	absoluteTimelinePosition,
@@ -284,7 +283,9 @@ export class VoicebookPlayer {
 			return {
 				modelId: 'elevenlabs',
 				repository: 'elevenlabs',
-				revision: providersState.elevenLabsModelId,
+				// Carries the tuning knobs so a changed setting re-synthesizes
+				// instead of replaying audio made with the old ones.
+				revision: providersState.elevenLabsRevision,
 				voiceId: providersState.elevenLabsVoiceId,
 				backend: 'cloud',
 				dtype: 'pcm24'
@@ -302,12 +303,7 @@ export class VoicebookPlayer {
 	}
 
 	get runtimeLabel(): string {
-		if (this.usesElevenLabs) {
-			const model = ELEVENLABS_MODELS.find(
-				(candidate) => candidate.id === providersState.elevenLabsModelId
-			);
-			return `ElevenLabs · ${model?.label ?? providersState.elevenLabsModelId}`;
-		}
+		if (this.usesElevenLabs) return `ElevenLabs · ${providersState.elevenLabsModel.label}`;
 		if (!this.engineBackend) return 'Engine warming';
 		return `${this.engineBackend === 'webgpu' ? 'WebGPU' : 'WASM'} · ${this.engineDtype}`;
 	}
@@ -733,7 +729,10 @@ export class VoicebookPlayer {
 				generated = await synthesizeElevenLabs({
 					apiKey: providersState.keyFor('elevenlabs') ?? '',
 					voiceId: variant.voiceId,
-					modelId: variant.revision,
+					// variant.revision folds the tuning knobs in for cache keys;
+					// the wire needs the bare model id and its settings.
+					modelId: providersState.elevenLabsModel.id,
+					voiceSettings: providersState.elevenLabsVoiceSettings,
 					text: segment.normalizedText,
 					signal: controller.signal
 				});
@@ -1269,7 +1268,10 @@ export class VoicebookPlayer {
 				generated = await synthesizeElevenLabs({
 					apiKey: providersState.keyFor('elevenlabs') ?? '',
 					voiceId: variant.voiceId,
-					modelId: variant.revision,
+					// variant.revision folds the tuning knobs in for cache keys;
+					// the wire needs the bare model id and its settings.
+					modelId: providersState.elevenLabsModel.id,
+					voiceSettings: providersState.elevenLabsVoiceSettings,
 					text: spoken,
 					signal: controller.signal
 				});
