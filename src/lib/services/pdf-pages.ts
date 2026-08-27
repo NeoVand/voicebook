@@ -1,4 +1,5 @@
 import type { NormalizedDocument } from '../domain/types';
+import { toneDistance, tonePixels, type Rgb } from '../domain/page-tone';
 import { getSource } from './repository';
 
 /** Safari caps canvases around 4096×4096 / 16M pixels; render within that. */
@@ -29,7 +30,7 @@ export interface PageRasterizer {
 		page: number,
 		canvas: HTMLCanvasElement,
 		cssWidth: number,
-		options?: { signal?: AbortSignal; darken?: boolean }
+		options?: { signal?: AbortSignal; tone?: { paper: Rgb; ink: Rgb } }
 	): Promise<{ width: number; height: number }>;
 	/** Renders a page (1-based) to an OffscreenCanvas at `scale`× the page's
 	 * natural point size — the OCR path's rasterizer. */
@@ -120,7 +121,7 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 		pageCount: pdf.numPages,
 		renderPage: (pageNumber, canvas, cssWidth, options = {}) =>
 			serialize(async () => {
-				const { signal, darken } = options;
+				const { signal, tone } = options;
 				signal?.throwIfAborted();
 				const page = await pdf.getPage(pageNumber);
 				try {
@@ -137,8 +138,8 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 					// Abandoned while it painted: the finished picture is no longer
 					// the one anybody asked for, so leave the canvas as it was.
 					signal?.throwIfAborted();
-					const shown = darken ? await darkened(pdfjs, page, offscreen, viewport) : offscreen;
-					present(canvas, shown);
+					if (tone) await printOnto(pdfjs, page, offscreen, viewport, tone);
+					present(canvas, offscreen);
 					return {
 						width: Math.round(viewport.width / ratio),
 						height: Math.round(viewport.height / ratio)
@@ -162,50 +163,43 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 }
 
 /**
- * Turning a printed page into a dark one.
+ * Reprint a drawn page onto the reader's paper, in place.
  *
- * Dimming a white page only makes it a grey page; what a dark theme wants is
- * paper that is actually dark with light ink on it. Inverting does that, and
- * rotating the hue back through 180° keeps the colours roughly themselves, so
- * red warning text stays red and a green curve on a plot stays green rather
- * than turning magenta.
+ * The ramp itself lives in domain/page-tone.ts; what belongs here is knowing
+ * which parts of the page it may touch. Photographs and rendered figures must
+ * be left exactly as the author made them — running paper-and-ink arithmetic
+ * over a photograph produces a negative — and the page's operator list says
+ * precisely where each image object lands, so those rectangles are lifted out
+ * beforehand and put back after.
  *
- * What inverting ruins is photographs — a portrait or a rendered figure comes
- * out as a negative. Those are drawn as image objects, and the page's operator
- * list says exactly where each one lands, so they are put back afterwards
- * untouched. Line art, rules and type are not images and take the inversion,
- * which is what makes the page read as dark rather than merely inverted.
+ * Line art, rules and type are not images and do take the ramp, which is what
+ * lets a page become genuinely dark rather than merely dimmed.
  *
- * A page that is already dark (a slide, a plate) is left alone: it has nothing
- * to gain and everything to lose.
+ * A page that is already dark is left alone: the ramp reads lightness as
+ * paper, so a dark plate would come back inverted.
  */
-async function darkened(
+async function printOnto(
 	pdfjs: typeof import('pdfjs-dist'),
 	page: { getOperatorList: () => Promise<{ fnArray: number[]; argsArray: unknown[][] }> },
-	source: OffscreenCanvas,
-	viewport: { transform: number[] }
-): Promise<OffscreenCanvas> {
-	if (!isLightPage(source)) return source;
-	const target = new OffscreenCanvas(source.width, source.height);
-	const context = target.getContext('2d');
-	if (!context) return source;
-	context.filter = 'invert(1) hue-rotate(180deg)';
-	context.drawImage(source, 0, 0);
-	context.filter = 'none';
-	for (const rect of await imageRects(pdfjs, page, viewport, source)) {
-		context.drawImage(
-			source,
-			rect.x,
-			rect.y,
-			rect.width,
-			rect.height,
-			rect.x,
-			rect.y,
-			rect.width,
-			rect.height
-		);
-	}
-	return target;
+	surface: OffscreenCanvas,
+	viewport: { transform: number[] },
+	tone: { paper: Rgb; ink: Rgb }
+): Promise<void> {
+	// Under a theme whose paper is already white under black ink there is
+	// nothing to do, and a full-page pixel pass is not free.
+	if (toneDistance(tone.paper, tone.ink) < 0.06) return;
+	if (!isLightPage(surface)) return;
+	const context = surface.getContext('2d', { willReadFrequently: true });
+	if (!context) return;
+	const pictures = (await imageRects(pdfjs, page, viewport, surface)).map((rect) => ({
+		rect,
+		pixels: context.getImageData(rect.x, rect.y, rect.width, rect.height)
+	}));
+	const page_ = context.getImageData(0, 0, surface.width, surface.height);
+	tonePixels(page_.data, tone.paper, tone.ink);
+	context.putImageData(page_, 0, 0);
+	for (const picture of pictures)
+		context.putImageData(picture.pixels, picture.rect.x, picture.rect.y);
 }
 
 /** Sampled down to a thumbnail: paper is overwhelmingly the lightest thing on

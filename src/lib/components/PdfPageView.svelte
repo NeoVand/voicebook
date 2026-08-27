@@ -5,6 +5,7 @@
 	import type { PageRect, SegmentPlacement } from '$lib/domain/pdf-layout';
 	import { openPdfRenderer } from '$lib/services/pdf-pages';
 	import { openPdfLayout } from '$lib/services/pdf-layout';
+	import { parseColor, type Rgb } from '$lib/domain/page-tone';
 	import { appearanceState } from '$lib/state/appearance.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 
@@ -60,7 +61,10 @@
 	 * memory budget care: layout never does, because the canvas is stretched to
 	 * whatever size its sheet is, so a page drawn at another zoom is briefly
 	 * soft rather than the wrong size. */
-	const drawnWidths = new SvelteMap<number, { width: number; darken: boolean }>();
+	const drawnWidths = new SvelteMap<
+		number,
+		{ width: number; tone: { paper: Rgb; ink: Rgb } | undefined }
+	>();
 	const placements = new SvelteMap<number, Map<string, SegmentPlacement>>();
 	let hovered = $state<{ page: number; segmentId: string }>();
 
@@ -81,12 +85,22 @@
 	let available = $state(0);
 
 	/**
-	 * Paper is white, and a white page is a poor thing to hand someone who has
-	 * chosen a dark theme to read in. Under one the page is turned dark at the
-	 * point it is drawn — no preference to find or set, because the reader
-	 * already said which kind of light they are reading by.
+	 * The paper and ink the reading view uses for this theme, read off the
+	 * stack itself so the two views agree by construction rather than by a
+	 * table someone has to remember to update. The page is printed onto these,
+	 * which under a light theme is a barely visible warming and under a dark
+	 * one is a full inversion — the same arithmetic either way.
 	 */
-	let darken = $derived(appearanceState.themeSpec.dark);
+	let tone = $derived.by((): { paper: Rgb; ink: Rgb } | undefined => {
+		// The theme is the dependency; the element is only where its value is
+		// legible, since these are CSS variables rather than state.
+		void appearanceState.theme;
+		if (!scroller) return undefined;
+		const style = getComputedStyle(scroller);
+		const paper = parseColor(style.getPropertyValue('--reader'));
+		const ink = parseColor(style.getPropertyValue('--reader-ink-strong'));
+		return paper && ink ? { paper, ink } : undefined;
+	});
 
 	/**
 	 * The width a page is drawn at. At 100% a page fits the pane, however
@@ -243,7 +257,7 @@
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity
 	const drawing = new Map<
 		number,
-		{ width: number; darken: boolean; controller: AbortController }
+		{ width: number; tone: { paper: Rgb; ink: Rgb } | undefined; controller: AbortController }
 	>();
 
 	function drawnPixels(page: number): number {
@@ -267,14 +281,15 @@
 	 */
 	$effect(() => {
 		const width = drawWidth;
-		const dark = darken;
+		const toneNow = tone;
 		const pages = new Set(live);
 		if (!width) return;
 
 		// Abandon draws nobody is waiting for any more: the reader has scrolled
 		// past the page, or has zoomed, which makes the size being drawn wrong.
 		for (const [page, draw] of drawing) {
-			if (!pages.has(page) || draw.width !== width || draw.darken !== dark) draw.controller.abort();
+			if (!pages.has(page) || draw.width !== width || draw.tone !== toneNow)
+				draw.controller.abort();
 		}
 
 		// Release bitmaps once they add up to more than the budget, furthest from
@@ -316,17 +331,17 @@
 				// Already drawn at this size, or already being drawn: queueing it
 				// again would only make the reader wait behind their own request.
 				const drawn = drawnWidths.get(page);
-				if (!canvas || drawing.has(page) || (drawn?.width === width && drawn.darken === darken)) {
+				if (!canvas || drawing.has(page) || (drawn?.width === width && drawn.tone === toneNow)) {
 					continue;
 				}
-				const draw = { width, darken: dark, controller: new AbortController() };
+				const draw = { width, tone: toneNow, controller: new AbortController() };
 				drawing.set(page, draw);
 				try {
 					await renderer.renderPage(page, canvas, width, {
 						signal: draw.controller.signal,
-						darken
+						tone: toneNow
 					});
-					drawnWidths.set(page, { width, darken });
+					drawnWidths.set(page, { width, tone: toneNow });
 				} catch {
 					// Abandoned, or a page that will not draw. The canvas still shows
 					// whatever it showed before — the picture was painted off-screen —
@@ -527,7 +542,7 @@
 	});
 </script>
 
-<div class="page-stack" class:darkened={darken} {@attach trackStack}>
+<div class="page-stack" class:darkened={appearanceState.themeSpec.dark} {@attach trackStack}>
 	{#each sizes as size (size.page)}
 		{@const scale = pageScale(size.page)}
 		{@const placed = placements.get(size.page)}
@@ -600,15 +615,15 @@
 		position: relative;
 		border: 1px solid var(--line);
 		border-radius: 3px;
-		background: white;
+		/* The page arrives already printed on the theme's paper, so the sheet
+		   shows that colour behind it while it draws rather than flashing a
+		   white rectangle first. */
+		background: var(--reader);
 		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 	}
 
-	/* The page arrives already dark from the renderer, so the sheet only has to
-	   stop being a white rectangle behind it while it draws, and drop the
-	   drop-shadow that belonged to paper. */
+	/* The drop-shadow belonged to white paper on a light ground. */
 	.darkened .page-sheet {
-		background: #131313;
 		box-shadow: none;
 	}
 

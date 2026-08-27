@@ -2023,6 +2023,32 @@ test('draws each original page once while the reader scrolls back and forth', as
 	// control of its own.
 	const stack = page.locator('.page-stack');
 	await expect(stack).toHaveClass(/\bdarkened\b/);
+	// And the paper really is the theme's paper: a pixel of margin, well away
+	// from any type, comes back as the colour the reading view uses.
+	const marginPixel = async () =>
+		page.evaluate(() => {
+			const canvas = document.querySelector<HTMLCanvasElement>('.page-slot[data-page="1"] canvas');
+			const stack = document.querySelector<HTMLElement>('.page-stack');
+			if (!canvas || !stack) return null;
+			const scratch = document.createElement('canvas');
+			scratch.width = 1;
+			scratch.height = 1;
+			scratch.getContext('2d')?.drawImage(canvas, 8, 8, 1, 1, 0, 0, 1, 1);
+			const [red, green, blue] = scratch.getContext('2d')!.getImageData(0, 0, 1, 1).data;
+			return {
+				paper: [red, green, blue],
+				theme: getComputedStyle(stack).getPropertyValue('--reader')
+			};
+		});
+	const printed = await marginPixel();
+	expect(printed).not.toBeNull();
+	const themePaper = /#(\w{2})(\w{2})(\w{2})/.exec(printed!.theme.trim());
+	expect(themePaper).not.toBeNull();
+	for (let channel = 0; channel < 3; channel += 1) {
+		expect(
+			Math.abs(printed!.paper[channel] - Number.parseInt(themePaper![channel + 1], 16))
+		).toBeLessThanOrEqual(6);
+	}
 	const theme = page.getByRole('button', { name: /Switch to .* theme/ });
 	for (let click = 0; click < THEME_COUNT; click += 1) {
 		if ((await theme.getAttribute('aria-label'))?.includes('Theme: Sunny')) break;
