@@ -6,6 +6,7 @@ import {
 	mergeWordRects,
 	pageWordBoxes,
 	placeSegments,
+	readingOrder,
 	segmentsForPage,
 	type PageWordBox,
 	type PlaceableSegment
@@ -83,6 +84,64 @@ describe('pageWordBoxes', () => {
 			}
 		]);
 		expect(boxes.map((box) => box.text)).toEqual(['one', 'two']);
+	});
+});
+
+describe('readingOrder', () => {
+	/** A two-column page: a full-width title, then lines that alternate
+	 * between the columns exactly as a raster scan hands them over. */
+	function twoColumnPage(): PageWordBox[] {
+		const boxes = [...line('A Title Across The Page', 40, 150)];
+		for (let index = 0; index < 6; index += 1) {
+			const y = 100 + index * 14;
+			boxes.push(...line(`left${index}a left${index}b`, y, 50));
+			boxes.push(...line(`right${index}a right${index}b`, y + 2, 320));
+		}
+		return boxes;
+	}
+
+	it('reads each column through before starting the next', () => {
+		const ordered = readingOrder(twoColumnPage(), 612).map((box) => box.text);
+		const leftEnd = ordered.indexOf('left5b');
+		const rightStart = ordered.indexOf('right0a');
+		expect(ordered[0]).toBe('A');
+		expect(leftEnd).toBeLessThan(rightStart);
+	});
+
+	it('keeps a full-width heading ahead of the columns beneath it', () => {
+		const ordered = readingOrder(twoColumnPage(), 612).map((box) => box.text);
+		expect(ordered.slice(0, 5)).toEqual(['A', 'Title', 'Across', 'The', 'Page']);
+	});
+
+	it('leaves a single column in the order it arrived', () => {
+		const single = [
+			...line('the first line of the paragraph', 100, 50),
+			...line('the second line of the paragraph', 114, 50),
+			...line('and a third', 128, 50)
+		];
+		expect(readingOrder(single, 612)).toEqual(single);
+	});
+
+	it('reads a line left to right even when its words arrive scrambled', () => {
+		const words = line('alpha beta gamma', 100, 50);
+		const scrambled = [words[2], words[0], words[1]];
+		expect(readingOrder(scrambled, 612).map((box) => box.text)).toEqual(['alpha', 'beta', 'gamma']);
+	});
+
+	it('does not read a running head as two columns', () => {
+		// One line with something at each margin is a header, not a page of
+		// columns — splitting it would put the folio before the title.
+		const header = [
+			{ text: 'Chapter', x: 50, y: 40, width: 40, height: 10 },
+			{ text: '12', x: 540, y: 40, width: 12, height: 10 }
+		];
+		expect(readingOrder(header, 612).map((box) => box.text)).toEqual(['Chapter', '12']);
+	});
+
+	it('has nothing to reorder on an empty or single-word page', () => {
+		expect(readingOrder([], 612)).toEqual([]);
+		const one = line('alone', 10, 10);
+		expect(readingOrder(one, 612)).toEqual(one);
 	});
 });
 

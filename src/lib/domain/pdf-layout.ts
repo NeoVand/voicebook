@@ -115,6 +115,115 @@ export function pageWordBoxes(items: PageTextItem[]): PageWordBox[] {
 	return boxes;
 }
 
+/**
+ * Reading order for a page's words.
+ *
+ * LiteParse hands back word boxes in raster order — every line of a
+ * two-column page interleaved with the line beside it. Its *markdown* reads
+ * the columns properly, so the passages arrive in true reading order and the
+ * boxes do not, and a monotonic alignment between the two finds almost
+ * nothing. (Measured on a two-column paper: 57% of passages placed, against
+ * 90% on a single-column one.)
+ *
+ * A recursive XY-cut recovers the order. At each step the region is split at
+ * whitespace that runs all the way across it — vertical gutters first,
+ * because a page whose body is two columns must break into columns before it
+ * breaks into paragraphs, or the halves interleave again. A single-column
+ * page finds no gutter, splits into paragraphs, and comes out in the order it
+ * already had.
+ */
+export function readingOrder(boxes: PageWordBox[], pageWidth: number): PageWordBox[] {
+	if (boxes.length < 2) return boxes;
+	const line = medianHeight(boxes);
+	const columnGap = Math.max(10, pageWidth * 0.025);
+	const rowGap = Math.max(2, line * 0.8);
+	return cut(boxes, columnGap, rowGap, line, 0);
+}
+
+/** Typical line height on the page, used to size the gaps that count as
+ * whitespace. The median shrugs off headings and subscripts. */
+function medianHeight(boxes: PageWordBox[]): number {
+	const heights = boxes.map((box) => box.height).sort((left, right) => left - right);
+	return heights[heights.length >> 1] || 10;
+}
+
+/** Regions this deep are paragraphs; splitting further only costs time. */
+const MAX_CUT_DEPTH = 8;
+/** A vertical split needs a region tall enough to be a column. Without this,
+ * a single line with something at each margin — a running head, a page
+ * number — reads as two columns. */
+const MIN_COLUMN_LINES = 4;
+
+function cut(
+	boxes: PageWordBox[],
+	columnGap: number,
+	rowGap: number,
+	line: number,
+	depth: number
+): PageWordBox[] {
+	if (boxes.length < 2 || depth >= MAX_CUT_DEPTH) return byLine(boxes);
+	const height = extent(boxes, 'y');
+	if (height >= line * MIN_COLUMN_LINES) {
+		const columns = split(boxes, 'x', columnGap);
+		if (columns.length > 1) {
+			return columns.flatMap((column) => cut(column, columnGap, rowGap, line, depth + 1));
+		}
+	}
+	const rows = split(boxes, 'y', rowGap);
+	if (rows.length > 1) {
+		return rows.flatMap((row) => cut(row, columnGap, rowGap, line, depth + 1));
+	}
+	return byLine(boxes);
+}
+
+function extent(boxes: PageWordBox[], axis: 'x' | 'y'): number {
+	const size = axis === 'x' ? 'width' : 'height';
+	let low = Infinity;
+	let high = -Infinity;
+	for (const box of boxes) {
+		low = Math.min(low, box[axis]);
+		high = Math.max(high, box[axis] + box[size]);
+	}
+	return high - low;
+}
+
+/** Split a region wherever whitespace runs all the way across it on one axis,
+ * keeping the pieces in ascending order. */
+function split(boxes: PageWordBox[], axis: 'x' | 'y', minGap: number): PageWordBox[][] {
+	const size = axis === 'x' ? 'width' : 'height';
+	const ordered = [...boxes].sort((left, right) => left[axis] - right[axis]);
+	const groups: PageWordBox[][] = [];
+	let group: PageWordBox[] = [];
+	let reach = -Infinity;
+	for (const box of ordered) {
+		if (group.length && box[axis] - reach > minGap) {
+			groups.push(group);
+			group = [];
+		}
+		group.push(box);
+		reach = Math.max(reach, box[axis] + box[size]);
+	}
+	if (group.length) groups.push(group);
+	return groups;
+}
+
+/** The last word: rows of type, each read left to right. */
+function byLine(boxes: PageWordBox[]): PageWordBox[] {
+	const ordered = [...boxes].sort((left, right) => left.y - right.y || left.x - right.x);
+	const lines: PageWordBox[][] = [];
+	for (const box of ordered) {
+		const current = lines[lines.length - 1];
+		const previous = current?.[0];
+		const sameLine =
+			previous &&
+			Math.abs(box.y + box.height / 2 - (previous.y + previous.height / 2)) <
+				Math.max(box.height, previous.height) / 2;
+		if (sameLine) current.push(box);
+		else lines.push([box]);
+	}
+	return lines.flatMap((entries) => entries.sort((left, right) => left.x - right.x));
+}
+
 interface Chunk {
 	key: string;
 	start: number;

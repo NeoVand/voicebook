@@ -2,6 +2,7 @@ import type { NormalizedDocument, SpeechSegment } from '../domain/types';
 import {
 	pageWordBoxes,
 	placeSegments,
+	readingOrder,
 	segmentsForPage,
 	type PageWordBox,
 	type SegmentPlacement
@@ -189,7 +190,8 @@ const readWithLiteparse: PageWindowReader = async (data, from, to) => {
 		page: page.pageNum,
 		width: page.width,
 		height: page.height,
-		boxes: pageWordBoxes(page.textItems ?? [])
+		// Raster order as read; reading order as written.
+		boxes: readingOrder(pageWordBoxes(page.textItems ?? []), page.width)
 	}));
 };
 
