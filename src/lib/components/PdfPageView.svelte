@@ -13,6 +13,12 @@
 		segments: SpeechSegment[];
 		activeSegmentId?: string;
 		activeWordIndex?: number;
+		/** Passages carrying a reader highlight or margin note. */
+		annotatedSegmentIds?: ReadonlySet<string>;
+		/** The stretch the assistant is discussing, and the one sentence inside
+		 * it that it is pointing at right now. */
+		assistantSegmentIds?: ReadonlySet<string>;
+		assistantPointId?: string;
 		/** Whether playback should pull the page along with it. */
 		follow?: boolean;
 		onPlaySegment: (segmentId: string) => void;
@@ -24,6 +30,9 @@
 		segments,
 		activeSegmentId,
 		activeWordIndex,
+		annotatedSegmentIds,
+		assistantSegmentIds,
+		assistantPointId,
 		follow = true,
 		onPlaySegment
 	}: Props = $props();
@@ -188,6 +197,38 @@
 		return `left:${rect.x * scale}px;top:${rect.y * scale}px;width:${rect.width * scale}px;height:${rect.height * scale}px`;
 	}
 
+	type MarkKind = 'annotated' | 'assistant' | 'point' | 'passage' | 'hover';
+
+	/**
+	 * Everything to paint over one page, back to front. The reading view puts
+	 * these on the same passage as competing backgrounds and lets specificity
+	 * decide; here they are separate rectangles, so the order they are emitted
+	 * in is what decides — live emphasis last, over persistent ink.
+	 */
+	function marksFor(page: number, placed?: Map<string, SegmentPlacement>) {
+		const marks: Array<{ key: string; kind: MarkKind; rect: PageRect }> = [];
+		if (!placed) return marks;
+		const add = (kind: MarkKind, segmentId: string) => {
+			const rects = placed.get(segmentId)?.rects ?? [];
+			rects.forEach((rect, index) =>
+				marks.push({ key: `${kind}:${segmentId}:${index}`, kind, rect })
+			);
+		};
+		for (const segmentId of annotatedSegmentIds ?? []) {
+			if (segmentId !== activeSegmentId) add('annotated', segmentId);
+		}
+		for (const segmentId of assistantSegmentIds ?? []) {
+			if (segmentId !== activeSegmentId && segmentId !== assistantPointId) {
+				add('assistant', segmentId);
+			}
+		}
+		if (assistantPointId && assistantPointId !== activeSegmentId) add('point', assistantPointId);
+		if (hovered?.page === page && hovered.segmentId !== activeSegmentId)
+			add('hover', hovered.segmentId);
+		if (activeSegmentId) add('passage', activeSegmentId);
+		return marks;
+	}
+
 	/** The passage under a point on a page, in PDF points. Rectangles are
 	 * tested with a little vertical slack: line boxes stop at the type's
 	 * bounds, and the gap between two lines belongs to one of them. */
@@ -287,18 +328,11 @@
 				></canvas>
 				{#if live.has(size.page)}
 					<div class="page-marks" aria-hidden="true">
-						{#if hovered?.page === size.page && hovered.segmentId !== activeSegmentId}
-							{#each placed?.get(hovered.segmentId)?.rects ?? [] as rect, index (index)}
-								<span class="mark hover" style={styleFor(rect, size.page)}></span>
-							{/each}
-						{/if}
-						{#if activeSegmentId && placed?.has(activeSegmentId)}
-							{#each placed.get(activeSegmentId)?.rects ?? [] as rect, index (index)}
-								<span class="mark passage" style={styleFor(rect, size.page)}></span>
-							{/each}
-							{#if activeWordRect}
-								<span class="mark word" style={styleFor(activeWordRect, size.page)}></span>
-							{/if}
+						{#each marksFor(size.page, placed) as mark (mark.key)}
+							<span class="mark {mark.kind}" style={styleFor(mark.rect, size.page)}></span>
+						{/each}
+						{#if activeWordRect && placed?.has(activeSegmentId ?? '')}
+							<span class="mark word" style={styleFor(activeWordRect, size.page)}></span>
 						{/if}
 					</div>
 				{/if}
@@ -378,6 +412,20 @@
 
 	.mark.hover {
 		background: color-mix(in srgb, var(--primary) 12%, transparent);
+	}
+
+	/* Persistent reader ink: the same bookmark gold the reading view paints
+	   under an annotated passage. */
+	.mark.annotated {
+		background: color-mix(in srgb, var(--bookmark) 34%, transparent);
+	}
+
+	.mark.assistant {
+		background: color-mix(in srgb, var(--primary) 14%, transparent);
+	}
+
+	.mark.point {
+		background: color-mix(in srgb, var(--primary) 30%, transparent);
 	}
 
 	.mark.word {

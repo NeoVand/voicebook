@@ -2090,6 +2090,9 @@
 					segments={book.segments}
 					{activeSegmentId}
 					activeWordIndex={player.currentWordIndex}
+					annotatedSegmentIds={annotationPaint.segmentIds}
+					{assistantSegmentIds}
+					{assistantPointId}
 					follow={player.autoFollow}
 					onPlaySegment={playPlacedSegment}
 				/>

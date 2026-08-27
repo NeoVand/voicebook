@@ -1785,6 +1785,78 @@ test('imports a PDF with page markers, page navigation, and the original-page vi
 	await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
+test('reads a PDF as its own pages, with the spoken passage painted on', async ({ page }) => {
+	await openReadyLibrary(page);
+	const pdf = await PDFDocument.create();
+	const font = await pdf.embedFont(StandardFonts.Helvetica);
+	const sourcePages = [
+		[
+			'Ledgers of the Coast',
+			'The harbour master kept a ledger of every tide that entered the bay.',
+			'Each entry recorded the hour, the depth, and the weather over the water.'
+		],
+		[
+			'The Second Winter',
+			'By the second winter the ledger had outgrown its binding entirely.',
+			'A cooper in the town sewed the loose pages into a heavier cover.'
+		]
+	];
+	for (const [heading, first, second] of sourcePages) {
+		const sheet = pdf.addPage([612, 792]);
+		sheet.drawText(heading, { x: 72, y: 720, size: 22, font });
+		sheet.drawText(first, { x: 72, y: 660, size: 12, font });
+		sheet.drawText(second, { x: 72, y: 640, size: 12, font });
+	}
+	await page.locator('#document-upload').setInputFiles({
+		name: 'ledgers.pdf',
+		mimeType: 'application/pdf',
+		buffer: Buffer.from(await pdf.save())
+	});
+	await expect(page.getByRole('heading', { name: 'Ledgers of the Coast' })).toBeVisible();
+
+	// The view control only appears for a document that still has its file.
+	const viewSwitch = page.getByRole('button', { name: /Switch view/ });
+	await expect(viewSwitch).toHaveAccessibleName(/Reading view/);
+	await viewSwitch.click();
+	await expect(page.locator('.reading-canvas')).toHaveCount(0);
+	await expect(viewSwitch).toHaveAccessibleName(/Original pages/);
+
+	// Every page is laid out up front, and the near ones actually draw.
+	await expect(page.locator('.page-slot')).toHaveCount(2);
+	const firstPage = page.locator('.page-slot[data-page="1"]');
+	await expect
+		.poll(
+			async () => firstPage.locator('canvas').evaluate((node: HTMLCanvasElement) => node.width),
+			{ timeout: 30_000 }
+		)
+		.toBeGreaterThan(400);
+
+	// Double-clicking a sentence on the paper plays it, and it lights up where
+	// it was printed rather than anywhere the reflowed text would have put it.
+	const sheet = firstPage.locator('.page-sheet');
+	const sheetBox = await sheet.boundingBox();
+	expect(sheetBox).not.toBeNull();
+	// The first body line's baseline sits at 660pt from the foot of a 792pt
+	// page, so its type occupies roughly 123–135pt from the head.
+	const scale = sheetBox!.width / 612;
+	await sheet.dblclick({ position: { x: 200 * scale, y: 129 * scale } });
+	const marks = firstPage.locator('.mark.passage');
+	await expect.poll(async () => marks.count(), { timeout: 30_000 }).toBeGreaterThan(0);
+	const painted = await marks.first().boundingBox();
+	expect(painted).not.toBeNull();
+	// Painted over the line that was clicked, not over the heading above it.
+	expect(painted!.y - sheetBox!.y).toBeGreaterThan(100 * scale);
+	expect(painted!.y - sheetBox!.y).toBeLessThan(160 * scale);
+	expect(painted!.x - sheetBox!.x).toBeGreaterThan(60 * scale);
+
+	// The preference survives leaving and reopening the document.
+	await page.getByRole('link', { name: 'Library' }).first().click();
+	await page.getByRole('link', { name: 'Ledgers of the Coast' }).first().click();
+	await expect(page.locator('.page-slot')).toHaveCount(2);
+	await page.getByRole('button', { name: /Switch view/ }).click();
+	await expect(page.locator('.reading-canvas')).toBeVisible();
+});
+
 test('recognizes a scanned PDF with on-device text recognition', async ({ page }) => {
 	// Import covers a ~7 MB engine download (local assets) plus recognition.
 	test.setTimeout(180_000);

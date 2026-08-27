@@ -24,8 +24,9 @@ function line(text: string, y: number, startX = 0): PageWordBox[] {
 	return boxes;
 }
 
-function words(text: string): Array<{ start: number; end: number }> {
+function words(text: string): Array<{ text: string; start: number; end: number }> {
 	return [...text.matchAll(/\S+/g)].map((match) => ({
+		text: match[0],
 		start: match.index ?? 0,
 		end: (match.index ?? 0) + match[0].length
 	}));
@@ -173,9 +174,9 @@ describe('mergeWordRects', () => {
 
 	it('breaks at a column jump rather than sweeping across the gutter', () => {
 		const merged = mergeWordRects([
-			{ text: 'left', x: 40, y: 100, width: 40, height: 12 },
-			{ text: 'right', x: 300, y: 100, width: 40, height: 12 },
-			{ text: 'wrapped', x: 40, y: 100, width: 40, height: 12 }
+			{ x: 40, y: 100, width: 40, height: 12 },
+			{ x: 300, y: 100, width: 40, height: 12 },
+			{ x: 40, y: 100, width: 40, height: 12 }
 		]);
 		expect(merged).toHaveLength(2);
 	});
