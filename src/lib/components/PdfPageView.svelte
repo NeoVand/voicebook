@@ -60,7 +60,7 @@
 	 * memory budget care: layout never does, because the canvas is stretched to
 	 * whatever size its sheet is, so a page drawn at another zoom is briefly
 	 * soft rather than the wrong size. */
-	const drawnWidths = new SvelteMap<number, number>();
+	const drawnWidths = new SvelteMap<number, { width: number; darken: boolean }>();
 	const placements = new SvelteMap<number, Map<string, SegmentPlacement>>();
 	let hovered = $state<{ page: number; segmentId: string }>();
 
@@ -82,11 +82,11 @@
 
 	/**
 	 * Paper is white, and a white page is a poor thing to hand someone who has
-	 * chosen a dark theme to read in. Under one, the page is dimmed to match —
-	 * no preference to find or set, because the reader already said which kind
-	 * of light they are reading by.
+	 * chosen a dark theme to read in. Under one the page is turned dark at the
+	 * point it is drawn — no preference to find or set, because the reader
+	 * already said which kind of light they are reading by.
 	 */
-	let dimmed = $derived(appearanceState.themeSpec.dark);
+	let darken = $derived(appearanceState.themeSpec.dark);
 
 	/**
 	 * The width a page is drawn at. At 100% a page fits the pane, however
@@ -241,7 +241,10 @@
 	 * restart the effect that started the draw. Every write here is paired with
 	 * a reactive one (`drawnWidths`) when the draw actually lands. */
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity
-	const drawing = new Map<number, { width: number; controller: AbortController }>();
+	const drawing = new Map<
+		number,
+		{ width: number; darken: boolean; controller: AbortController }
+	>();
 
 	function drawnPixels(page: number): number {
 		const canvas = canvases.get(page);
@@ -264,13 +267,14 @@
 	 */
 	$effect(() => {
 		const width = drawWidth;
+		const dark = darken;
 		const pages = new Set(live);
 		if (!width) return;
 
 		// Abandon draws nobody is waiting for any more: the reader has scrolled
 		// past the page, or has zoomed, which makes the size being drawn wrong.
 		for (const [page, draw] of drawing) {
-			if (!pages.has(page) || draw.width !== width) draw.controller.abort();
+			if (!pages.has(page) || draw.width !== width || draw.darken !== dark) draw.controller.abort();
 		}
 
 		// Release bitmaps once they add up to more than the budget, furthest from
@@ -311,12 +315,18 @@
 				const canvas = canvases.get(page);
 				// Already drawn at this size, or already being drawn: queueing it
 				// again would only make the reader wait behind their own request.
-				if (!canvas || drawing.has(page) || drawnWidths.get(page) === width) continue;
-				const draw = { width, controller: new AbortController() };
+				const drawn = drawnWidths.get(page);
+				if (!canvas || drawing.has(page) || (drawn?.width === width && drawn.darken === darken)) {
+					continue;
+				}
+				const draw = { width, darken: dark, controller: new AbortController() };
 				drawing.set(page, draw);
 				try {
-					await renderer.renderPage(page, canvas, width, draw.controller.signal);
-					drawnWidths.set(page, width);
+					await renderer.renderPage(page, canvas, width, {
+						signal: draw.controller.signal,
+						darken
+					});
+					drawnWidths.set(page, { width, darken });
 				} catch {
 					// Abandoned, or a page that will not draw. The canvas still shows
 					// whatever it showed before — the picture was painted off-screen —
@@ -517,7 +527,7 @@
 	});
 </script>
 
-<div class="page-stack" class:dimmed {@attach trackStack}>
+<div class="page-stack" class:darkened={darken} {@attach trackStack}>
 	{#each sizes as size (size.page)}
 		{@const scale = pageScale(size.page)}
 		{@const placed = placements.get(size.page)}
@@ -594,11 +604,18 @@
 		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 	}
 
-	/* Dimming the whole sheet, marks included, rather than the canvas alone:
-	   this way a highlight is still worked out against white paper the way a
-	   highlighter behaves, and only then follows the page into the dark. */
-	.dimmed .page-sheet {
-		filter: brightness(0.72) contrast(1.02);
+	/* The page arrives already dark from the renderer, so the sheet only has to
+	   stop being a white rectangle behind it while it draws, and drop the
+	   drop-shadow that belonged to paper. */
+	.darkened .page-sheet {
+		background: #131313;
+		box-shadow: none;
+	}
+
+	/* Highlights are painted over ink that is now light on dark, so they have to
+	   lighten rather than darken to show at all. */
+	.darkened .page-marks {
+		mix-blend-mode: screen;
 	}
 
 	.page-sheet.over-passage {

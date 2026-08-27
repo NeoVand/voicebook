@@ -29,7 +29,7 @@ export interface PageRasterizer {
 		page: number,
 		canvas: HTMLCanvasElement,
 		cssWidth: number,
-		signal?: AbortSignal
+		options?: { signal?: AbortSignal; darken?: boolean }
 	): Promise<{ width: number; height: number }>;
 	/** Renders a page (1-based) to an OffscreenCanvas at `scale`× the page's
 	 * natural point size — the OCR path's rasterizer. */
@@ -67,6 +67,23 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 		return result;
 	};
 
+	type Page = Awaited<ReturnType<typeof pdf.getPage>>;
+	const renderPageInto = async (
+		page: Page,
+		canvas: OffscreenCanvas,
+		viewport: ReturnType<Page['getViewport']>,
+		signal?: AbortSignal
+	) => {
+		const task = page.render({ canvas: canvas as unknown as HTMLCanvasElement, viewport });
+		const abort = () => task.cancel();
+		signal?.addEventListener('abort', abort, { once: true });
+		try {
+			await task.promise;
+		} finally {
+			signal?.removeEventListener('abort', abort);
+		}
+	};
+
 	const renderInto = async (
 		pageNumber: number,
 		canvas: HTMLCanvasElement | OffscreenCanvas,
@@ -101,28 +118,34 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 
 	return {
 		pageCount: pdf.numPages,
-		renderPage: (pageNumber, canvas, cssWidth, signal) =>
+		renderPage: (pageNumber, canvas, cssWidth, options = {}) =>
 			serialize(async () => {
+				const { signal, darken } = options;
 				signal?.throwIfAborted();
 				const page = await pdf.getPage(pageNumber);
-				const width = page.getViewport({ scale: 1 }).width;
-				page.cleanup();
-				const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
-				const offscreen = new OffscreenCanvas(1, 1);
-				const viewport = await renderInto(
-					pageNumber,
-					offscreen,
-					(cssWidth / width) * ratio,
-					signal
-				);
-				// Abandoned while it painted: the finished picture is no longer the
-				// one anybody asked for, so leave the canvas as it was.
-				signal?.throwIfAborted();
-				present(canvas, offscreen);
-				return {
-					width: Math.round(viewport.width / ratio),
-					height: Math.round(viewport.height / ratio)
-				};
+				try {
+					const base = page.getViewport({ scale: 1 });
+					const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
+					const viewport = page.getViewport({
+						scale: clampedScale(base.width, base.height, (cssWidth / base.width) * ratio)
+					});
+					const offscreen = new OffscreenCanvas(
+						Math.floor(viewport.width),
+						Math.floor(viewport.height)
+					);
+					await renderPageInto(page, offscreen, viewport, signal);
+					// Abandoned while it painted: the finished picture is no longer
+					// the one anybody asked for, so leave the canvas as it was.
+					signal?.throwIfAborted();
+					const shown = darken ? await darkened(pdfjs, page, offscreen, viewport) : offscreen;
+					present(canvas, shown);
+					return {
+						width: Math.round(viewport.width / ratio),
+						height: Math.round(viewport.height / ratio)
+					};
+				} finally {
+					page.cleanup();
+				}
 			}),
 		rasterize: (pageNumber, scale) =>
 			serialize(async () => {
@@ -136,6 +159,137 @@ export async function createPageRasterizer(data: Uint8Array): Promise<PageRaster
 			await loadingTask.destroy();
 		}
 	};
+}
+
+/**
+ * Turning a printed page into a dark one.
+ *
+ * Dimming a white page only makes it a grey page; what a dark theme wants is
+ * paper that is actually dark with light ink on it. Inverting does that, and
+ * rotating the hue back through 180° keeps the colours roughly themselves, so
+ * red warning text stays red and a green curve on a plot stays green rather
+ * than turning magenta.
+ *
+ * What inverting ruins is photographs — a portrait or a rendered figure comes
+ * out as a negative. Those are drawn as image objects, and the page's operator
+ * list says exactly where each one lands, so they are put back afterwards
+ * untouched. Line art, rules and type are not images and take the inversion,
+ * which is what makes the page read as dark rather than merely inverted.
+ *
+ * A page that is already dark (a slide, a plate) is left alone: it has nothing
+ * to gain and everything to lose.
+ */
+async function darkened(
+	pdfjs: typeof import('pdfjs-dist'),
+	page: { getOperatorList: () => Promise<{ fnArray: number[]; argsArray: unknown[][] }> },
+	source: OffscreenCanvas,
+	viewport: { transform: number[] }
+): Promise<OffscreenCanvas> {
+	if (!isLightPage(source)) return source;
+	const target = new OffscreenCanvas(source.width, source.height);
+	const context = target.getContext('2d');
+	if (!context) return source;
+	context.filter = 'invert(1) hue-rotate(180deg)';
+	context.drawImage(source, 0, 0);
+	context.filter = 'none';
+	for (const rect of await imageRects(pdfjs, page, viewport, source)) {
+		context.drawImage(
+			source,
+			rect.x,
+			rect.y,
+			rect.width,
+			rect.height,
+			rect.x,
+			rect.y,
+			rect.width,
+			rect.height
+		);
+	}
+	return target;
+}
+
+/** Sampled down to a thumbnail: paper is overwhelmingly the lightest thing on
+ * a printed page, so a mean this high means there is paper to invert. */
+function isLightPage(source: OffscreenCanvas): boolean {
+	const size = 24;
+	const thumbnail = new OffscreenCanvas(size, size);
+	const context = thumbnail.getContext('2d', { willReadFrequently: true });
+	if (!context) return true;
+	context.drawImage(source, 0, 0, size, size);
+	const { data } = context.getImageData(0, 0, size, size);
+	let total = 0;
+	for (let index = 0; index < data.length; index += 4) {
+		total += 0.2126 * data[index] + 0.7152 * data[index + 1] + 0.0722 * data[index + 2];
+	}
+	return total / (size * size) > 140;
+}
+
+/** [a, b, c, d, e, f] ∘ [a, b, c, d, e, f]. */
+function concat(outer: number[], inner: number[]): number[] {
+	return [
+		outer[0] * inner[0] + outer[2] * inner[1],
+		outer[1] * inner[0] + outer[3] * inner[1],
+		outer[0] * inner[2] + outer[2] * inner[3],
+		outer[1] * inner[2] + outer[3] * inner[3],
+		outer[0] * inner[4] + outer[2] * inner[5] + outer[4],
+		outer[1] * inner[4] + outer[3] * inner[5] + outer[5]
+	];
+}
+
+function apply(x: number, y: number, matrix: number[]): [number, number] {
+	return [matrix[0] * x + matrix[2] * y + matrix[4], matrix[1] * x + matrix[3] * y + matrix[5]];
+}
+
+/** Where each image object on the page landed, in canvas pixels. Images are
+ * drawn into the unit square, so the current transform is the placement; the
+ * operator list has to be walked with a transform stack to know what it was. */
+async function imageRects(
+	pdfjs: typeof import('pdfjs-dist'),
+	page: { getOperatorList: () => Promise<{ fnArray: number[]; argsArray: unknown[][] }> },
+	viewport: { transform: number[] },
+	source: OffscreenCanvas
+): Promise<Array<{ x: number; y: number; width: number; height: number }>> {
+	const { OPS } = pdfjs;
+	const paints = new Set([
+		OPS.paintImageXObject,
+		OPS.paintImageXObjectRepeat,
+		OPS.paintInlineImageXObject,
+		OPS.paintImageMaskXObject
+	]);
+	let operators: { fnArray: number[]; argsArray: unknown[][] };
+	try {
+		operators = await page.getOperatorList();
+	} catch {
+		return [];
+	}
+	const rects: Array<{ x: number; y: number; width: number; height: number }> = [];
+	const stack: number[][] = [];
+	let transform = viewport.transform;
+	for (let index = 0; index < operators.fnArray.length; index += 1) {
+		const operator = operators.fnArray[index];
+		if (operator === OPS.save) stack.push(transform);
+		else if (operator === OPS.restore) transform = stack.pop() ?? transform;
+		else if (operator === OPS.transform) {
+			transform = concat(transform, operators.argsArray[index] as number[]);
+		} else if (paints.has(operator)) {
+			const corners = [
+				[0, 0],
+				[1, 0],
+				[0, 1],
+				[1, 1]
+			].map(([x, y]) => apply(x, y, transform));
+			const left = Math.floor(Math.min(...corners.map((point) => point[0])));
+			const top = Math.floor(Math.min(...corners.map((point) => point[1])));
+			const right = Math.ceil(Math.max(...corners.map((point) => point[0])));
+			const bottom = Math.ceil(Math.max(...corners.map((point) => point[1])));
+			const x = Math.max(0, left);
+			const y = Math.max(0, top);
+			const width = Math.min(source.width, right) - x;
+			const height = Math.min(source.height, bottom) - y;
+			if (width > 1 && height > 1) rects.push({ x, y, width, height });
+		}
+	}
+	return rects;
 }
 
 /**

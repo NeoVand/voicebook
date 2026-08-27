@@ -2018,18 +2018,18 @@ test('draws each original page once while the reader scrolls back and forth', as
 	);
 	expect(samples).toBeGreaterThan(0);
 	expect(blank).toBe(0);
-	// White paper is dimmed under a dark theme and left alone under a light one,
-	// following the theme the reader already chose rather than a control of its
-	// own.
+	// The paper is turned dark under a dark theme and left as printed under a
+	// light one, following the theme the reader already chose rather than a
+	// control of its own.
 	const stack = page.locator('.page-stack');
-	await expect(stack).toHaveClass(/\bdimmed\b/);
+	await expect(stack).toHaveClass(/\bdarkened\b/);
 	const theme = page.getByRole('button', { name: /Switch to .* theme/ });
 	for (let click = 0; click < THEME_COUNT; click += 1) {
 		if ((await theme.getAttribute('aria-label'))?.includes('Theme: Sunny')) break;
 		await theme.click();
 	}
 	await expect(theme).toHaveAccessibleName(/Theme: Sunny/);
-	await expect(stack).not.toHaveClass(/\bdimmed\b/);
+	await expect(stack).not.toHaveClass(/\bdarkened\b/);
 
 	await expect
 		.poll(
