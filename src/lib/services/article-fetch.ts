@@ -15,6 +15,7 @@ import {
 	prepareArticleDom,
 	wikipediaRestUrl
 } from '$lib/domain/web-article';
+import { expandMarkdownMacros, texMacrosFromDocument } from '$lib/domain/tex-macros';
 
 export class ArticleFetchError extends Error {
 	constructor(
@@ -155,10 +156,13 @@ export async function fetchWebArticle(
 
 	options.onStage?.('extracting');
 	const dom = new DOMParser().parseFromString(html, 'text/html');
+	// Read before the prepass: the page's own script is the only place its TeX
+	// shorthands are defined, and extraction drops scripts.
+	const macros = texMacrosFromDocument(dom);
 	prepareArticleDom(dom);
 	const Defuddle = await loadDefuddle();
 	const result = await new Defuddle(dom, { url: url.href, markdown: true }).parseAsync();
-	const body = polishArticleMarkdown(result.content ?? '');
+	const body = expandMarkdownMacros(polishArticleMarkdown(result.content ?? ''), macros);
 	assertReadable(body);
 	return {
 		url: url.href,

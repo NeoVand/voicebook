@@ -114,6 +114,33 @@ describe('prepareArticleDom', () => {
 		expect(document.querySelector('img')?.getAttribute('alt')).toBe('A double-slit experiment.');
 	});
 
+	it('lifts a TeX-bearing caption out of its figure and leaves the alt empty', () => {
+		// Defuddle reads an alt matching /\\[a-zA-Z]{2,}/ as a rendered
+		// equation image (the picture is dropped, the caption re-emitted as one
+		// enormous formula), and flattens a caption left inside the figure to
+		// plain text. A paper's captions are full of maths, so they move out.
+		const document = dom(
+			'<figure id="f"><img src="a.png" alt=""><figcaption>Drawn <strong>only</strong> where $\\het\\le1/4$.</figcaption></figure>'
+		);
+		prepareArticleDom(document);
+		expect(document.querySelector('img')?.getAttribute('alt')).toBe('');
+		expect(document.querySelector('figcaption')).toBeNull();
+		const moved = document.querySelector('figure')?.nextElementSibling;
+		expect(moved?.tagName).toBe('P');
+		expect(moved?.textContent).toBe('Drawn only where $\\het\\le1/4$.');
+		expect(moved?.querySelector('strong')?.textContent).toBe('only');
+	});
+
+	it('still folds in a caption whose only maths is delimiters', () => {
+		const document = dom(
+			'<figure><img src="a.png" alt=""><figcaption>Centres differ by $34$ units.</figcaption></figure>'
+		);
+		prepareArticleDom(document);
+		expect(document.querySelector('img')?.getAttribute('alt')).toBe(
+			'Centres differ by $34$ units.'
+		);
+	});
+
 	it('keeps an authored alt and images outside figures untouched', () => {
 		const document = dom(
 			'<figure><img src="a.png" alt="Authored"><figcaption>Caption.</figcaption></figure><img src="b.png" alt="">'

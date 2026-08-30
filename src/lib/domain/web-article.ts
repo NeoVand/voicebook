@@ -44,6 +44,11 @@ function normalizedText(value: string | null | undefined): string {
 	return (value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/** A caption written in TeX. Deliberately Defuddle's own `LOOKS_LIKE_LATEX_RE`:
+ * this is the test it applies to an alt attribute before deciding the image is
+ * a rendered equation. */
+const TEX_CAPTION = /\\[a-zA-Z]{2,}/;
+
 /**
  * DOM fixes before extraction, for structures the extractor keeps but
  * mishandles:
@@ -60,7 +65,15 @@ function normalizedText(value: string | null | undefined): string {
  *   the caption text (the footnote pass only reaches body refs) — drop them;
  * - images whose alt is empty adopt their figcaption, so the narration layer
  *   has a caption to describe (the local engine never invents what it cannot
- *   see) while the visible caption paragraph reads as usual.
+ *   see) while the visible caption paragraph reads as usual;
+ * - a figure whose caption is written in TeX takes a different route. The
+ *   extractor reads an alt matching `\command` as a rendered equation image —
+ *   it drops the picture and re-emits the caption as one enormous bogus
+ *   formula — and, left inside the figure, it rebuilds the caption from plain
+ *   text, which strips the emphasis, the links, and the delimiters that made
+ *   the equations equations. So the caption is moved out to a paragraph of its
+ *   own and the alt is left empty: the figure survives, and a paper's captions
+ *   read with their maths intact. Captions with no TeX in them are untouched.
  */
 export function prepareArticleDom(document: Document): void {
 	for (const math of Array.from(document.querySelectorAll('math'))) {
@@ -80,10 +93,17 @@ export function prepareArticleDom(document: Document): void {
 	}
 	for (const figure of Array.from(document.querySelectorAll('figure'))) {
 		const image = figure.querySelector('img');
-		const caption = normalizedText(figure.querySelector('figcaption')?.textContent);
-		if (image && caption && !normalizedText(image.getAttribute('alt'))) {
-			image.setAttribute('alt', caption);
+		const element = Array.from(figure.children).find((child) => child.tagName === 'FIGCAPTION');
+		const caption = normalizedText(element?.textContent);
+		if (!image || !element || !caption) continue;
+		if (TEX_CAPTION.test(caption)) {
+			const paragraph = document.createElement('p');
+			while (element.firstChild) paragraph.appendChild(element.firstChild);
+			element.remove();
+			figure.after(paragraph);
+			continue;
 		}
+		if (!normalizedText(image.getAttribute('alt'))) image.setAttribute('alt', caption);
 	}
 }
 
