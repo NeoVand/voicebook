@@ -457,6 +457,38 @@ describe('narrated construct segmentation', () => {
 		}
 	});
 
+	it('terminates when a math span opens on the only break token in the window', () => {
+		// A web article whose figure caption is one long sentence puts the
+		// comma INSIDE the equation: "…an author sees$, which is why…$". The
+		// hard cut lands inside that span, so the next window starts exactly
+		// at the span and its only break token sits at index 0 — where
+		// `lastIndexOf(token, -1)` used to keep finding the same token for
+		// ever and spin the main thread. (Regression: importing
+		// neovand.github.io/Moire/paper hung the tab.)
+		const prose = 'the heterodyne ratio is drawn live beside the envelope so an author sees ';
+		const tex =
+			', which is why they stop short of the two lobes flanking the centres and the fringe system appears in neither layer';
+		const tail =
+			' and the prose keeps going past the equation for a good long stretch so that the splitter still has more than one window of text left to walk through after the equation ends';
+		// Whether the hard cut lands inside the span depends on where the
+		// equation starts, so sweep the openers that put it near the boundary.
+		for (let length = 120; length <= MAX_SEGMENT_CHARS; length += 1) {
+			const opener = prose.repeat(4).slice(0, length);
+			const paragraph = block({
+				id: 'b9',
+				text: `${opener}${tex}${tail}`,
+				inlines: [{ text: opener }, { text: tex, math: true }, { text: tail }]
+			});
+			const segments = segmentBlocks([paragraph]);
+			expect(segments.length).toBeGreaterThan(1);
+			const mathEnd = length + tex.length;
+			for (const segment of segments) {
+				expect(segment.start > length && segment.start < mathEnd).toBe(false);
+				expect(segment.end > length && segment.end < mathEnd).toBe(false);
+			}
+		}
+	});
+
 	it('leaves sentences with single-letter math as plain word-highlighted text', () => {
 		const paragraph = block({
 			id: 'b4',

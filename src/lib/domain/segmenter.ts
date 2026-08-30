@@ -135,8 +135,11 @@ function splitLongSentence(
 			let breakAt = -1;
 			for (const token of ['; ', ', ', ' — ']) {
 				let index = candidate.lastIndexOf(token);
+				// `lastIndexOf(token, -1)` searches from 0, not before it, so a
+				// protected token sitting at index 0 would be found again for
+				// ever: once there is nothing left of it, there is no break.
 				while (index >= 0 && spanAt(absoluteStart + cursor + index + 1)) {
-					index = candidate.lastIndexOf(token, index - 1);
+					index = index > 0 ? candidate.lastIndexOf(token, index - 1) : -1;
 				}
 				breakAt = Math.max(breakAt, index);
 			}
