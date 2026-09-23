@@ -835,15 +835,16 @@ export class LiveAssistantState extends AssistantSession {
 	 * session needed. A live voice hears about the exchange; otherwise the
 	 * reply is read aloud by the narration voice when spoken replies are on. */
 	private async answerTyped(doc: NormalizedDocument, text: string): Promise<void> {
+		// A voice session that failed earlier no longer describes the chat.
+		this.dismissError();
 		await providersState.initialize();
 		const apiKey = providersState.keyFor('openai');
 		if (!apiKey) {
-			this.errorMessage = 'Add an OpenAI API key under Settings → LLM to talk with your documents.';
 			this.messages.push({
 				id: crypto.randomUUID(),
 				role: 'assistant',
 				channel: 'text',
-				text: this.errorMessage
+				text: 'Add an OpenAI API key under Settings → LLM to talk with your documents.'
 			});
 			return;
 		}
