@@ -18,6 +18,8 @@ import {
 	describePassageLocation,
 	parseAssistantToolCall,
 	readPassageText,
+	readSectionOutput,
+	searchDocumentOutput,
 	shouldFollowUpAfterTools,
 	type AssistantInstructions,
 	type PassageRange,
@@ -363,7 +365,7 @@ export class RealtimeAssistantState {
 					voice: providersState.realtimeVoice,
 					effort: providersState.realtimeEffort,
 					instructions: this.context.instructions,
-					tools: assistantTools(this.context.truncated)
+					tools: assistantTools(this.context.mode === 'map')
 				},
 				abort.signal
 			);
@@ -725,6 +727,17 @@ export class RealtimeAssistantState {
 		if (call.name === 'clear_highlight') {
 			this.onClearHighlight?.();
 			return { ok: true };
+		}
+		if (call.name === 'read_section' || call.name === 'search_document') {
+			// Resolve against the map the model was shown, so its S-numbers match.
+			const map = this.context?.map;
+			if (!map)
+				return {
+					error: 'This document is short enough that its full text is already in your context.'
+				};
+			return call.name === 'read_section'
+				? readSectionOutput(doc, map, call.section, call.fromSegment)
+				: searchDocumentOutput(doc, map, call.query);
 		}
 		if (call.name === 'read_passage') {
 			const passage = readPassageText(doc, call.range);

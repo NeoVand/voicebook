@@ -6,8 +6,11 @@ import {
 	describePassageLocation,
 	parseAssistantToolCall,
 	readPassageText,
+	readSectionOutput,
+	searchDocumentOutput,
 	shouldFollowUpAfterTools
 } from './assistant-context';
+import { buildDocumentMap } from './document-map';
 
 function block(
 	id: string,
@@ -101,7 +104,8 @@ function base(
 describe('buildAssistantInstructions', () => {
 	it('serializes the document with markers, heading levels, and the outline', () => {
 		const built = buildAssistantInstructions(doc());
-		expect(built.truncated).toBe(false);
+		expect(built.mode).toBe('whole');
+		expect(built.map).toBeUndefined();
 		expect(built.segmentCount).toBe(5);
 		expect(built.instructions).toContain('=== DOCUMENT: Whale Song ===');
 		expect(built.instructions).toContain('# ⟦0⟧ Whale Song');
@@ -110,12 +114,62 @@ describe('buildAssistantInstructions', () => {
 		expect(built.instructions).toContain('=== OUTLINE ===\n- Whale Song ⟦0⟧\n  - Migration ⟦3⟧');
 	});
 
-	it('cuts at a segment boundary and points the model at read_passage', () => {
+	it('sends a document too long to carry whole as a map, never half of it', () => {
 		const built = buildAssistantInstructions(doc(), 120);
-		expect(built.truncated).toBe(true);
-		expect(built.instructions).toContain('# ⟦0⟧ Whale Song');
-		expect(built.instructions).not.toContain('Humpbacks migrate');
-		expect(built.instructions).toMatch(/Passages ⟦\d⟧ through ⟦4⟧ are omitted/);
+		expect(built.mode).toBe('map');
+		expect(built.map?.sections.map((section) => section.title)).toEqual([
+			'Whale Song',
+			'Migration'
+		]);
+		expect(built.instructions).toContain('instead of its full text you have its MAP');
+		expect(built.instructions).toContain('=== MAP: Whale Song ===');
+		expect(built.instructions).toContain('S2 Migration ⟦3–4⟧');
+		expect(built.instructions).toContain('Opens: Humpbacks migrate toward the poles each summer.');
+		expect(built.instructions).not.toContain('=== DOCUMENT:');
+		expect(built.instructions).not.toContain('⟦2⟧ Their songs travel');
+	});
+
+	it('gives the map the abstract and reader state, and leaves section notes to the map', () => {
+		const built = buildAssistantInstructions(
+			doc({
+				study: {
+					nodes: [
+						{
+							id: 'study:h2',
+							blockId: 'h2',
+							title: 'Migration',
+							level: 2,
+							status: 'ready',
+							summary: 'Humpbacks head poleward in summer.',
+							sourceHash: 'x',
+							updatedAt: 1
+						}
+					],
+					abstract: 'Songs and journeys of whales.',
+					abstractStatus: 'ready',
+					promptVersion: 1,
+					updatedAt: 1
+				},
+				memories: [
+					{
+						id: 'm1',
+						text: 'Reader wants the migration data revisited.',
+						blockId: 'h2',
+						origin: 'assistant',
+						createdAt: 1,
+						updatedAt: 1
+					}
+				]
+			}),
+			120
+		);
+		expect(built.instructions).toContain('=== ABSTRACT ===\nSongs and journeys of whales.');
+		expect(built.instructions).toContain('=== READER STATE ===');
+		expect(built.instructions).toContain('Note: Humpbacks head poleward in summer.');
+		expect(built.instructions).not.toContain('=== STUDY NOTES ===');
+		expect(built.instructions.indexOf('=== READER STATE ===')).toBeLessThan(
+			built.instructions.indexOf('=== MAP:')
+		);
 	});
 
 	it('exposes construct sources alongside their spoken descriptions', () => {
@@ -189,7 +243,7 @@ describe('buildAssistantInstructions', () => {
 });
 
 describe('assistantTools', () => {
-	it('offers read_passage only for truncated documents', () => {
+	it('offers the reading tools only with a map', () => {
 		expect(assistantTools(false).map((tool) => tool.name)).toEqual([
 			'show_passage',
 			'point_at',
@@ -215,6 +269,8 @@ describe('assistantTools', () => {
 			'save_memory',
 			'web_research',
 			'play_section',
+			'read_section',
+			'search_document',
 			'read_passage'
 		]);
 	});
@@ -362,6 +418,24 @@ describe('parseAssistantToolCall', () => {
 		});
 	});
 
+	it('parses the reading tools', () => {
+		expect(parseAssistantToolCall(doc(), 'read_section', '{"section":" S2 "}').call).toEqual({
+			name: 'read_section',
+			section: 'S2'
+		});
+		expect(
+			parseAssistantToolCall(doc(), 'read_section', '{"section":2,"from_segment":4}').call
+		).toEqual({ name: 'read_section', section: '2', fromSegment: 4 });
+		expect(parseAssistantToolCall(doc(), 'read_section', '{}').error).toMatch(/section handle/);
+		expect(parseAssistantToolCall(doc(), 'search_document', '{"query":" krill "}').call).toEqual({
+			name: 'search_document',
+			query: 'krill'
+		});
+		expect(parseAssistantToolCall(doc(), 'search_document', '{"query":""}').error).toMatch(
+			/non-empty query/
+		);
+	});
+
 	it('rejects malformed JSON, unknown tools, and out-of-range segments', () => {
 		expect(parseAssistantToolCall(doc(), 'show_passage', '{oops').error).toBe(
 			'The arguments were not valid JSON.'
@@ -397,8 +471,72 @@ describe('readPassageText', () => {
 	it('stops at the character limit and flags the cut', () => {
 		const passage = readPassageText(doc(), { startIndex: 0, endIndex: 4 }, 60);
 		expect(passage.truncated).toBe(true);
+		expect(passage.lastIndex).toBe(1);
 		expect(passage.text).toContain('⟦0⟧ Whale Song');
 		expect(passage.text).not.toContain('Humpbacks');
+	});
+});
+
+describe('readSectionOutput', () => {
+	const whales = doc();
+	const map = buildDocumentMap(whales);
+
+	it('reads a whole section with its markers', () => {
+		expect(readSectionOutput(whales, map, 's2')).toEqual({
+			section: 'S2 Migration',
+			passages: '⟦3⟧–⟦4⟧ of ⟦3⟧–⟦4⟧',
+			text: '⟦3⟧ Migration\n\n⟦4⟧ Humpbacks migrate toward the poles each summer.'
+		});
+	});
+
+	it('pages through a long section and says where to continue', () => {
+		const first = readSectionOutput(whales, map, 'S1', undefined, 60);
+		expect(first).toMatchObject({ passages: '⟦0⟧–⟦1⟧ of ⟦0⟧–⟦2⟧', continue_from: 2 });
+		expect(first.note).toContain('from_segment 2');
+		const rest = readSectionOutput(whales, map, 'S1', 2);
+		expect(rest).toMatchObject({ passages: '⟦2⟧–⟦2⟧ of ⟦0⟧–⟦2⟧' });
+		expect(rest).not.toHaveProperty('continue_from');
+		expect(rest.text).toMatch(/^⟦2⟧ Their songs/);
+	});
+
+	it('still returns a single passage longer than a page', () => {
+		const output = readSectionOutput(whales, map, 'S2', 4, 10);
+		expect(output).toMatchObject({ passages: '⟦4⟧–⟦4⟧ of ⟦3⟧–⟦4⟧' });
+		expect(output.text).toBe('⟦4⟧ Humpbacks migrate toward the poles each summer.');
+	});
+
+	it('starts over when from_segment falls outside the section', () => {
+		expect(readSectionOutput(whales, map, 'S2', 1)).toMatchObject({
+			passages: '⟦3⟧–⟦4⟧ of ⟦3⟧–⟦4⟧'
+		});
+	});
+
+	it('names the valid handles for an unknown section', () => {
+		expect(readSectionOutput(whales, map, 'S9')).toEqual({
+			error: 'There is no section "S9". Use an S-number from the map, S1 to S2.'
+		});
+	});
+});
+
+describe('searchDocumentOutput', () => {
+	const whales = doc();
+	const map = buildDocumentMap(whales);
+
+	it('places each hit on the map', () => {
+		expect(searchDocumentOutput(whales, map, 'humpbacks migrating')).toEqual({
+			results: [
+				{
+					section: 'S2 Migration',
+					passages: '⟦4⟧',
+					text: '⟦4⟧ Humpbacks migrate toward the poles each summer.'
+				},
+				{ section: 'S2 Migration', passages: '⟦3⟧', text: '⟦3⟧ Migration' }
+			]
+		});
+	});
+
+	it('says so when nothing matches', () => {
+		expect(searchDocumentOutput(whales, map, 'submarine')).toMatchObject({ results: [] });
 	});
 });
 
