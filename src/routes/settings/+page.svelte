@@ -58,7 +58,7 @@
 	import { NARRATION_PRESETS, type NarrationPresetId } from '$lib/domain/narration-presets';
 	import { LISTENING_MODES } from '$lib/domain/listening-modes';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
-	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
+	import { assistant } from '$lib/state/assistant.svelte';
 	import { previewAssistantVoice, stopVoicePreview } from '$lib/services/assistant-voice-preview';
 	import { READER_FONTS, THEMES, appearanceState } from '$lib/state/appearance.svelte';
 	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
@@ -1224,7 +1224,7 @@
 								aria-pressed={providersState.realtimeVoice === voice.id}
 								onclick={() => {
 									void providersState.setRealtimeVoice(voice.id);
-									realtimeAssistant.applyLiveSettings();
+									assistant.applyLiveSettings();
 								}}
 							>
 								<strong>
@@ -1271,7 +1271,7 @@
 							aria-pressed={providersState.realtimeModelId === model.id}
 							onclick={() => {
 								void providersState.setRealtimeModel(model.id);
-								realtimeAssistant.applyLiveSettings();
+								assistant.applyLiveSettings();
 							}}
 						>
 							<strong>{model.label}</strong>
@@ -1292,7 +1292,7 @@
 							aria-pressed={providersState.realtimeEffort === effort.id}
 							onclick={() => {
 								void providersState.setRealtimeEffort(effort.id as RealtimeEffort);
-								realtimeAssistant.applyLiveSettings();
+								assistant.applyLiveSettings();
 							}}
 						>
 							<strong>{effort.label}</strong>

@@ -13,7 +13,7 @@
 	import type { NormalizedDocument } from '$lib/domain/types';
 	import { providersState } from '$lib/state/providers.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
-	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
+	import { assistant } from '$lib/state/assistant.svelte';
 
 	interface Props {
 		book: NormalizedDocument;
@@ -75,7 +75,7 @@
 		holdTimer = setTimeout(() => {
 			holding = true;
 			closeMenu();
-			void realtimeAssistant.beginTalking(book);
+			void assistant.beginTalking(book);
 		}, HOLD_MS);
 	}
 
@@ -84,7 +84,7 @@
 		if (holding) {
 			holding = false;
 			lastTapAt = 0;
-			realtimeAssistant.stopTalking();
+			assistant.stopTalking();
 			return;
 		}
 		const now = performance.now();
@@ -92,7 +92,7 @@
 			lastTapAt = 0;
 			clearTimeout(tapTimer);
 			closeMenu();
-			realtimeAssistant.toggleHandsFree(book);
+			assistant.toggleHandsFree(book);
 		} else {
 			lastTapAt = now;
 			clearTimeout(tapTimer);
@@ -110,7 +110,7 @@
 		clearTimeout(holdTimer);
 		if (holding) {
 			holding = false;
-			realtimeAssistant.stopTalking();
+			assistant.stopTalking();
 		}
 	}
 
@@ -131,7 +131,7 @@
 			event.preventDefault();
 			holding = true;
 			closeMenu();
-			void realtimeAssistant.beginTalking(book);
+			void assistant.beginTalking(book);
 		} else if (event.key === 'Enter') {
 			event.preventDefault();
 			if (open) closeMenu(true);
@@ -147,7 +147,7 @@
 			event.preventDefault();
 			if (holding) {
 				holding = false;
-				realtimeAssistant.stopTalking();
+				assistant.stopTalking();
 			}
 		}
 	}
@@ -167,12 +167,12 @@
 
 	function endConversation(): void {
 		closeMenu(true);
-		realtimeAssistant.stop();
+		assistant.stop();
 	}
 
-	let status = $derived(realtimeAssistant.status);
-	let listening = $derived(realtimeAssistant.listening);
-	let handsFree = $derived(realtimeAssistant.mode === 'handsFree' && realtimeAssistant.active);
+	let status = $derived(assistant.status);
+	let listening = $derived(assistant.listening);
+	let handsFree = $derived(assistant.mode === 'handsFree' && assistant.active);
 
 	let label = $derived(
 		status === 'connecting'
@@ -208,7 +208,7 @@
 		class:connecting={status === 'connecting'}
 		class:live={status === 'live'}
 		class:listening={status === 'live' && listening}
-		class:speaking={status === 'live' && realtimeAssistant.speaking && !listening}
+		class:speaking={status === 'live' && assistant.speaking && !listening}
 		class:failed={status === 'error'}
 		class:open
 		type="button"
@@ -253,7 +253,7 @@
 			<div class="menu-group" role="group" aria-label="Assistant voice">
 				<div class="menu-heading">
 					<strong>Voice</strong>
-					{#if realtimeAssistant.active}
+					{#if assistant.active}
 						<small>applies now · restarts the chat</small>
 					{/if}
 				</div>
@@ -267,7 +267,7 @@
 							title={voice.tagline}
 							onclick={() => {
 								void providersState.setRealtimeVoice(voice.id);
-								realtimeAssistant.applyLiveSettings();
+								assistant.applyLiveSettings();
 							}}
 						>
 							{voice.label}
@@ -290,7 +290,7 @@
 							title={model.tagline}
 							onclick={() => {
 								void providersState.setRealtimeModel(model.id);
-								realtimeAssistant.applyLiveSettings();
+								assistant.applyLiveSettings();
 							}}
 						>
 							{model.label.replace('GPT Realtime ', '')}
@@ -313,7 +313,7 @@
 							aria-checked={effort.id === providersState.realtimeEffort}
 							onclick={() => {
 								void providersState.setRealtimeEffort(effort.id as RealtimeEffort);
-								realtimeAssistant.applyLiveSettings();
+								assistant.applyLiveSettings();
 							}}
 						>
 							{effort.label}
@@ -329,7 +329,7 @@
 				aria-checked={handsFree}
 				onclick={() => {
 					closeMenu();
-					realtimeAssistant.toggleHandsFree(book);
+					assistant.toggleHandsFree(book);
 				}}
 			>
 				<Icon icon={Mic} size={15} strokeWidth={1.8} aria-hidden="true" />
@@ -343,20 +343,18 @@
 				class="menu-item"
 				type="button"
 				role="menuitemcheckbox"
-				aria-checked={realtimeAssistant.chatOpen}
+				aria-checked={assistant.chatOpen}
 				onclick={() => {
 					closeMenu();
-					if (realtimeAssistant.chatOpen) realtimeAssistant.chatOpen = false;
-					else realtimeAssistant.openChat();
+					if (assistant.chatOpen) assistant.chatOpen = false;
+					else assistant.openChat();
 				}}
 			>
 				<Icon icon={Keyboard} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>Type instead</strong>
 					<small>
-						{realtimeAssistant.chatOpen
-							? 'Chat panel is open'
-							: 'Ask by typing — replies stay silent'}
+						{assistant.chatOpen ? 'Chat panel is open' : 'Ask by typing — replies stay silent'}
 					</small>
 				</span>
 				<kbd class="menu-key" aria-hidden="true">/</kbd>
@@ -384,13 +382,13 @@
 				class="menu-item danger"
 				type="button"
 				role="menuitem"
-				disabled={!realtimeAssistant.active}
+				disabled={!assistant.active}
 				onclick={endConversation}
 			>
 				<Icon icon={PhoneOff} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>End conversation</strong>
-					<small>{realtimeAssistant.active ? 'Hang up' : 'Not connected'}</small>
+					<small>{assistant.active ? 'Hang up' : 'Not connected'}</small>
 				</span>
 			</button>
 		</div>

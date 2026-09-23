@@ -1,9 +1,8 @@
 /**
- * Voice assistant session state: one realtime conversation about the open
+ * The GPT Realtime engine: one speech-to-speech conversation about the open
  * document. Builds the marker-annotated context, holds the WebRTC session,
- * and turns the model's tool calls into highlight/scroll actions — which the
- * reader page provides via assigned callbacks, mirroring
- * player.onSegmentChange.
+ * and turns the model's tool calls into highlight/scroll actions through the
+ * shared AssistantSession.
  *
  * Interaction model (Wispr-Flow-like): the microphone is closed by default.
  * Holding the chip — or Space, anywhere in the reader — opens it for one
@@ -15,48 +14,22 @@ import { SvelteSet } from 'svelte/reactivity';
 import {
 	assistantTools,
 	buildAssistantInstructions,
-	describePassageLocation,
-	parseAssistantToolCall,
-	readPassageText,
-	readSectionOutput,
-	searchDocumentOutput,
 	shouldFollowUpAfterTools,
-	type AssistantInstructions,
-	type PassageRange,
-	type ReaderFocus,
-	type SettledToolCall,
-	type TourStop
+	type SettledToolCall
 } from '$lib/domain/assistant-context';
-import { MEMORY_TEXT_LIMIT } from '$lib/domain/study-tree';
-import type { NormalizedDocument, StudyMemory } from '$lib/domain/types';
+import type { NormalizedDocument } from '$lib/domain/types';
 import { playChime } from '$lib/services/assistant-chimes';
-import { performWebResearch } from '$lib/services/web-research';
-import { appState } from './app-state.svelte';
+import { acquireMicrophone } from '$lib/services/microphone';
 import {
 	connectRealtime,
 	mintRealtimeSecret,
 	RealtimeError,
 	type RealtimeChannel
 } from '$lib/services/openai-realtime';
+import { AssistantSession, microphoneErrorMessage } from './assistant-session.svelte';
 import { player } from './player.svelte';
 import { providersState } from './providers.svelte';
 import { readerChrome } from './reader-chrome.svelte';
-
-export type AssistantStatus = 'idle' | 'connecting' | 'live' | 'error';
-export type AssistantMode = 'ptt' | 'handsFree';
-
-/** One turn in the conversation transcript, spoken or typed. */
-export interface AssistantChatMessage {
-	id: string;
-	role: 'user' | 'assistant';
-	/** How the words traveled: 'voice' turns come from audio (assistant voice
-	 * transcripts; user turns as a spoken-question marker), 'text' turns from
-	 * the typed chat. */
-	channel: 'voice' | 'text';
-	text: string;
-	/** Still streaming in. */
-	pending?: boolean;
-}
 
 interface FunctionCallItem {
 	type?: string;
@@ -75,76 +48,17 @@ const VOICE_RMS_THRESHOLD = 0.02;
 const VOICE_START_TICKS = 5;
 const VOICE_END_TICKS = 14;
 
-function microphoneErrorMessage(error: unknown): string {
-	const name = error instanceof DOMException ? error.name : '';
-	if (name === 'NotAllowedError' || name === 'SecurityError') {
-		return "Microphone access was blocked. Allow it in the browser's site settings.";
-	}
-	if (name === 'NotFoundError' || name === 'OverconstrainedError') {
-		return 'No microphone was found on this device.';
-	}
-	return 'The microphone could not be started.';
-}
-
-export class RealtimeAssistantState {
-	status = $state<AssistantStatus>('idle');
-	mode = $state<AssistantMode>('ptt');
-	/** The microphone is open: the chip is held, or hands-free is on. */
-	listening = $state(false);
-	/** Live transcript of what the assistant is currently saying. */
-	caption = $state('');
-	speaking = $state(false);
-	errorMessage = $state('');
-	/** Progress of a guided walkthrough, for the caption pill. */
-	tourProgress = $state<{ stop: number; of: number }>();
-	/** The typed-chat panel, for when speaking aloud is not an option. */
-	chatOpen = $state(false);
-	/** Bumped whenever something asks for the composer's caret — the panel
-	 * watches it so the "/" shortcut lands the cursor even when it is already
-	 * open. */
-	chatFocusToken = $state(0);
-	/** Where the reader dragged the panel, in viewport pixels. Null keeps it
-	 * docked above the mic chip. Survives closing and reopening. */
-	chatPosition = $state<{ left: number; top: number } | null>(null);
-	/** The running transcript: typed turns verbatim, voice turns as they are
-	 * transcribed. Kept across reconnects; cleared when the document changes. */
-	messages = $state<AssistantChatMessage[]>([]);
-
-	/** Assigned by the reader page (and cleared on unmount). */
-	onShowPassage?: (range: PassageRange) => void;
-	onClearHighlight?: () => void;
-	/** Start the app's narration voice over a passage (play_section). */
-	onPlayPassage?: (range: PassageRange) => void;
-	/** What the reader is pointing at (selection, hover, playhead). */
-	onGetReaderFocus?: () => ReaderFocus;
-	/** Strong per-segment emphasis inside the highlighted passage. */
-	onPointAt?: (segment: number) => void;
-	/** Persist a highlight (or, with note text, a margin note) over a passage.
-	 * Returns false when the range could not be anchored. */
-	onAddAnnotation?: (range: PassageRange, note?: string) => boolean;
-
+export class RealtimeAssistantState extends AssistantSession {
 	private channel?: RealtimeChannel;
 	private microphone?: MediaStream;
 	private audio?: HTMLAudioElement;
 	private abort?: AbortController;
-	private document?: NormalizedDocument;
-	/** What the assistant is doing between the reader's turn and its reply, so
-	 * a silent wait never reads as a freeze. Cleared the moment text streams. */
-	activity = $state<'' | 'thinking' | 'searching'>('');
-
-	/** Blocks this session showed, read, or toured — flushed into the
-	 * document's conversation footprint when the session ends. */
-	private sessionBlocks = new SvelteSet<string>();
-	private sessionLastBlockId?: string;
-	private context?: AssistantInstructions;
 	private seenCalls = new SvelteSet<string>();
 	/** Calls still waiting on a slow tool, and calls whose tool came back with
 	 * an error — both decide whether a finished response gets a follow-up. */
 	private pendingCalls = new SvelteSet<string>();
 	private failedCalls = new SvelteSet<string>();
 	private captionItemId = '';
-	private textItemId = '';
-	private transcriptDocumentId = '';
 	/** How the reader last addressed the assistant. Internally-issued
 	 * responses (tool follow-ups, tour nudges) answer on the same channel, so
 	 * a typed conversation stays silent end to end. */
@@ -152,12 +66,8 @@ export class RealtimeAssistantState {
 	private respondTimer: ReturnType<typeof setTimeout> | undefined;
 	private settingsTimer: ReturnType<typeof setTimeout> | undefined;
 	private holdActive = false;
-	private tour?: { stops: TourStop[]; index: number; paused: boolean };
 	/** A narrated tour stop finished generating; advance when audio drains. */
 	private advanceAfterAudio = false;
-	/** play_section range waiting for the assistant's own audio to drain —
-	 * starting the narrator under the assistant's voice doubles the stage. */
-	private pendingPlayback?: PassageRange;
 	private analysisContext?: AudioContext;
 	private analysisClone?: MediaStream;
 	private analyser?: AnalyserNode;
@@ -168,10 +78,6 @@ export class RealtimeAssistantState {
 	/** The microphone opened itself because the reader spoke over the
 	 * assistant; trailing silence sends the turn. */
 	private autoListening = false;
-
-	get active(): boolean {
-		return this.status === 'connecting' || this.status === 'live';
-	}
 
 	/** Press-and-hold: talk while held. Starts the session on first use. */
 	async beginTalking(doc: NormalizedDocument): Promise<void> {
@@ -251,14 +157,6 @@ export class RealtimeAssistantState {
 		this.createResponse();
 	}
 
-	/** Open the typed panel and put the caret in it. Idempotent: firing this
-	 * on an open panel just re-focuses rather than closing it — Escape is the
-	 * way out. */
-	openChat(): void {
-		this.chatOpen = true;
-		this.chatFocusToken += 1;
-	}
-
 	/** response.create on the current turn's channel. Spoken turns always leave
 	 * the session's voice default; a typed turn only asks for text-only output
 	 * when the composer's speaker toggle is off — otherwise typing gets an
@@ -317,10 +215,7 @@ export class RealtimeAssistantState {
 		if (this.active) return;
 		this.errorMessage = '';
 		this.status = 'connecting';
-		if (this.transcriptDocumentId !== doc.id) {
-			this.transcriptDocumentId = doc.id;
-			this.messages = [];
-		}
+		this.adoptTranscript(doc);
 		const abort = new AbortController();
 		this.abort = abort;
 		try {
@@ -333,9 +228,7 @@ export class RealtimeAssistantState {
 			}
 			let microphone: MediaStream | undefined;
 			try {
-				microphone = await navigator.mediaDevices.getUserMedia({
-					audio: { echoCancellation: true, noiseSuppression: true }
-				});
+				microphone = await acquireMicrophone();
 			} catch (error) {
 				// A typed-chat session runs fine without ears; holding to talk
 				// later surfaces the microphone problem where it matters.
@@ -438,37 +331,14 @@ export class RealtimeAssistantState {
 		this.voicedTicks = 0;
 		this.silentTicks = 0;
 		this.autoListening = false;
-		this.tour = undefined;
-		this.tourProgress = undefined;
 		this.advanceAfterAudio = false;
-		this.pendingPlayback = undefined;
-		this.flushConversationFootprint();
-		this.document = undefined;
-		this.context = undefined;
 		this.seenCalls.clear();
 		this.pendingCalls.clear();
 		this.failedCalls.clear();
 		this.captionItemId = '';
-		this.textItemId = '';
 		this.turnChannel = 'voice';
-		this.settleTranscript();
-		this.activity = '';
-		this.caption = '';
-		this.speaking = false;
-		this.listening = false;
 		this.holdActive = false;
-		this.mode = 'ptt';
-		this.onClearHighlight?.();
-		this.errorMessage = errorText;
-		this.status = errorText ? 'error' : 'idle';
-	}
-
-	/** Clear a lingering error pill without starting a session. */
-	dismissError(): void {
-		if (this.status === 'error') {
-			this.errorMessage = '';
-			this.status = 'idle';
-		}
+		this.resetSession(errorText);
 	}
 
 	private openHeldMicrophone(): void {
@@ -494,7 +364,7 @@ export class RealtimeAssistantState {
 		playChime('listen');
 	}
 
-	private setHandsFree(on: boolean): void {
+	protected setHandsFree(on: boolean): void {
 		this.mode = on ? 'handsFree' : 'ptt';
 		if (this.status !== 'live') return;
 		if (on && player.isPlaying) player.pause();
@@ -526,33 +396,6 @@ export class RealtimeAssistantState {
 	private setMicrophoneOpen(open: boolean): void {
 		for (const track of this.microphone?.getTracks() ?? []) track.enabled = open;
 		this.listening = open && Boolean(this.microphone);
-	}
-
-	/** Append streamed assistant output to the transcript, one message per
-	 * response item, voice transcripts and typed replies alike. */
-	private streamAssistantText(itemId: string, delta: string, channel: 'voice' | 'text'): void {
-		if (!delta) return;
-		// Words are arriving: the wait is over, whatever it was for.
-		this.activity = '';
-		const last = this.messages.at(-1);
-		if (last?.role === 'assistant' && last.pending && itemId === this.textItemId) {
-			last.text += delta;
-			return;
-		}
-		this.textItemId = itemId;
-		this.messages.push({
-			id: crypto.randomUUID(),
-			role: 'assistant',
-			channel,
-			text: delta,
-			pending: true
-		});
-	}
-
-	private settleTranscript(): void {
-		for (const message of this.messages) {
-			if (message.pending) message.pending = false;
-		}
 	}
 
 	private handleEvent(event: Record<string, unknown>): void {
@@ -716,222 +559,11 @@ export class RealtimeAssistantState {
 		}, 120);
 	}
 
-	private runTool(
-		name: string,
-		argumentsJson: string
-	): Record<string, unknown> | Promise<Record<string, unknown>> {
-		const doc = this.document;
-		if (!doc) return { error: 'No document is open.' };
-		const { call, error } = parseAssistantToolCall(doc, name, argumentsJson);
-		if (!call) return { error };
-		if (call.name === 'clear_highlight') {
-			this.onClearHighlight?.();
-			return { ok: true };
-		}
-		if (call.name === 'read_section' || call.name === 'search_document') {
-			// Resolve against the map the model was shown, so its S-numbers match.
-			const map = this.context?.map;
-			if (!map)
-				return {
-					error: 'This document is short enough that its full text is already in your context.'
-				};
-			return call.name === 'read_section'
-				? readSectionOutput(doc, map, call.section, call.fromSegment)
-				: searchDocumentOutput(doc, map, call.query);
-		}
-		if (call.name === 'read_passage') {
-			const passage = readPassageText(doc, call.range);
-			return passage.truncated ? { text: passage.text, truncated: true } : { text: passage.text };
-		}
-		if (call.name === 'plan_tour') {
-			this.tour = { stops: call.stops, index: 0, paused: false };
-			this.applyTourStop();
-			return {
-				ok: true,
-				stop: 1,
-				of: call.stops.length,
-				point: call.stops[0].point,
-				note: 'Stop 1 is highlighted. Narrate it briefly; the app advances you when you finish.'
-			};
-		}
-		if (call.name === 'continue_tour') {
-			const tour = this.tour;
-			if (!tour) return { error: 'No walkthrough is active.' };
-			tour.paused = false;
-			this.applyTourStop();
-			const stop = tour.stops[tour.index];
-			return { ok: true, stop: tour.index + 1, of: tour.stops.length, point: stop.point };
-		}
-		if (call.name === 'point_at') {
-			this.touchRange({ startIndex: call.segment, endIndex: call.segment });
-			this.onPointAt?.(call.segment);
-			return { ok: true };
-		}
-		if (call.name === 'get_reader_focus') {
-			const focus = this.onGetReaderFocus?.();
-			const output: Record<string, unknown> = {};
-			if (focus?.selection) {
-				output.selected_segments = {
-					start: focus.selection.startIndex,
-					end: focus.selection.endIndex,
-					text: readPassageText(doc, focus.selection, 500).text
-				};
-			}
-			if (focus?.hovered !== undefined) {
-				output.hovered_segment = {
-					index: focus.hovered,
-					text: readPassageText(doc, { startIndex: focus.hovered, endIndex: focus.hovered }, 300)
-						.text
-				};
-			}
-			if (focus?.playhead !== undefined) output.playhead_segment = focus.playhead;
-			if (!Object.keys(output).length) {
-				return { note: 'The reader is not pointing at anything right now.' };
-			}
-			return output;
-		}
-		if (call.name === 'web_research') {
-			const engine = providersState.webResearchEngine;
-			if (!engine) return { error: 'Web research needs an OpenAI key (Settings → LLM).' };
-			return this.performWebResearchCall(doc, call.query, engine);
-		}
-		if (call.name === 'save_memory') {
-			const now = Date.now();
-			const blockId = call.segment === undefined ? undefined : doc.segments[call.segment]?.blockId;
-			const memory: StudyMemory = {
-				id: crypto.randomUUID(),
-				text: call.text,
-				...(blockId ? { blockId } : {}),
-				origin: 'assistant',
-				createdAt: now,
-				updatedAt: now
-			};
-			doc.memories = [...(doc.memories ?? []), memory];
-			void appState.saveDocument(doc).catch(() => undefined);
-			return { ok: true, note: 'Saved — it will be waiting next session.' };
-		}
-		if (call.name === 'add_highlight' || call.name === 'add_note') {
-			const note = call.name === 'add_note' ? call.text : undefined;
-			const added = this.onAddAnnotation?.(call.range, note) ?? false;
-			if (!added) return { error: 'That passage could not be annotated.' };
-			const location = describePassageLocation(doc, call.range);
-			return {
-				ok: true,
-				note: note ? 'The margin note is saved.' : 'The passage is highlighted for keeps.',
-				...(location ? { under_heading: location } : {})
-			};
-		}
-		if (call.name === 'play_section') {
-			this.pauseTour();
-			this.onClearHighlight?.();
-			// Hands-free would hear the narrator; drop back to hold-to-talk.
-			if (this.mode === 'handsFree') this.setHandsFree(false);
-			// At tool time there is no telling whether spoken audio follows in
-			// this response — always queue, and start once the assistant's
-			// voice has fully drained.
-			this.touchRange(call.range);
-			this.pendingPlayback = call.range;
-			return {
-				ok: true,
-				note: 'Playback starts when you finish speaking. Stay silent until the reader speaks to you.'
-			};
-		}
-		this.touchRange(call.range);
-		this.onShowPassage?.(call.range);
-		const location = describePassageLocation(doc, call.range);
-		return location ? { ok: true, under_heading: location } : { ok: true };
-	}
-
-	/** Run a web search and persist the finding as a sourced web memory — the
-	 * document keeps it even if the session ends before the answer lands. */
-	private async performWebResearchCall(
-		doc: NormalizedDocument,
-		query: string,
-		engine: { model: string; apiKey: string }
-	): Promise<Record<string, unknown>> {
-		this.activity = 'searching';
-		try {
-			const finding = await performWebResearch(engine.model, engine.apiKey, query);
-			const now = Date.now();
-			const memory: StudyMemory = {
-				id: crypto.randomUUID(),
-				text: finding.text.slice(0, MEMORY_TEXT_LIMIT),
-				origin: 'web',
-				...(finding.citations[0] ? { sourceUrl: finding.citations[0].url } : {}),
-				createdAt: now,
-				updatedAt: now
-			};
-			doc.memories = [...(doc.memories ?? []), memory];
-			void appState.saveDocument(doc).catch(() => undefined);
-			return {
-				ok: true,
-				finding: finding.text,
-				sources: finding.citations.slice(0, 3).map((c) => `${c.title} — ${c.url}`),
-				note: 'The finding is saved to the study notes.'
-			};
-		} catch (error) {
-			return {
-				error: error instanceof Error ? error.message : 'The web search failed.'
-			};
-		} finally {
-			// The nudge that follows re-arms 'thinking'; leaving 'searching' up
-			// would outlive the search on any path.
-			if (this.activity === 'searching') this.activity = '';
-		}
-	}
-
-	/** Record the blocks a range touches for the session footprint. */
-	private touchRange(range: PassageRange): void {
-		const doc = this.document;
-		if (!doc) return;
-		for (let index = range.startIndex; index <= range.endIndex; index += 1) {
-			const blockId = doc.segments[index]?.blockId;
-			if (!blockId) continue;
-			this.sessionBlocks.add(blockId);
-			this.sessionLastBlockId = blockId;
-		}
-	}
-
-	/** Merge this session's footprint into the document and persist it. Runs
-	 * on stop, before the document reference is dropped. */
-	private flushConversationFootprint(): void {
-		const doc = this.document;
-		const touched = this.sessionBlocks;
-		if (doc && touched.size) {
-			const merged = [...(doc.conversation?.discussedBlockIds ?? [])];
-			for (const blockId of touched) if (!merged.includes(blockId)) merged.push(blockId);
-			doc.conversation = {
-				// Soft cap: coverage is coarse by design; ancient entries age out.
-				discussedBlockIds: merged.slice(-500),
-				lastBlockId: this.sessionLastBlockId ?? doc.conversation?.lastBlockId,
-				lastSessionAt: Date.now()
-			};
-			void appState.saveDocument(doc).catch(() => undefined);
-		}
-		this.sessionBlocks.clear();
-		this.sessionLastBlockId = undefined;
-	}
-
 	/* ── Guided walkthroughs ─────────────────────────────────────────────── */
 
-	private pauseTour(): void {
-		if (this.tour) this.tour.paused = true;
+	protected override pauseTour(): void {
+		super.pauseTour();
 		this.advanceAfterAudio = false;
-	}
-
-	private startPendingPlayback(): void {
-		const range = this.pendingPlayback;
-		if (!range) return;
-		this.pendingPlayback = undefined;
-		this.onPlayPassage?.(range);
-	}
-
-	private applyTourStop(): void {
-		const tour = this.tour;
-		if (!tour) return;
-		this.touchRange(tour.stops[tour.index].range);
-		this.onShowPassage?.(tour.stops[tour.index].range);
-		this.tourProgress = { stop: tour.index + 1, of: tour.stops.length };
 	}
 
 	/** Steer the next response with a system note — per-response
