@@ -569,7 +569,7 @@ export class RealtimeAssistantState extends AssistantSession {
 	/** Steer the next response with a system note — per-response
 	 * `instructions` would replace the session instructions (and with them
 	 * the document), so tours are driven through the conversation instead. */
-	private tourSystemNudge(text: string): void {
+	protected tourNudge(text: string): void {
 		if (this.respondTimer) {
 			clearTimeout(this.respondTimer);
 			this.respondTimer = undefined;
@@ -579,26 +579,6 @@ export class RealtimeAssistantState extends AssistantSession {
 			item: { type: 'message', role: 'system', content: [{ type: 'input_text', text }] }
 		});
 		this.createResponse();
-	}
-
-	private advanceTour(): void {
-		const tour = this.tour;
-		if (!tour || tour.paused) return;
-		if (tour.index + 1 < tour.stops.length) {
-			tour.index += 1;
-			this.applyTourStop();
-			const stop = tour.stops[tour.index];
-			this.tourSystemNudge(
-				`Tour stop ${tour.index + 1} of ${tour.stops.length} is highlighted now` +
-					`${stop.point ? `: ${stop.point}` : ''}. Narrate it in a sentence or two.`
-			);
-		} else {
-			this.tour = undefined;
-			this.tourProgress = undefined;
-			this.tourSystemNudge(
-				'That was the last stop. Wrap up in one sentence and ask whether they want to dig into any of the stops.'
-			);
-		}
 	}
 
 	/* ── Local voice detection (interrupt while muted) ───────────────────── */

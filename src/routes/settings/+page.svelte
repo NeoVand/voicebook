@@ -64,7 +64,11 @@
 	import { LISTENING_MODES } from '$lib/domain/listening-modes';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
 	import { assistant } from '$lib/state/assistant.svelte';
-	import { previewAssistantVoice, stopVoicePreview } from '$lib/services/assistant-voice-preview';
+	import {
+		previewAssistantVoice,
+		previewNeedsKey,
+		stopVoicePreview
+	} from '$lib/services/assistant-voice-preview';
 	import { READER_FONTS, THEMES, appearanceState } from '$lib/state/appearance.svelte';
 	import ThemeIcon from '$lib/components/ThemeIcon.svelte';
 	import ProviderLogo from '$lib/components/ProviderLogo.svelte';
@@ -90,7 +94,7 @@
 	async function previewAssistantVoiceSample(voiceId: string): Promise<void> {
 		assistantVoiceError = '';
 		const apiKey = providersState.keyFor('openai');
-		if (!apiKey) {
+		if (!apiKey && previewNeedsKey(voiceId)) {
 			assistantVoiceError = 'Add your OpenAI key to hear voice samples.';
 			return;
 		}
@@ -1296,27 +1300,25 @@
 								</strong>
 								<small>{voice.tagline}</small>
 							</button>
-							{#if !voice.liveOnly}
-								<button
-									type="button"
-									class="voice-preview-button"
-									class:sounding={assistantVoicePlaying === voice.id}
-									aria-label={assistantVoicePlaying === voice.id
-										? `Stop the ${voice.label} sample`
-										: `Hear a sample of ${voice.label}`}
-									title={assistantVoicePlaying === voice.id ? 'Stop sample' : 'Hear a sample'}
-									disabled={assistantVoiceLoading !== null && assistantVoiceLoading !== voice.id}
-									onclick={() => void previewAssistantVoiceSample(voice.id)}
-								>
-									{#if assistantVoiceLoading === voice.id}
-										<Icon icon={LoaderCircle} class="spin" size={12} />
-									{:else if assistantVoicePlaying === voice.id}
-										<Icon icon={Square} size={10} />
-									{:else}
-										<Icon icon={Play} size={12} />
-									{/if}
-								</button>
-							{/if}
+							<button
+								type="button"
+								class="voice-preview-button"
+								class:sounding={assistantVoicePlaying === voice.id}
+								aria-label={assistantVoicePlaying === voice.id
+									? `Stop the ${voice.label} sample`
+									: `Hear a sample of ${voice.label}`}
+								title={assistantVoicePlaying === voice.id ? 'Stop sample' : 'Hear a sample'}
+								disabled={assistantVoiceLoading !== null && assistantVoiceLoading !== voice.id}
+								onclick={() => void previewAssistantVoiceSample(voice.id)}
+							>
+								{#if assistantVoiceLoading === voice.id}
+									<Icon icon={LoaderCircle} class="spin" size={12} />
+								{:else if assistantVoicePlaying === voice.id}
+									<Icon icon={Square} size={10} />
+								{:else}
+									<Icon icon={Play} size={12} />
+								{/if}
+							</button>
 						</div>
 					{/each}
 				</div>

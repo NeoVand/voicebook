@@ -52,10 +52,24 @@ const VOICE_QUIET_MS = 700;
 const DUCKED_VOLUME = 0.25;
 /** play_section with no spoken lead-in: start the narrator after this. */
 const PLAYBACK_FALLBACK_MS = 1_500;
+/** A walkthrough stop whose narration never became speech still moves on. */
+const TOUR_FALLBACK_MS = 6_000;
+/** The voice has said a stop once this share of its narration's words is
+ * spoken (it paraphrases, often a little shorter)… */
+const TOUR_SPOKEN_SHARE = 0.6;
+/** …and it has then been quiet a little longer than a breath. */
+const TOUR_SETTLE_MS = 600;
+/** Fewer words than this from the reader is a backchannel ("mm-hmm", "okay"),
+ * not an interruption of a walkthrough. */
+const TOUR_INTERRUPT_WORDS = 3;
 
 interface BackendCall {
 	callId: string;
 	output: Promise<Record<string, unknown>>;
+}
+
+function countWords(text: string): number {
+	return text.match(/[\p{L}\p{N}]+/gu)?.length ?? 0;
 }
 
 function closedMessage(reason: string): string {
@@ -108,6 +122,20 @@ export class LiveAssistantState extends AssistantSession {
 	private readerSpokeSinceVoice = true;
 	/** A silent typed turn in flight. */
 	private typedAbort?: AbortController;
+	/** A walkthrough stop's narration is done: move on once the voice has
+	 * said it. */
+	private advanceWhenQuiet = false;
+	private tourTimer: ReturnType<typeof setTimeout> | undefined;
+	/** How far the voice has got through a stop: words it has spoken in all,
+	 * the count when the stop's narration was written, and that narration's
+	 * length. The voice speaks well behind the brain, and pauses mid-sentence,
+	 * so a quiet moment alone does not mean the stop is done. */
+	private voiceWords = 0;
+	private stopWordsBase = 0;
+	private stopWords = 0;
+	/** The brain's words in the response under way. */
+	private brainText = '';
+	private tourQuietTimer: ReturnType<typeof setTimeout> | undefined;
 
 	/* ── Commands ────────────────────────────────────────────────────────── */
 
@@ -225,10 +253,21 @@ export class LiveAssistantState extends AssistantSession {
 		this.generation += 1;
 		this.abort?.abort();
 		this.abort = undefined;
-		for (const timer of [this.settingsTimer, this.trackTimer, this.playbackTimer, this.hushTimer]) {
+		for (const timer of [
+			this.settingsTimer,
+			this.trackTimer,
+			this.playbackTimer,
+			this.hushTimer,
+			this.tourTimer,
+			this.tourQuietTimer
+		]) {
 			if (timer) clearTimeout(timer);
 		}
 		this.settingsTimer = this.trackTimer = this.playbackTimer = this.hushTimer = undefined;
+		this.tourTimer = this.tourQuietTimer = undefined;
+		this.advanceWhenQuiet = false;
+		this.voiceWords = this.stopWordsBase = this.stopWords = 0;
+		this.brainText = '';
 		if (this.idleTimer) clearInterval(this.idleTimer);
 		this.idleTimer = undefined;
 		// Graceful close runs on its own: the session finalizes its usage
@@ -503,8 +542,10 @@ export class LiveAssistantState extends AssistantSession {
 				if (active) return;
 				if (this.audio) this.audio.volume = 1;
 				if (this.hushed) this.unsilenceVoice();
-				// Queued playback starts once the voice has drained.
+				// Queued playback starts once the voice has drained — and so
+				// does the next walkthrough stop.
 				this.startPendingPlayback();
+				this.advanceTourIfDone();
 			}
 		});
 	}
@@ -585,6 +626,9 @@ export class LiveAssistantState extends AssistantSession {
 		}
 		this.lastReaderEnd = Number.isFinite(endMs) ? endMs : startMs;
 		this.readerSpokeSinceVoice = true;
+		// Talking over a walkthrough pauses it; a backchannel does not.
+		const words = countWords(this.readerTurn?.text ?? '');
+		if (this.tour && !this.tour.paused && words >= TOUR_INTERRUPT_WORDS) this.pauseTour();
 	}
 
 	private onVoiceWords(delta: string, startMs: number, endMs: number): void {
@@ -606,6 +650,7 @@ export class LiveAssistantState extends AssistantSession {
 		this.readerSpokeSinceVoice = false;
 		this.readerTurn = undefined;
 		this.caption += fresh ? delta.trimStart() : delta;
+		this.voiceWords += countWords(delta);
 		this.lastVoiceEnd = Number.isFinite(endMs) ? endMs : startMs;
 		this.streamAssistantText(this.voiceUtterance, fresh ? delta.trimStart() : delta, 'voice');
 	}
@@ -615,7 +660,12 @@ export class LiveAssistantState extends AssistantSession {
 	private onBackendEvent(inner: Record<string, unknown>): void {
 		const type = inner.type as string;
 		const response = inner.response as { id?: string } | undefined;
+		if (type === 'response.output_text.delta') {
+			this.brainText += (inner.delta as string) ?? '';
+			return;
+		}
 		if (type === 'response.created') {
+			this.brainText = '';
 			this.brainBusy += 1;
 			if (this.continuations) this.continuations -= 1;
 			this.currentResponseId = response?.id ?? crypto.randomUUID();
@@ -643,6 +693,7 @@ export class LiveAssistantState extends AssistantSession {
 				// The brain has answered; the voice takes it from here.
 				if (this.activity === 'thinking') this.activity = '';
 				this.schedulePlaybackIfSilent();
+				this.scheduleTourAdvance();
 				return;
 			}
 			this.continuations += 1;
@@ -657,6 +708,16 @@ export class LiveAssistantState extends AssistantSession {
 		if (this.seenCalls.has(callId)) return;
 		this.seenCalls.add(callId);
 		this.touch();
+		if (item.name === 'plan_tour' || item.name === 'continue_tour') {
+			// The voice cannot see the tour: without this it asks after every
+			// stop whether to go on.
+			this.send({
+				type: 'session.thinking.append',
+				delegation_id: null,
+				content:
+					'A guided walkthrough is running: the app moves the highlight from stop to stop and the backend narrates each one in turn. Say each narration as it comes, starting straight in — no "let\'s move on" or "next up" between stops, and never ask whether to continue. If the reader interrupts, answer them.'
+			});
+		}
 		this.pendingTools += 1;
 		const output = Promise.resolve(this.runTool(item.name ?? '', item.arguments ?? ''))
 			.catch((error: unknown) => ({
@@ -702,6 +763,61 @@ export class LiveAssistantState extends AssistantSession {
 		if (this.active) this.stop();
 	}
 
+	/* ── Guided walkthroughs ─────────────────────────────────────────────── */
+
+	/** The next stop is the brain's to narrate: a developer note it answers,
+	 * and the voice says. */
+	protected tourNudge(text: string): void {
+		this.activity = 'thinking';
+		this.send({
+			type: 'response.item.create',
+			item: { type: 'message', role: 'developer', content: [{ type: 'input_text', text }] }
+		});
+		this.send({ type: 'response.create' });
+	}
+
+	protected override pauseTour(): void {
+		super.pauseTour();
+		this.advanceWhenQuiet = false;
+		for (const timer of [this.tourTimer, this.tourQuietTimer]) if (timer) clearTimeout(timer);
+		this.tourTimer = this.tourQuietTimer = undefined;
+	}
+
+	/** The brain finished a stop's narration: advance once the voice has said
+	 * most of it and paused — or after a while, if it never speaks at all. */
+	private scheduleTourAdvance(): void {
+		if (!this.tour || this.tour.paused) return;
+		this.advanceWhenQuiet = true;
+		this.stopWords = countWords(this.brainText);
+		this.stopWordsBase = this.voiceWords;
+		if (this.tourTimer) clearTimeout(this.tourTimer);
+		this.tourTimer = setTimeout(() => {
+			this.tourTimer = undefined;
+			if (!this.speaking && this.voiceWords === this.stopWordsBase) this.advanceTour();
+		}, TOUR_FALLBACK_MS);
+	}
+
+	/** Called whenever the voice goes quiet. */
+	private advanceTourIfDone(): void {
+		if (!this.advanceWhenQuiet || this.brainBusy || this.continuations || this.pendingTools) return;
+		if (!this.tour || this.tour.paused) {
+			this.advanceWhenQuiet = false;
+			return;
+		}
+		// A pause partway through the narration is a breath, not the end.
+		const spoken = this.voiceWords - this.stopWordsBase;
+		if (spoken < this.stopWords * TOUR_SPOKEN_SHARE) return;
+		if (this.tourQuietTimer) clearTimeout(this.tourQuietTimer);
+		this.tourQuietTimer = setTimeout(() => {
+			this.tourQuietTimer = undefined;
+			if (this.speaking || !this.advanceWhenQuiet || !this.tour || this.tour.paused) return;
+			this.advanceWhenQuiet = false;
+			if (this.tourTimer) clearTimeout(this.tourTimer);
+			this.tourTimer = undefined;
+			this.advanceTour();
+		}, TOUR_SETTLE_MS);
+	}
+
 	/** play_section with nothing to say first: the narrator should not wait
 	 * for speech that is not coming. */
 	private schedulePlaybackIfSilent(): void {
@@ -719,15 +835,16 @@ export class LiveAssistantState extends AssistantSession {
 	 * session needed. A live voice hears about the exchange; otherwise the
 	 * reply is read aloud by the narration voice when spoken replies are on. */
 	private async answerTyped(doc: NormalizedDocument, text: string): Promise<void> {
+		// A voice session that failed earlier no longer describes the chat.
+		this.dismissError();
 		await providersState.initialize();
 		const apiKey = providersState.keyFor('openai');
 		if (!apiKey) {
-			this.errorMessage = 'Add an OpenAI API key under Settings → LLM to talk with your documents.';
 			this.messages.push({
 				id: crypto.randomUUID(),
 				role: 'assistant',
 				channel: 'text',
-				text: this.errorMessage
+				text: 'Add an OpenAI API key under Settings → LLM to talk with your documents.'
 			});
 			return;
 		}
@@ -748,7 +865,7 @@ export class LiveAssistantState extends AssistantSession {
 				model: providersState.liveBrainModel,
 				effort: providersState.liveBrainEffort,
 				instructions: context.instructions,
-				tools: brainTools(context.mode === 'map', { asyncScreenTools: true }),
+				tools: brainTools(context.mode === 'map', { typed: true }),
 				input: brainChatInput(this.messages),
 				runTool: (name, args) => this.runTool(name, args),
 				onText: (delta) => {

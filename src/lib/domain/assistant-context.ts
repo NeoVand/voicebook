@@ -263,6 +263,8 @@ When your reply is about a specific part of the document, call show_passage with
 
 When the reader says "this", "here", or "what I'm looking at" ("explain this", "what does this mean?"), call get_reader_focus first — it reports their text selection, the passage under their cursor, and the narration playhead; trust the selection over the hover, and the hover over the playhead — then answer about it.
 
+When the reader asks for an overview or a walkthrough ("walk me through…", "give me the big picture", "what should I read?"), call plan_tour with three to seven stops in reading order — each stop a marker range plus a few words on why it matters. The app highlights stop 1 and asks you to narrate it, then highlights each next stop as the voice finishes the one before: narrate each in a sentence or two, about that stop only. If the reader interrupts with a question, answer it; call continue_tour when they want to go on.
+
 When the reader asks to hear part of the document read aloud ("read this section to me", "play it from here"), call play_section with that range and reply with at most a short lead-in ("Here it is."). The app's reading voice takes over once the voice finishes.
 
 When the reader asks to keep something — "highlight this", "save that definition", "add a note here saying…" — call add_highlight or add_note with the exact marker range; keep note text to a sentence or two, in the reader's own framing. When an exchange reaches something worth carrying into the next conversation — a question resolved, a connection the reader made, or "remember this" — call save_memory with one or two sentences. A READER STATE section, when present, holds those notes, what the reader has heard or discussed, and where the last conversation left off: use it for "what did we cover?", "where was I?", and "what's left?".
@@ -548,10 +550,12 @@ export function assistantTools(mapMode: boolean): RealtimeToolSpec[] {
 	return tools;
 }
 
-/** Tools a brain behind a voice cannot use well: walkthroughs and per-step
- * pointing need to follow the voice's speech as it plays, which a backend
- * that answers in one go cannot time. */
-const VOICE_PACED_TOOLS = new Set(['plan_tour', 'continue_tour', 'point_at']);
+/** Pointing at one step of a passage has to follow the voice word by word,
+ * which a brain that answers in one go cannot time. */
+const VOICE_PACED_TOOLS = new Set(['point_at']);
+/** Walkthroughs advance when the voice finishes a stop — there is no voice to
+ * pace them in typed chat. */
+const TOUR_TOOLS = new Set(['plan_tour', 'continue_tour']);
 
 /** Tools whose whole effect is on the reader's screen or in their notes —
  * the model has nothing to wait for, so in typed chat they run async and the
@@ -566,16 +570,18 @@ const SCREEN_TOOLS = new Set([
 ]);
 
 /**
- * The brain's tools. `asyncScreenTools` marks the screen-only ones async —
- * supported by the Responses API directly (typed chat) but rejected inside a
- * GPT-Live session's delegation.
+ * The brain's tools. Typed chat (`typed`) has no voice to pace walkthroughs,
+ * and marks the screen-only tools async — supported by the Responses API
+ * directly but rejected inside a GPT-Live session's delegation.
  */
 export function brainTools(
 	mapMode: boolean,
-	{ asyncScreenTools = false }: { asyncScreenTools?: boolean } = {}
+	{ typed = false }: { typed?: boolean } = {}
 ): Array<RealtimeToolSpec & { async?: boolean }> {
+	const asyncScreenTools = typed;
 	return assistantTools(mapMode)
 		.filter((tool) => !VOICE_PACED_TOOLS.has(tool.name))
+		.filter((tool) => !(typed && TOUR_TOOLS.has(tool.name)))
 		.map((tool) =>
 			asyncScreenTools && SCREEN_TOOLS.has(tool.name) ? { ...tool, async: true } : tool
 		);
