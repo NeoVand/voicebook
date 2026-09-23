@@ -200,6 +200,15 @@ describe('sanitizeNarration', () => {
 	it('shapes inline math output as a spliceable phrase', () => {
 		expect(sanitizeNarration('pi of a given s.', 'math-inline')).toBe('pi of a given s');
 		expect(sanitizeNarration(`${'very long phrase '.repeat(10)}end`, 'math-inline')).toBeNull();
+		// A faithful reading of a long expression is not a ramble.
+		expect(
+			sanitizeNarration(
+				'The integral from negative infinity to infinity of e to the negative x squared, with respect to x, equals the square root of pi.',
+				'math-inline'
+			)
+		).toBe(
+			'The integral from negative infinity to infinity of e to the negative x squared, with respect to x, equals the square root of pi'
+		);
 	});
 
 	it('truncates over-long output at a sentence boundary', () => {

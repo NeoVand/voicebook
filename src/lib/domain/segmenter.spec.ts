@@ -4,12 +4,13 @@ import {
 	MAX_SEGMENT_CHARS,
 	normalizeForSpeech,
 	refreshDocumentSegments,
+	reuseUnchangedSegments,
 	segmentBlocks,
 	segmentsEqual,
 	wordsFor
 } from './segmenter';
 import { hashNarrationSource } from './narration';
-import type { DocumentBlock, NarrationEntry, NormalizedDocument } from './types';
+import type { DocumentBlock, NarrationEntry, NormalizedDocument, SpeechSegment } from './types';
 
 function block(overrides: Partial<DocumentBlock> = {}): DocumentBlock {
 	return {
@@ -555,5 +556,49 @@ describe('narrated construct segmentation', () => {
 
 		// A second refresh with identical narrations is a no-op.
 		expect(refreshDocumentSegments(refreshed)).toBe(refreshed);
+	});
+});
+
+describe('reuseUnchangedSegments', () => {
+	const passage = (id: string, text: string): SpeechSegment => ({
+		id,
+		blockId: id.split(':')[0],
+		text,
+		normalizedText: text,
+		start: 0,
+		end: text.length,
+		words: [{ text, start: 0, end: text.length }],
+		estimatedDuration: 1,
+		anchor: {}
+	});
+
+	it('keeps the objects of unchanged passages so only changed ones re-render', () => {
+		const previous = [passage('a:0', 'One.'), passage('b:0', 'Two.'), passage('c:0', 'Three.')];
+		const rewritten = { ...passage('b:0', 'Two.'), normalizedText: 'Two, spoken.' };
+		const added = passage('d:0', 'Four.');
+		const merged = reuseUnchangedSegments(previous, [
+			passage('a:0', 'One.'),
+			rewritten,
+			passage('c:0', 'Three.'),
+			added
+		]);
+		expect(merged[0]).toBe(previous[0]);
+		expect(merged[1]).toBe(rewritten);
+		expect(merged[2]).toBe(previous[2]);
+		expect(merged[3]).toBe(added);
+	});
+
+	it('treats a change anywhere in the passage data as a change', () => {
+		const previous = [passage('a:0', 'One two.')];
+		const retimed = {
+			...passage('a:0', 'One two.'),
+			words: [{ text: 'One two.', start: 1, end: 8 }]
+		};
+		expect(reuseUnchangedSegments(previous, [retimed])[0]).toBe(retimed);
+		const paused = { ...passage('a:0', 'One two.'), pauseBefore: 0.4 };
+		expect(reuseUnchangedSegments(previous, [paused])[0]).toBe(paused);
+		// An optional field left undefined is the same as one never set.
+		const unset = { ...passage('a:0', 'One two.'), pauseBefore: undefined };
+		expect(reuseUnchangedSegments(previous, [unset])[0]).toBe(previous[0]);
 	});
 });

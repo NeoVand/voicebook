@@ -76,6 +76,7 @@ export default defineConfig({
 				'src/lib/domain/explain-prompts.ts',
 				'src/lib/domain/importers.ts',
 				'src/lib/domain/model-catalog.ts',
+				'src/lib/domain/narration-queue.ts',
 				'src/lib/domain/pages.ts',
 				'src/lib/domain/page-tone.ts',
 				'src/lib/domain/pdf-layout.ts',

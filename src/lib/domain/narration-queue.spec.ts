@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
 	NARRATION_SLOT,
 	blockPositions,
+	blockTimeline,
+	constructsInWindow,
 	documentContextFor,
 	prioritizeQueue
 } from './narration-queue';
 import { hashNarrationSource, type NarrationConstruct } from './narration';
-import type { DocumentBlock } from './types';
+import type { DocumentBlock, SpeechSegment } from './types';
 
 function makeBlock(id: string, kind: DocumentBlock['kind'], text: string): DocumentBlock {
 	return { id, kind, text, speak: true, anchor: {} };
@@ -99,5 +101,89 @@ describe('documentContextFor', () => {
 
 	it('returns empty for an unknown block', () => {
 		expect(documentContextFor(blocks, construct('b9', 'b9'))).toBe('');
+	});
+});
+
+function passage(id: string, blockId: string, estimatedDuration: number): SpeechSegment {
+	return {
+		id,
+		blockId,
+		text: id,
+		normalizedText: id,
+		start: 0,
+		end: id.length,
+		words: [],
+		estimatedDuration,
+		anchor: {}
+	};
+}
+
+describe('blockTimeline', () => {
+	it('places each block at the listening time of its first passage', () => {
+		const blocks = [
+			makeBlock('a', 'paragraph', 'a'),
+			makeBlock('figure', 'paragraph', ''),
+			makeBlock('b', 'math', 'x'),
+			makeBlock('c', 'paragraph', 'c')
+		];
+		const timeline = blockTimeline(blocks, [
+			passage('a:0', 'a', 10),
+			passage('a:1', 'a', 5),
+			passage('b:0', 'b', 4),
+			passage('c:0', 'c', 6)
+		]);
+		expect(timeline.get('a')).toBe(0);
+		expect(timeline.get('b')).toBe(15);
+		expect(timeline.get('c')).toBe(19);
+		// No passages of its own: it sits where the block before it does.
+		expect(timeline.get('figure')).toBe(0);
+	});
+});
+
+describe('constructsInWindow', () => {
+	// Ten equations a minute of listening apart: b0 at 0 s … b9 at 540 s.
+	const blocks = Array.from({ length: 10 }, (_, index) => makeBlock(`b${index}`, 'math', 'x'));
+	const timeline = blockTimeline(
+		blocks,
+		blocks.map((block) => passage(`${block.id}:0`, block.id, 60))
+	);
+	const all = blocks.map((block) => construct(block.id, block.id));
+	const ids = (list: NarrationConstruct[]) => list.map((item) => item.id);
+
+	it('takes only what is within reach of the reader, nearest first', () => {
+		const picked = constructsInWindow(all, timeline, {
+			focusBlockIds: ['b4'],
+			aheadSeconds: 150,
+			behindSeconds: 60
+		});
+		// b4–b6 lie ahead; b3 is a minute behind and ranks after them.
+		expect(ids(picked)).toEqual(['b4', 'b5', 'b6', 'b3']);
+	});
+
+	it('starts at the top when nothing is known about the reader', () => {
+		const picked = constructsInWindow(all, timeline, {
+			focusBlockIds: ['unknown'],
+			aheadSeconds: 90,
+			behindSeconds: 0
+		});
+		expect(ids(picked)).toEqual(['b0', 'b1']);
+	});
+
+	it('joins the windows of the playhead and the passage on screen', () => {
+		const picked = constructsInWindow(all, timeline, {
+			focusBlockIds: ['b1', 'b8'],
+			aheadSeconds: 60,
+			behindSeconds: 0
+		});
+		expect(ids(picked)).toEqual(['b1', 'b8', 'b2', 'b9']);
+	});
+
+	it('skips constructs whose block is not in the document', () => {
+		const picked = constructsInWindow([construct('gone', 'missing'), ...all], timeline, {
+			focusBlockIds: ['b0'],
+			aheadSeconds: 0,
+			behindSeconds: 0
+		});
+		expect(ids(picked)).toEqual(['b0']);
 	});
 });

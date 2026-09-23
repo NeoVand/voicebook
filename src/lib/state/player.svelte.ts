@@ -10,7 +10,7 @@ import type {
 	TimingMap
 } from '$lib/domain/types';
 import { audioVariantKey, decodeAudio, encodeAudio } from '$lib/services/audio-codec';
-import { segmentBlocks, segmentsEqual } from '$lib/domain/segmenter';
+import { reuseUnchangedSegments, segmentBlocks, segmentsEqual } from '$lib/domain/segmenter';
 import { backMatterAnnouncement } from '$lib/domain/back-matter';
 import {
 	DEFAULT_LISTENING_MODE,
@@ -362,10 +362,14 @@ export class VoicebookPlayer {
 	 * The currently playing buffer is never interrupted — callers apply the
 	 * swap policy (never rebind the live prefetch window while playing).
 	 */
-	rebindSegments(next: SpeechSegment[]): void {
+	rebindSegments(fresh: SpeechSegment[]): void {
 		if (!this.book) return;
 		const previous = this.book.segments;
-		if (segmentsEqual(previous, next)) return;
+		if (segmentsEqual(previous, fresh)) return;
+		// Unchanged passages keep their objects so the reader re-renders only
+		// what changed — a whole-document re-render per landed narration froze
+		// long, math-heavy documents for a second at a time.
+		const next = reuseUnchangedSegments(previous, fresh);
 		const currentId = this.currentSegment?.id;
 		const nextIndexById = new SvelteMap(next.map((segment, index) => [segment.id, index]));
 

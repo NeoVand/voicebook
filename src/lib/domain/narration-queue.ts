@@ -1,13 +1,86 @@
 /**
  * Pure helpers for the narration work queue: document-order positions,
- * playhead-first prioritization, and the prose context handed to the LLM
- * with each construct.
+ * playhead-first prioritization, the listening window that decides which
+ * constructs are worth describing now, and the prose context handed to the
+ * LLM with each construct.
  */
-import type { DocumentBlock } from './types';
+import type { DocumentBlock, SpeechSegment } from './types';
 import type { NarrationConstruct } from './narration';
 
 export function blockPositions(blocks: DocumentBlock[]): Map<string, number> {
 	return new Map(blocks.map((block, index) => [block.id, index]));
+}
+
+/**
+ * Seconds of listening from the start of the document to each block: the
+ * estimated duration of every passage before it, in reading order. A block
+ * with no passages of its own sits where the block before it does.
+ */
+export function blockTimeline(
+	blocks: DocumentBlock[],
+	segments: SpeechSegment[]
+): Map<string, number> {
+	const timeline = new Map<string, number>();
+	let elapsed = 0;
+	for (const segment of segments) {
+		if (!timeline.has(segment.blockId)) timeline.set(segment.blockId, elapsed);
+		elapsed += segment.estimatedDuration;
+	}
+	let last = 0;
+	for (const block of blocks) {
+		const at = timeline.get(block.id);
+		if (at === undefined) timeline.set(block.id, last);
+		else last = at;
+	}
+	return timeline;
+}
+
+export interface DescribeWindow {
+	/** Where the reader is: the playhead, the passage on screen. */
+	focusBlockIds: string[];
+	/** Seconds of listening described ahead of each focus… */
+	aheadSeconds: number;
+	/** …and behind it, for a reader who glances back. */
+	behindSeconds: number;
+}
+
+/** A construct this far behind the reader ranks with one this many times
+ * further ahead — the listener is moving forward. */
+const BEHIND_WEIGHT = 4;
+
+/**
+ * The constructs worth describing now: those within listening reach of the
+ * reader — ahead of the playhead or of the passage on screen, plus a little
+ * behind — nearest first. Everything else waits until the reader gets close,
+ * or until the whole document is prepared on purpose, so opening a long page
+ * no longer fires a description request for every equation in it.
+ */
+export function constructsInWindow(
+	constructs: NarrationConstruct[],
+	timeline: Map<string, number>,
+	window: DescribeWindow
+): NarrationConstruct[] {
+	const foci = window.focusBlockIds
+		.map((blockId) => timeline.get(blockId))
+		.filter((at): at is number => at !== undefined);
+	// Nothing to go on yet: the reader starts at the top.
+	if (!foci.length) foci.push(0);
+	const ranked: Array<{ construct: NarrationConstruct; rank: number }> = [];
+	for (const construct of constructs) {
+		const at = timeline.get(construct.blockId);
+		if (at === undefined) continue;
+		let rank = Number.POSITIVE_INFINITY;
+		for (const focus of foci) {
+			const ahead = at - focus;
+			if (ahead >= 0 && ahead <= window.aheadSeconds) rank = Math.min(rank, ahead);
+			else if (ahead < 0 && -ahead <= window.behindSeconds) {
+				rank = Math.min(rank, -ahead * BEHIND_WEIGHT);
+			}
+		}
+		if (Number.isFinite(rank)) ranked.push({ construct, rank });
+	}
+	// Array sort is stable, so equal ranks keep document order.
+	return ranked.sort((a, b) => a.rank - b.rank).map((entry) => entry.construct);
 }
 
 /**
