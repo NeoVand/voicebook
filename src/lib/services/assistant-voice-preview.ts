@@ -1,11 +1,15 @@
 /**
  * Short spoken samples of the assistant's voices, so the picker is more than
- * a list of names. The realtime voice ids are also valid on OpenAI's speech
- * endpoint, which is far cheaper than opening a realtime session: one small
- * MP3 per voice, fetched with the user's own key and cached for the session.
- * One preview plays at a time; starting another (or the same one again)
- * stops the current playback.
+ * a list of names. The shared voice ids are also valid on OpenAI's speech
+ * endpoint, which is far cheaper than opening a voice session: one small MP3
+ * per voice, fetched with the user's own key and cached for the session. The
+ * voices only GPT-Live speaks are rejected there, so their samples ship with
+ * the app, recorded through Live sessions
+ * (scripts/record-live-voice-previews.mjs). One preview plays at a time;
+ * starting another (or the same one again) stops the current playback.
  */
+import { base } from '$app/paths';
+import { LIVE_VOICES } from '$lib/domain/provider-catalog';
 
 const PREVIEW_TEXT =
 	'Hi! I read along with you — ask me anything about the page, and I can point at the parts I mention.';
@@ -13,6 +17,13 @@ const PREVIEW_TEXT =
 const PREVIEW_MODEL = 'gpt-4o-mini-tts';
 
 const sampleCache = new Map<string, Blob>();
+
+const RECORDED = new Set(LIVE_VOICES.filter((voice) => voice.liveOnly).map((voice) => voice.id));
+
+/** Whether hearing a voice's sample takes the reader's OpenAI key. */
+export function previewNeedsKey(voice: string): boolean {
+	return !RECORDED.has(voice);
+}
 
 let audio: HTMLAudioElement | null = null;
 let playingVoice: string | null = null;
@@ -37,9 +48,17 @@ export function stopVoicePreview(): void {
 	stopAudio();
 }
 
-async function fetchSample(voice: string, apiKey: string): Promise<Blob> {
+async function fetchSample(voice: string, apiKey?: string): Promise<Blob> {
 	const cached = sampleCache.get(voice);
 	if (cached) return cached;
+	if (RECORDED.has(voice)) {
+		const recorded = await fetch(`${base}/voice-previews/${voice}.mp3`);
+		if (!recorded.ok) throw new VoicePreviewError('The voice sample could not be loaded.');
+		const blob = await recorded.blob();
+		sampleCache.set(voice, blob);
+		return blob;
+	}
+	if (!apiKey) throw new VoicePreviewError('Add your OpenAI key to hear voice samples.');
 	const response = await fetch('https://api.openai.com/v1/audio/speech', {
 		method: 'POST',
 		headers: {
@@ -78,7 +97,7 @@ async function fetchSample(voice: string, apiKey: string): Promise<Blob> {
  */
 export async function previewAssistantVoice(
 	voice: string,
-	apiKey: string
+	apiKey?: string
 ): Promise<{ finished: Promise<void> } | null> {
 	if (playingVoice === voice) {
 		stopAudio();
