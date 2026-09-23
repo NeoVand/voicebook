@@ -8,7 +8,7 @@
  * (scripts/record-live-voice-previews.mjs). One preview plays at a time;
  * starting another (or the same one again) stops the current playback.
  */
-import { base } from '$app/paths';
+import { asset } from '$app/paths';
 import { LIVE_VOICES } from '$lib/domain/provider-catalog';
 
 const PREVIEW_TEXT =
@@ -52,7 +52,7 @@ async function fetchSample(voice: string, apiKey?: string): Promise<Blob> {
 	const cached = sampleCache.get(voice);
 	if (cached) return cached;
 	if (RECORDED.has(voice)) {
-		const recorded = await fetch(`${base}/voice-previews/${voice}.mp3`);
+		const recorded = await fetch(asset(`/voice-previews/${voice}.mp3`));
 		if (!recorded.ok) throw new VoicePreviewError('The voice sample could not be loaded.');
 		const blob = await recorded.blob();
 		sampleCache.set(voice, blob);
