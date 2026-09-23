@@ -63,9 +63,8 @@ export const CLOUD_LLM_PROVIDERS: CloudLlmProviderSpec[] = [
 		keyPlaceholder: 'sk-proj-…',
 		keyUrl: 'https://platform.openai.com/api-keys',
 		models: [
-			{ id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', tagline: 'fast · recommended' },
-			{ id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', tagline: 'balanced' },
-			{ id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', tagline: 'highest quality' }
+			{ id: 'gpt-6-luna', label: 'GPT-6 Luna', tagline: 'fast · recommended' },
+			{ id: 'gpt-6-sol', label: 'GPT-6 Sol', tagline: 'highest quality' }
 		]
 	},
 	{

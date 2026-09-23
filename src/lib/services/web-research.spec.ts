@@ -3,8 +3,8 @@ import { WebResearchError, parseWebResearchResponse, webResearchRequestBody } fr
 
 describe('webResearchRequestBody', () => {
 	it('asks for speakable sentences with the built-in search tool', () => {
-		const body = webResearchRequestBody('gpt-5.6-luna', 'What is new in RLHF?');
-		expect(body.model).toBe('gpt-5.6-luna');
+		const body = webResearchRequestBody('gpt-6-luna', 'What is new in RLHF?');
+		expect(body.model).toBe('gpt-6-luna');
 		expect(body.input).toBe('What is new in RLHF?');
 		expect(body.tools).toEqual([{ type: 'web_search' }]);
 		expect(String(body.instructions)).toContain('three to five plain sentences');

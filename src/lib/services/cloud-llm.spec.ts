@@ -44,7 +44,7 @@ describe('anthropic request body', () => {
 
 describe('openai request body', () => {
 	it('keeps system in the message list, disables reasoning, and omits temperature', () => {
-		const body = openaiRequestBody('gpt-5.6-luna', MESSAGES, { maxNewTokens: 64 });
+		const body = openaiRequestBody('gpt-6-luna', MESSAGES, { maxNewTokens: 64 });
 		expect(body.reasoning_effort).toBe('none');
 		expect(body.max_completion_tokens).toBe(256);
 		expect(body).not.toHaveProperty('temperature');
@@ -52,7 +52,7 @@ describe('openai request body', () => {
 	});
 
 	it('can drop the reasoning parameter for models that reject it', () => {
-		const body = openaiRequestBody('gpt-5.6-luna', MESSAGES, {}, null);
+		const body = openaiRequestBody('gpt-6-luna', MESSAGES, {}, null);
 		expect(body).not.toHaveProperty('reasoning_effort');
 	});
 });
@@ -107,6 +107,32 @@ describe('generateCloud transport behavior', () => {
 			'A spoken row.'
 		);
 		expect(bodies.map((body) => body.reasoning_effort)).toEqual(['minimal']);
+	});
+
+	it("settles on 'low' for a model whose efforts start there, never the unset default", async () => {
+		// GPT-6 Astra rejects 'none' and 'minimal'; leaving the effort out
+		// would silently run every description at the model's 'medium' default.
+		const bodies: Array<Record<string, unknown>> = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: unknown, init?: RequestInit) => {
+				const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				bodies.push(body);
+				if (body.reasoning_effort === 'none' || body.reasoning_effort === 'minimal') {
+					return jsonResponse(400, {
+						error: {
+							param: 'reasoning_effort',
+							message: "Unsupported value: 'reasoning_effort' does not support this value."
+						}
+					});
+				}
+				return jsonResponse(200, { choices: [{ message: { content: 'A spoken row.' } }] });
+			})
+		);
+		await expect(generateCloud('openai', 'gpt-low-floor-test', 'key', MESSAGES)).resolves.toBe(
+			'A spoken row.'
+		);
+		expect(bodies.map((body) => body.reasoning_effort)).toEqual(['none', 'minimal', 'low']);
 	});
 });
 

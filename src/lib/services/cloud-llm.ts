@@ -87,9 +87,10 @@ export function anthropicRequestBody(
 	};
 }
 
-/** GPT-5-family models pin sampling parameters, so temperature is omitted;
- * reasoning is turned off — a one-sentence rewrite needs latency, not
- * deliberation. */
+/** GPT-5- and GPT-6-family models pin sampling parameters, so temperature is
+ * omitted; reasoning is turned off — a one-sentence rewrite needs latency,
+ * not deliberation. The effort must always be sent: GPT-6 defaults to
+ * 'medium' when it is left out. */
 export function openaiRequestBody(
 	model: string,
 	messages: LlmChatMessage[],
@@ -232,7 +233,10 @@ function geminiText(data: unknown): string {
 		.trim();
 }
 
-const EFFORT_VARIANTS = ['none', 'minimal', null] as const;
+/** Cheapest first. Some earlier minis stop at 'minimal', and GPT-6 Astra
+ * starts at 'low' — leaving the effort out entirely is the last resort,
+ * because GPT-6 then reasons at 'medium' on every call. */
+const EFFORT_VARIANTS = ['none', 'minimal', 'low', null] as const;
 /** Per-model reasoning-effort the API accepted, so the 400-probe cascade runs
  * once per session instead of on every construct. */
 const acceptedEffort = new Map<string, (typeof EFFORT_VARIANTS)[number]>();
@@ -276,8 +280,9 @@ export async function generateCloud(
 
 	if (provider === 'openai') {
 		// Newer GPT models take reasoning_effort 'none'; some earlier minis only
-		// accept 'minimal'. Fall through the variants before giving up, and
-		// remember what the model accepted so later calls need one request.
+		// accept 'minimal', and GPT-6 Astra only 'low' and up. Fall through the
+		// variants before giving up, and remember what the model accepted so
+		// later calls need one request.
 		const remembered = acceptedEffort.get(model);
 		const variants =
 			remembered === undefined
