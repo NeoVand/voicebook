@@ -106,7 +106,9 @@ export const NARRATION_GENERATION_PARAMS: Record<
 	// math-block generates only the symbol-meaning sentence; the reading
 	// itself is deterministic (latexToSpeech) and prepended by the rewriter.
 	'math-block': { maxNewTokens: 56, maxChars: 180, temperature: 0 },
-	'math-inline': { maxNewTokens: 24, maxChars: 64, temperature: 0 },
+	// Only LaTeX the exact reader cannot parse gets here, and a faithful reading
+	// of that runs past a short phrase — the cap still stops a model's ramble.
+	'math-inline': { maxNewTokens: 24, maxChars: 140, temperature: 0 },
 	'table-row': { maxNewTokens: 64, maxChars: 200, temperature: 0.2 },
 	'table-header': { maxNewTokens: 0, maxChars: 0, temperature: 0 }, // deterministic — never prompted
 	mermaid: { maxNewTokens: 112, maxChars: 320, temperature: 0.2 },

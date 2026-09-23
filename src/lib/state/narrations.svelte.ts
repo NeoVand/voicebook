@@ -8,7 +8,13 @@ import {
 	type NarrationConstruct
 } from '$lib/domain/narration';
 import { breadcrumbFor } from '$lib/domain/document-lens';
-import { blockPositions, documentContextFor, prioritizeQueue } from '$lib/domain/narration-queue';
+import {
+	blockPositions,
+	blockTimeline,
+	constructsInWindow,
+	documentContextFor,
+	prioritizeQueue
+} from '$lib/domain/narration-queue';
 import type { NarrationEntry, NormalizedDocument } from '$lib/domain/types';
 import {
 	NarrationRewriteError,
@@ -31,7 +37,17 @@ const ITEM_YIELD_MS = 250;
 const CLOUD_CONCURRENCY = 3;
 const MAX_RETRY_AFTER_MS = 15_000;
 const REBIND_DEBOUNCE_MS = 400;
-const PERSIST_DEBOUNCE_MS = 1_000;
+/** A long document is megabytes of JSON; saving it once per landed
+ * description stalled the page. Batches ride this interval, and anything
+ * still unsaved is flushed when the document closes or the page hides. */
+const PERSIST_DEBOUNCE_MS = 4_000;
+/** Listening time described ahead of the playhead and of the passage on
+ * screen — far enough that descriptions are ready before the voice gets
+ * there, near enough that a long page never queues all of its equations. */
+const DESCRIBE_AHEAD_SECONDS = 8 * 60;
+const DESCRIBE_BEHIND_SECONDS = 60;
+/** Scrolling moves the window only once the reader settles somewhere. */
+const VIEWPORT_SETTLE_MS = 300;
 const OOM_RETRY_IDLE_MS = 10_000;
 const OOM_PATTERN = /out of memory|memory|allocation|buffer|device.*lost|mapasync/i;
 
@@ -50,14 +66,18 @@ function manualOnly(narrations: Record<string, NarrationEntry>): Record<string, 
 
 /**
  * The background narration scheduler: one document at a time, one LLM call at
- * a time, document order with playhead priority. Results mutate
- * player.book.narrations, re-segment the document, and rebind the player —
- * deferring any swap that would touch the live prefetch window while playing.
+ * a time (a small pool for cloud engines). Only constructs within listening
+ * reach of the reader are described — ahead of the playhead and of the
+ * passage on screen — nearest first; the rest wait until the reader gets
+ * close or the whole document is prepared on purpose (ensureAll). Results
+ * mutate player.book.narrations, re-segment the document, and rebind the
+ * player — deferring any swap that would touch the live prefetch window while
+ * playing.
  */
 export class NarrationState {
 	phase = $state<NarrationPhase>('idle');
 	documentId = $state<string | null>(null);
-	/** Constructs queued for this document this session. */
+	/** Constructs taken into the work queue for this document this session. */
 	total = $state(0);
 	completed = $state(0);
 	failed = $state(0);
@@ -66,10 +86,32 @@ export class NarrationState {
 	 * keeps playing until the replacement lands; the reader panel shows a
 	 * transient spinner from this set. */
 	regenerating = new SvelteSet<string>();
+	/** Constructs queued or being described right now. Pending constructs
+	 * outside the window are waiting for the reader, not being worked on, so
+	 * the reader pulses only these. */
+	active = new SvelteSet<string>();
 
 	private runToken = 0;
+	/** The ordered work list: explicit requests, then the window, nearest
+	 * first. Rebuilt whenever the reader moves. */
 	private queue: NarrationConstruct[] = [];
+	/** Every construct that still needs a description, in document order. */
+	private backlog = new SvelteMap<string, NarrationConstruct>();
+	/** Taken by a worker and not yet finished. */
+	private inFlight = new SvelteSet<string>();
+	/** Asked for by name (regenerate) — these skip the window. */
+	private explicit = new SvelteSet<string>();
+	/** Already counted into `total`, so a construct that leaves the window and
+	 * comes back is not counted twice. */
+	private counted = new SvelteSet<string>();
+	/** 'all' once someone needs the whole document (MP3 export, preparing
+	 * everything); the window stops applying until the next open. */
+	private scope: 'nearby' | 'all' = 'nearby';
+	/** The run token whose workers are draining the queue, if any. */
+	private activeRun: number | undefined;
 	private playheadBlockId: string | undefined;
+	private viewportBlockId: string | undefined;
+	private viewportTimer: ReturnType<typeof setTimeout> | null = null;
 	private dirty = false;
 	private rebindTimer: ReturnType<typeof setTimeout> | null = null;
 	private persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -79,6 +121,14 @@ export class NarrationState {
 
 	constructor() {
 		player.ensureNarrationsReady = (onProgress) => this.ensureAll(onProgress);
+		if (typeof window !== 'undefined') {
+			// Batched saves must not be lost to a closed tab or a backgrounded
+			// page that the browser later discards.
+			window.addEventListener('pagehide', () => this.flushPersist());
+			document.addEventListener('visibilitychange', () => {
+				if (document.visibilityState === 'hidden') this.flushPersist();
+			});
+		}
 	}
 
 	get working(): boolean {
@@ -122,18 +172,21 @@ export class NarrationState {
 	async open(document: NormalizedDocument): Promise<void> {
 		this.stop();
 		this.documentId = document.id;
+		this.total = 0;
 		this.completed = 0;
 		this.failed = 0;
 		this.error = '';
+		// A memory-error pause lasts until the document is opened again.
+		if (this.phase === 'error') this.phase = 'idle';
 		const token = ++this.runToken;
 
 		await Promise.all([llmState.initialize(), providersState.initialize()]);
-		const active = llmState.narrationEnabled && this.engineAvailable;
+		const enabled = llmState.narrationEnabled && this.engineAvailable;
 
 		const book = player.book;
 		if (!book || book.id !== document.id || token !== this.runToken) return;
 
-		if (!active) {
+		if (!enabled) {
 			// The feature cannot run: settle any pending entries as failed so
 			// fallbacks are final (no eternal pending stripes, no wedged MP3
 			// export). They re-queue automatically when narration comes back.
@@ -165,29 +218,29 @@ export class NarrationState {
 			this.tryRebind();
 			this.schedulePersist();
 		}
-		this.queue = prioritizeQueue(
-			reconciled.queue,
-			blockPositions(book.blocks),
-			this.playheadBlockId
-		);
-		this.total = this.queue.length;
-		if (!this.queue.length) return;
-
-		const ready = await this.ensureEngineReady();
-		if (token !== this.runToken) return;
-		if (!ready) {
-			this.queue = [];
-			this.total = 0;
-			return;
-		}
-		void this.run(token);
+		this.backlog = new SvelteMap(reconciled.queue.map((construct) => [construct.id, construct]));
+		// The player has already restored the reading position.
+		this.playheadBlockId = player.currentSegment?.blockId;
+		this.refreshQueue();
+		this.kick();
 	}
 
 	/** Abandon the queue (document closed or switched). The in-flight LLM call
 	 * finishes on its own; its result is dropped by the token check. */
 	stop(): void {
+		// Save what already landed before the document reference moves on.
+		this.flushPersist();
 		this.runToken += 1;
 		this.queue = [];
+		this.backlog.clear();
+		this.inFlight.clear();
+		this.explicit.clear();
+		this.counted.clear();
+		this.active.clear();
+		this.scope = 'nearby';
+		this.viewportBlockId = undefined;
+		if (this.viewportTimer) clearTimeout(this.viewportTimer);
+		this.viewportTimer = null;
 		this.regenerating.clear();
 		this.dirty = false;
 		if (this.rebindTimer) clearTimeout(this.rebindTimer);
@@ -196,18 +249,32 @@ export class NarrationState {
 		this.settle();
 	}
 
-	/** Playhead moved: prioritize upcoming constructs and flush deferred swaps. */
+	/** Playhead moved: the window follows it, and deferred swaps flush. */
 	notifyPlayhead(segmentId: string): void {
 		const book = player.book;
 		if (!book || book.id !== this.documentId) return;
 		const segment = book.segments.find((candidate) => candidate.id === segmentId);
-		if (segment) {
+		if (segment && segment.blockId !== this.playheadBlockId) {
 			this.playheadBlockId = segment.blockId;
-			if (this.queue.length > 1) {
-				this.queue = prioritizeQueue(this.queue, blockPositions(book.blocks), segment.blockId);
-			}
+			this.refreshQueue();
+			this.kick();
 		}
 		if (this.dirty) this.tryRebind();
+	}
+
+	/** The reader scrolled: once they settle, describe what is on screen and
+	 * just ahead of it. */
+	notifyViewport(blockId: string | undefined): void {
+		if (!blockId || blockId === this.viewportBlockId) return;
+		this.viewportBlockId = blockId;
+		if (this.viewportTimer) clearTimeout(this.viewportTimer);
+		this.viewportTimer = setTimeout(() => {
+			this.viewportTimer = null;
+			const book = player.book;
+			if (!book || book.id !== this.documentId) return;
+			this.refreshQueue();
+			this.kick();
+		}, VIEWPORT_SETTLE_MS);
 	}
 
 	/**
@@ -237,12 +304,19 @@ export class NarrationState {
 						};
 					}
 					this.queue = [];
+					this.backlog.clear();
+					this.active.clear();
 					this.flushRebind();
 					this.schedulePersist();
 				}
 				return;
 			}
-			if (!this.queue.length && !this.dirty && !this.working) return;
+			// Everything, not just the window: the caller needs final text for
+			// the whole document.
+			this.scope = 'all';
+			this.refreshQueue();
+			this.kick();
+			if (!this.backlog.size && !this.dirty && !this.working) return;
 			await new Promise<void>((resolve) => {
 				this.settleWaiters.push(resolve);
 			});
@@ -291,6 +365,9 @@ export class NarrationState {
 		if (!construct || !trimmed) return;
 		// An in-flight or queued LLM rewrite must not overwrite the edit.
 		this.queue = this.queue.filter((candidate) => candidate.id !== constructId);
+		this.backlog.delete(constructId);
+		this.explicit.delete(constructId);
+		this.active.delete(constructId);
 		this.regenerating.delete(constructId);
 		book.narrations = {
 			...(book.narrations ?? {}),
@@ -320,24 +397,24 @@ export class NarrationState {
 		const construct = this.constructById(constructId);
 		if (!construct) return;
 		this.regenerating.add(constructId);
-		this.queue = [construct, ...this.queue.filter((candidate) => candidate.id !== constructId)];
-		if (this.working) {
-			this.total += 1;
-			return;
-		}
-		const token = ++this.runToken;
-		this.total = this.queue.length;
-		this.completed = 0;
-		this.failed = 0;
+		// Asked for by name, so it goes first wherever the reader is — and
+		// counts toward progress again even if it was described earlier.
+		this.backlog.set(constructId, construct);
+		this.explicit.add(constructId);
+		this.counted.delete(constructId);
+		this.refreshQueue();
+		const token = this.runToken;
 		const ready = await this.ensureEngineReady();
 		if (token !== this.runToken) return;
 		if (!ready) {
-			this.queue = [];
+			this.backlog.delete(constructId);
+			this.explicit.delete(constructId);
+			this.refreshQueue();
 			this.regenerating.delete(constructId);
 			this.error = 'No description engine is available right now.';
 			return;
 		}
-		void this.run(token);
+		this.kick();
 	}
 
 	private constructById(id: string): NarrationConstruct | undefined {
@@ -358,38 +435,120 @@ export class NarrationState {
 		for (const resolve of waiters) resolve();
 	}
 
+	/**
+	 * Rebuild the work list from the backlog: explicit requests first, then —
+	 * nearest first — either the whole document or just the window around the
+	 * playhead and the passage on screen.
+	 */
+	private refreshQueue(): void {
+		const book = player.book;
+		if (!book || book.id !== this.documentId) return;
+		const waiting = [...this.backlog.values()].filter(
+			(construct) => !this.inFlight.has(construct.id)
+		);
+		const requested = waiting.filter((construct) => this.explicit.has(construct.id));
+		const rest = waiting.filter((construct) => !this.explicit.has(construct.id));
+		const nearby =
+			this.scope === 'all'
+				? prioritizeQueue(
+						rest,
+						blockPositions(book.blocks),
+						this.playheadBlockId ?? this.viewportBlockId
+					)
+				: constructsInWindow(rest, blockTimeline(book.blocks, book.segments), {
+						focusBlockIds: [this.playheadBlockId, this.viewportBlockId].filter(
+							(blockId): blockId is string => Boolean(blockId)
+						),
+						aheadSeconds: DESCRIBE_AHEAD_SECONDS,
+						behindSeconds: DESCRIBE_BEHIND_SECONDS
+					});
+		this.queue = [...requested, ...nearby];
+		for (const construct of this.queue) {
+			if (this.counted.has(construct.id)) continue;
+			this.counted.add(construct.id);
+			this.total += 1;
+		}
+		const working = new SvelteSet([
+			...this.queue.map((construct) => construct.id),
+			...this.inFlight
+		]);
+		for (const id of [...this.active]) if (!working.has(id)) this.active.delete(id);
+		for (const id of working) this.active.add(id);
+	}
+
+	/** Start the workers if there is work and nobody is draining it yet. */
+	private kick(): void {
+		if (this.phase === 'error' || !this.queue.length) return;
+		if (this.activeRun === this.runToken) return;
+		void this.run(this.runToken);
+	}
+
+	/** A construct is done — described, failed, or replaced by a manual edit. */
+	private finish(constructId: string): void {
+		this.backlog.delete(constructId);
+		this.inFlight.delete(constructId);
+		this.explicit.delete(constructId);
+		this.active.delete(constructId);
+	}
+
 	private async run(token: number): Promise<void> {
-		this.phase = 'running';
-		const worker = async (): Promise<void> => {
-			while (token === this.runToken && this.queue.length) {
-				// Cloud engines never contend with the speech engine for the GPU.
-				if (this.engine?.type === 'local') await this.gpuQuiet(token);
-				if (token !== this.runToken) return;
-				const construct = this.queue.shift();
-				if (!construct) return;
-				try {
-					const text = await this.rewrite(construct, token);
-					if (token !== this.runToken) return;
-					this.applyResult(construct, text);
-					this.completed += 1;
-				} catch (error) {
-					if (token !== this.runToken) return;
-					if (this.isOom(error) && this.engine?.type === 'local') {
-						const stopped = await this.handleOom(construct, token);
-						if (stopped || token !== this.runToken) return;
-						continue;
-					}
-					this.applyFailure(construct);
-					this.failed += 1;
-				}
-				this.notifyProgress();
-				if (this.engine?.type === 'local') await delay(ITEM_YIELD_MS);
+		if (this.activeRun === token) return;
+		this.activeRun = token;
+		/** A second out-of-memory strike paused narration until the next open. */
+		let halted = false;
+		try {
+			// Warm the engine only once there is something to describe — an
+			// empty window never loads the on-device model.
+			const ready = await this.ensureEngineReady();
+			if (token !== this.runToken) return;
+			if (!ready) {
+				this.queue = [];
+				this.active.clear();
+				return;
 			}
-		};
-		const workers = this.engine?.type === 'cloud' ? CLOUD_CONCURRENCY : 1;
-		await Promise.all(Array.from({ length: Math.min(workers, this.queue.length) || 1 }, worker));
+			this.phase = 'running';
+			const worker = async (): Promise<void> => {
+				while (token === this.runToken) {
+					// Cloud engines never contend with the speech engine for the GPU.
+					if (this.engine?.type === 'local') await this.gpuQuiet(token);
+					if (token !== this.runToken) return;
+					const construct = this.queue.shift();
+					if (!construct) return;
+					this.inFlight.add(construct.id);
+					try {
+						const text = await this.rewrite(construct, token);
+						if (token !== this.runToken) return;
+						this.applyResult(construct, text);
+						this.completed += 1;
+					} catch (error) {
+						if (token !== this.runToken) return;
+						if (this.isOom(error) && this.engine?.type === 'local') {
+							this.inFlight.delete(construct.id);
+							const stopped = await this.handleOom(construct, token);
+							if (stopped) halted = true;
+							if (stopped || token !== this.runToken) return;
+							continue;
+						}
+						this.applyFailure(construct);
+						this.failed += 1;
+					}
+					this.finish(construct.id);
+					this.notifyProgress();
+					if (this.engine?.type === 'local') await delay(ITEM_YIELD_MS);
+				}
+			};
+			// The window can grow while the pool drains (the reader moved on);
+			// keep going until it is empty for good.
+			while (token === this.runToken && this.queue.length) {
+				const workers = this.engine?.type === 'cloud' ? CLOUD_CONCURRENCY : 1;
+				await Promise.all(Array.from({ length: Math.min(workers, this.queue.length) }, worker));
+			}
+		} finally {
+			if (this.activeRun === token) this.activeRun = undefined;
+		}
 		if (token !== this.runToken) return;
-		this.phase = 'idle';
+		// Finishing the loop must not paper over that pause.
+		if (!halted) this.phase = 'idle';
 		this.flushRebind();
 		this.settleWhenClean(token);
 	}
@@ -621,6 +780,16 @@ export class NarrationState {
 			if (!book || book.id !== this.documentId) return;
 			void appState.saveDocument(book).catch(() => undefined);
 		}, PERSIST_DEBOUNCE_MS);
+	}
+
+	/** Save a pending batch now (document closing, page hiding). */
+	private flushPersist(): void {
+		if (!this.persistTimer) return;
+		clearTimeout(this.persistTimer);
+		this.persistTimer = null;
+		const book = player.book;
+		if (!book || book.id !== this.documentId) return;
+		void appState.saveDocument(book).catch(() => undefined);
 	}
 }
 

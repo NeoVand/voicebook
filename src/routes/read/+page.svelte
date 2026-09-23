@@ -575,7 +575,10 @@
 	}
 
 	async function openBook(next: NormalizedDocument | null): Promise<void> {
+		// Both background layers flush their pending saves for the document
+		// being left while it is still the one in the player.
 		narrationState.stop();
+		studyState.stop();
 		realtimeAssistant.stop();
 		narrationStartAction = undefined;
 		annotationEditor = undefined;
@@ -1262,11 +1265,55 @@
 		scheduleVisibleSectionUpdate();
 	}
 
+	/** A construct whose description is being written now or is next in
+	 * line. Pending constructs beyond the reader's reach are waiting, not
+	 * working, so they stay quiet instead of pulsing forever. */
+	function describing(segment: SpeechSegment | undefined): boolean {
+		const narration = segment?.narration;
+		return Boolean(
+			narration?.pending && narration.constructIds.some((id) => narrationState.active.has(id))
+		);
+	}
+
+	/**
+	 * The block of the first passage reaching the reading line — sections can
+	 * run for many screens, so the description window follows passages, not
+	 * headings. Geometry rather than hit-testing: a tour overlay, a popover,
+	 * or the chat panel floating over the text must not blind it. Passages are
+	 * in reading order, so a binary search needs about a dozen rect reads.
+	 */
+	function passageBlockInView(readingLine: number): string | undefined {
+		const segments = book?.segments ?? [];
+		const bottomOf = (index: number) =>
+			segmentElements.get(segments[index].id)?.getBoundingClientRect().bottom;
+		let low = 0;
+		let high = segments.length - 1;
+		let found: number | undefined;
+		while (low <= high) {
+			const middle = (low + high) >> 1;
+			// A passage without an element of its own: step to the next one.
+			let probe = middle;
+			let bottom = bottomOf(probe);
+			while (bottom === undefined && probe < high) bottom = bottomOf(++probe);
+			if (bottom === undefined) {
+				high = middle - 1;
+			} else if (bottom >= readingLine) {
+				found = probe;
+				high = middle - 1;
+			} else {
+				low = probe + 1;
+			}
+		}
+		return found === undefined ? undefined : segments[found].blockId;
+	}
+
 	function updateVisibleSection(): void {
 		readerScrollFrame = 0;
-		if (!readingCanvas || !book?.outline.length) return;
+		if (!readingCanvas || !book) return;
 		const canvasRect = readingCanvas.getBoundingClientRect();
 		const threshold = canvasRect.top + Math.min(160, readingCanvas.clientHeight * 0.22);
+		narrationState.notifyViewport(passageBlockInView(threshold));
+		if (!book.outline.length) return;
 		let lastBeforeThreshold: string | undefined;
 		let firstVisible: string | undefined;
 		for (const item of book.outline) {
@@ -1645,7 +1692,7 @@
 			class:annotated={annotationPaint.blockIds.has(block.id)}
 			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
-			class:narration-pending={segs[0]?.narration?.pending}
+			class:narration-pending={describing(segs[0])}
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || 'Diagram'}
@@ -1679,7 +1726,7 @@
 			class:annotated={annotationPaint.blockIds.has(block.id)}
 			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
-			class:narration-pending={segs[0]?.narration?.pending}
+			class:narration-pending={describing(segs[0])}
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || 'Code snippet'}
@@ -1712,7 +1759,7 @@
 			class:annotated={annotationPaint.blockIds.has(block.id)}
 			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			class:active={activeConstructIds.includes(block.id)}
-			class:narration-pending={segs[0]?.narration?.pending}
+			class:narration-pending={describing(segs[0])}
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || 'Equation'}
@@ -1832,7 +1879,7 @@
 						<tr
 							class="construct-row"
 							class:active={activeConstructIds.includes(`${block.id}:r${rowIndex}`)}
-							class:narration-pending={rowSegs[0]?.narration?.pending}
+							class:narration-pending={describing(rowSegs[0])}
 							tabindex="0"
 							title="Double-click to play from here"
 							data-segment-id={rowSegs[0]?.id}
@@ -1880,7 +1927,7 @@
 			class:explaining={explainingBlockIds.has(block.id) || assistantBlockIds.has(block.id)}
 			id={block.id}
 			class:active={activeConstructIds.includes(imageId)}
-			class:narration-pending={segs[0]?.narration?.pending}
+			class:narration-pending={describing(segs[0])}
 			role="button"
 			tabindex="0"
 			aria-label={segs.map((segment) => segment.text).join(' ') || run.image?.alt || noun}

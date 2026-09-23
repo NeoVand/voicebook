@@ -198,7 +198,7 @@
 				<Icon icon={RefreshCw} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>Regenerate descriptions</strong>
-					<small>{working ? 'Already rewriting…' : 'This document'}</small>
+					<small>{working ? 'Already rewriting…' : 'This document, from where you are'}</small>
 				</span>
 			</button>
 			<div class="menu-heading" role="presentation">Listening mode</div>

@@ -52,6 +52,14 @@ describe('fallbacks', () => {
 		expect(inlineMathFallback('\\begin{matrix} a \\\\ b \\end{matrix}')).toBe('a formula');
 	});
 
+	it('keeps a long exact reading instead of the placeholder', () => {
+		// Over sixty-four characters spoken — this used to become "a formula",
+		// and the model rewrite prompted for it was rejected by the same cap.
+		expect(inlineMathFallback('\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}')).toBe(
+			'the integral from minus infinity to infinity of e to the minus x squared d x equals the square root of pi'
+		);
+	});
+
 	it('reads display equations exactly when possible', () => {
 		expect(mathBlockFallback('E = mc^2')).toBe('E equals m c squared.');
 		expect(mathBlockFallback('\\unknowncmd{x}')).toBe('An equation is shown here.');

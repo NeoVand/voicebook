@@ -27,7 +27,10 @@ export type StudyPhase = 'idle' | 'running';
 
 /** Independent HTTP calls — the same small pool the narration layer uses. */
 const CLOUD_CONCURRENCY = 3;
-const PERSIST_DEBOUNCE_MS = 1_000;
+/** Saves batch like the narration layer's: a long document is megabytes of
+ * JSON, so one save per landed note stalled the page. Pending batches flush
+ * when the document closes or the page hides. */
+const PERSIST_DEBOUNCE_MS = 4_000;
 const MAX_RETRY_AFTER_MS = 15_000;
 /** cloudTokenBudget scales these ×4: ~480 tokens per summary, 512 for the
  * abstract — generous for three sentences, cheap on the fast tiers. */
@@ -49,6 +52,15 @@ export class StudyState {
 	private runToken = 0;
 	private queue: StudySection[] = [];
 	private persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+	constructor() {
+		if (typeof window !== 'undefined') {
+			window.addEventListener('pagehide', () => this.flushPersist());
+			document.addEventListener('visibilitychange', () => {
+				if (document.visibilityState === 'hidden') this.flushPersist();
+			});
+		}
+	}
 
 	/** Whether any study engine can run right now (a keyed cloud provider). */
 	get available(): boolean {
@@ -95,6 +107,8 @@ export class StudyState {
 	/** Abandon the queue (document closed or switched). In-flight calls settle
 	 * on their own; their results are dropped by the token check. */
 	stop(): void {
+		// Save what already landed before the document reference moves on.
+		this.flushPersist();
 		this.runToken += 1;
 		this.queue = [];
 		this.phase = 'idle';
@@ -259,6 +273,16 @@ export class StudyState {
 			if (!book || book.id !== this.documentId) return;
 			void appState.saveDocument(book).catch(() => undefined);
 		}, PERSIST_DEBOUNCE_MS);
+	}
+
+	/** Save a pending batch now (document closing, page hiding). */
+	private flushPersist(): void {
+		if (!this.persistTimer) return;
+		clearTimeout(this.persistTimer);
+		this.persistTimer = null;
+		const book = player.book;
+		if (!book || book.id !== this.documentId) return;
+		void appState.saveDocument(book).catch(() => undefined);
 	}
 }
 
