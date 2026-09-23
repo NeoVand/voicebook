@@ -28,6 +28,10 @@ describe('cloud LLM provider catalog', () => {
 		}
 	});
 
+	it('defaults OpenAI to GPT-6 Luna', () => {
+		expect(defaultCloudLlmModel('openai')).toBe('gpt-6-luna');
+	});
+
 	it('guards engine ids', () => {
 		expect(isCloudLlmProvider('anthropic')).toBe(true);
 		expect(isCloudLlmProvider('local')).toBe(false);
