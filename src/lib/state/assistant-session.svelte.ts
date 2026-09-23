@@ -358,7 +358,7 @@ export abstract class AssistantSession {
 
 	/** Merge this session's footprint into the document and persist it. Runs
 	 * on stop, before the document reference is dropped. */
-	private flushConversationFootprint(): void {
+	protected flushConversationFootprint(): void {
 		const doc = this.document;
 		const touched = this.sessionBlocks;
 		if (doc && touched.size) {

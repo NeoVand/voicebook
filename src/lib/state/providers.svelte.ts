@@ -10,11 +10,18 @@
  * bundle contains none of this (the DEV branch is compiled out).
  */
 import {
+	DEFAULT_ASSISTANT_ENGINE,
 	DEFAULT_ELEVENLABS_MODEL,
 	DEFAULT_ELEVENLABS_VOICE,
+	DEFAULT_LIVE_EFFORT,
+	DEFAULT_LIVE_VOICE,
 	DEFAULT_REALTIME_EFFORT,
 	DEFAULT_REALTIME_VOICE,
 	ELEVENLABS_MODELS,
+	isAssistantEngine,
+	isLiveEffort,
+	LIVE_BRAIN_MODELS,
+	LIVE_VOICES,
 	elevenLabsRevision,
 	elevenLabsVoiceSettings,
 	getElevenLabsModel,
@@ -27,11 +34,13 @@ import {
 	isRealtimeEffort,
 	STUDY_PROVIDER_ORDER,
 	type ApiProvider,
+	type AssistantEngine,
 	type CloudLlmProvider,
 	type DescriptionEngine,
 	type ElevenLabsModelSpec,
 	type ElevenLabsVoice,
 	type ElevenLabsVoiceOptions,
+	type LiveEffort,
 	type RealtimeEffort,
 	type SpeechEngine,
 	type StudyEngine
@@ -78,6 +87,11 @@ export class ProvidersState {
 	realtimeModelId = $state<string>(REALTIME_MODELS[0].id);
 	realtimeVoice = $state<string>(DEFAULT_REALTIME_VOICE);
 	realtimeEffort = $state<RealtimeEffort>(DEFAULT_REALTIME_EFFORT);
+	/** Which engine runs the voice assistant, and GPT-Live's voice and brain. */
+	assistantEngine = $state<AssistantEngine>(DEFAULT_ASSISTANT_ENGINE);
+	liveVoice = $state<string>(DEFAULT_LIVE_VOICE);
+	liveBrainModel = $state<string>(LIVE_BRAIN_MODELS[0].id);
+	liveBrainEffort = $state<LiveEffort>(DEFAULT_LIVE_EFFORT);
 	elevenLabsModelId = $state<string>(DEFAULT_ELEVENLABS_MODEL);
 	elevenLabsVoiceId = $state<string>(DEFAULT_ELEVENLABS_VOICE);
 	/** Synthesis knobs kept per model id — v3 and v2 tune independently. */
@@ -108,7 +122,11 @@ export class ProvidersState {
 				rtVoice,
 				rtEffort,
 				studyEngine,
-				studyModels
+				studyModels,
+				engineChoice,
+				liveVoice,
+				liveBrainModel,
+				liveBrainEffort
 			] = await Promise.all([
 				getSetting<KeyMap>('provider-api-keys', {}),
 				getSetting<string>('description-engine', 'local'),
@@ -122,7 +140,11 @@ export class ProvidersState {
 				getSetting<string>('realtime-voice', DEFAULT_REALTIME_VOICE),
 				getSetting<string>('realtime-effort', DEFAULT_REALTIME_EFFORT),
 				getSetting<string>('study-engine', 'auto'),
-				getSetting<Partial<Record<CloudLlmProvider, string>>>('study-models', {})
+				getSetting<Partial<Record<CloudLlmProvider, string>>>('study-models', {}),
+				getSetting<string>('assistant-engine', DEFAULT_ASSISTANT_ENGINE),
+				getSetting<string>('live-voice', DEFAULT_LIVE_VOICE),
+				getSetting<string>('live-brain-model', LIVE_BRAIN_MODELS[0].id),
+				getSetting<string>('live-brain-effort', DEFAULT_LIVE_EFFORT)
 			]);
 			this.userKeys = keys ?? {};
 			this.descriptionEngine = engine === 'local' || isCloudLlmProvider(engine) ? engine : 'local';
@@ -144,6 +166,16 @@ export class ProvidersState {
 				? rtVoice
 				: DEFAULT_REALTIME_VOICE;
 			this.realtimeEffort = isRealtimeEffort(rtEffort) ? rtEffort : DEFAULT_REALTIME_EFFORT;
+			this.assistantEngine = isAssistantEngine(engineChoice)
+				? engineChoice
+				: DEFAULT_ASSISTANT_ENGINE;
+			this.liveVoice = LIVE_VOICES.some((voice) => voice.id === liveVoice)
+				? liveVoice
+				: DEFAULT_LIVE_VOICE;
+			this.liveBrainModel = LIVE_BRAIN_MODELS.some((model) => model.id === liveBrainModel)
+				? liveBrainModel
+				: LIVE_BRAIN_MODELS[0].id;
+			this.liveBrainEffort = isLiveEffort(liveBrainEffort) ? liveBrainEffort : DEFAULT_LIVE_EFFORT;
 		} finally {
 			this.initialized = true;
 		}
@@ -289,6 +321,26 @@ export class ProvidersState {
 	async setRealtimeEffort(effort: RealtimeEffort): Promise<void> {
 		this.realtimeEffort = effort;
 		await setSetting('realtime-effort', effort);
+	}
+
+	async setAssistantEngine(engine: AssistantEngine): Promise<void> {
+		this.assistantEngine = engine;
+		await setSetting('assistant-engine', engine);
+	}
+
+	async setLiveVoice(voiceId: string): Promise<void> {
+		this.liveVoice = voiceId;
+		await setSetting('live-voice', voiceId);
+	}
+
+	async setLiveBrainModel(modelId: string): Promise<void> {
+		this.liveBrainModel = modelId;
+		await setSetting('live-brain-model', modelId);
+	}
+
+	async setLiveBrainEffort(effort: LiveEffort): Promise<void> {
+		this.liveBrainEffort = effort;
+		await setSetting('live-brain-effort', effort);
 	}
 
 	async setElevenLabsModel(modelId: string): Promise<void> {

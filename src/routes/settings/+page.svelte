@@ -30,8 +30,12 @@
 	import { getModel } from '$lib/domain/model-catalog';
 	import { LLM_CATALOG, type LlmModelSpec } from '$lib/domain/llm-catalog';
 	import {
+		ASSISTANT_ENGINES,
 		CLOUD_LLM_PROVIDERS,
 		ELEVENLABS_FAMILIES,
+		LIVE_BRAIN_MODELS,
+		LIVE_EFFORTS,
+		LIVE_VOICES,
 		REALTIME_EFFORTS,
 		REALTIME_MODELS,
 		REALTIME_VOICES,
@@ -39,6 +43,7 @@
 		type CloudLlmProvider,
 		type DescriptionEngine,
 		type ElevenLabsVoice,
+		type LiveEffort,
 		type RealtimeEffort,
 		type SpeechEngine,
 		type StudyEngine,
@@ -115,6 +120,49 @@
 		high: 'more careful',
 		xhigh: 'deepest, slowest'
 	};
+	const LIVE_EFFORT_NOTES: Record<LiveEffort, string> = {
+		none: 'fastest replies · recommended',
+		low: 'a little more careful',
+		medium: 'balanced',
+		high: 'most careful, slowest'
+	};
+
+	/* GPT-Live and GPT Realtime keep their own voice, model, and effort. */
+	let liveEngine = $derived(providersState.assistantEngine === 'live');
+	let assistantVoices = $derived(liveEngine ? LIVE_VOICES : REALTIME_VOICES);
+	let assistantVoiceId = $derived(
+		liveEngine ? providersState.liveVoice : providersState.realtimeVoice
+	);
+	let assistantModels = $derived(liveEngine ? LIVE_BRAIN_MODELS : REALTIME_MODELS);
+	let assistantModelId = $derived(
+		liveEngine ? providersState.liveBrainModel : providersState.realtimeModelId
+	);
+	let assistantEfforts = $derived<Array<{ id: string; label: string; note: string }>>(
+		liveEngine
+			? LIVE_EFFORTS.map((effort) => ({ ...effort, note: LIVE_EFFORT_NOTES[effort.id] }))
+			: REALTIME_EFFORTS.map((effort) => ({ ...effort, note: ASSISTANT_EFFORT_NOTES[effort.id] }))
+	);
+	let assistantEffortId = $derived(
+		liveEngine ? providersState.liveBrainEffort : providersState.realtimeEffort
+	);
+
+	function chooseAssistantVoice(id: string): void {
+		if (liveEngine) void providersState.setLiveVoice(id);
+		else void providersState.setRealtimeVoice(id);
+		assistant.applyLiveSettings();
+	}
+
+	function chooseAssistantModel(id: string): void {
+		if (liveEngine) void providersState.setLiveBrainModel(id);
+		else void providersState.setRealtimeModel(id);
+		assistant.applyLiveSettings();
+	}
+
+	function chooseAssistantEffort(id: string): void {
+		if (liveEngine) void providersState.setLiveBrainEffort(id as LiveEffort);
+		else void providersState.setRealtimeEffort(id as RealtimeEffort);
+		assistant.applyLiveSettings();
+	}
 	let busy = $state(false);
 	let storageBusy = $state(false);
 	let previewState = $state<PreviewState>('idle');
@@ -1213,19 +1261,34 @@
 				</span>
 			</header>
 
+			<div class="assistant-group" role="group" aria-label="Assistant engine">
+				<span class="assistant-group-label">Engine</span>
+				<div class="engine-models">
+					{#each ASSISTANT_ENGINES as engine (engine.id)}
+						<button
+							type="button"
+							class="engine-model"
+							class:selected={providersState.assistantEngine === engine.id}
+							aria-pressed={providersState.assistantEngine === engine.id}
+							onclick={() => void assistant.setEngine(engine.id)}
+						>
+							<strong>{engine.label}</strong>
+							<small>{engine.tagline}</small>
+						</button>
+					{/each}
+				</div>
+			</div>
+
 			<div class="assistant-group" role="group" aria-label="Assistant voice">
 				<span class="assistant-group-label">Voice</span>
 				<div class="voice-grid">
-					{#each REALTIME_VOICES as voice (voice.id)}
-						<div class="voice-card" class:selected={providersState.realtimeVoice === voice.id}>
+					{#each assistantVoices as voice (voice.id)}
+						<div class="voice-card" class:selected={assistantVoiceId === voice.id}>
 							<button
 								type="button"
 								class="voice-select"
-								aria-pressed={providersState.realtimeVoice === voice.id}
-								onclick={() => {
-									void providersState.setRealtimeVoice(voice.id);
-									assistant.applyLiveSettings();
-								}}
+								aria-pressed={assistantVoiceId === voice.id}
+								onclick={() => chooseAssistantVoice(voice.id)}
 							>
 								<strong>
 									{voice.label}
@@ -1233,25 +1296,27 @@
 								</strong>
 								<small>{voice.tagline}</small>
 							</button>
-							<button
-								type="button"
-								class="voice-preview-button"
-								class:sounding={assistantVoicePlaying === voice.id}
-								aria-label={assistantVoicePlaying === voice.id
-									? `Stop the ${voice.label} sample`
-									: `Hear a sample of ${voice.label}`}
-								title={assistantVoicePlaying === voice.id ? 'Stop sample' : 'Hear a sample'}
-								disabled={assistantVoiceLoading !== null && assistantVoiceLoading !== voice.id}
-								onclick={() => void previewAssistantVoiceSample(voice.id)}
-							>
-								{#if assistantVoiceLoading === voice.id}
-									<Icon icon={LoaderCircle} class="spin" size={12} />
-								{:else if assistantVoicePlaying === voice.id}
-									<Icon icon={Square} size={10} />
-								{:else}
-									<Icon icon={Play} size={12} />
-								{/if}
-							</button>
+							{#if !voice.liveOnly}
+								<button
+									type="button"
+									class="voice-preview-button"
+									class:sounding={assistantVoicePlaying === voice.id}
+									aria-label={assistantVoicePlaying === voice.id
+										? `Stop the ${voice.label} sample`
+										: `Hear a sample of ${voice.label}`}
+									title={assistantVoicePlaying === voice.id ? 'Stop sample' : 'Hear a sample'}
+									disabled={assistantVoiceLoading !== null && assistantVoiceLoading !== voice.id}
+									onclick={() => void previewAssistantVoiceSample(voice.id)}
+								>
+									{#if assistantVoiceLoading === voice.id}
+										<Icon icon={LoaderCircle} class="spin" size={12} />
+									{:else if assistantVoicePlaying === voice.id}
+										<Icon icon={Square} size={10} />
+									{:else}
+										<Icon icon={Play} size={12} />
+									{/if}
+								</button>
+							{/if}
 						</div>
 					{/each}
 				</div>
@@ -1260,19 +1325,20 @@
 				{/if}
 			</div>
 
-			<div class="assistant-group" role="group" aria-label="Assistant model">
-				<span class="assistant-group-label">Model</span>
+			<div
+				class="assistant-group"
+				role="group"
+				aria-label={liveEngine ? 'Assistant brain' : 'Assistant model'}
+			>
+				<span class="assistant-group-label">{liveEngine ? 'Brain' : 'Model'}</span>
 				<div class="engine-models">
-					{#each REALTIME_MODELS as model (model.id)}
+					{#each assistantModels as model (model.id)}
 						<button
 							type="button"
 							class="engine-model"
-							class:selected={providersState.realtimeModelId === model.id}
-							aria-pressed={providersState.realtimeModelId === model.id}
-							onclick={() => {
-								void providersState.setRealtimeModel(model.id);
-								assistant.applyLiveSettings();
-							}}
+							class:selected={assistantModelId === model.id}
+							aria-pressed={assistantModelId === model.id}
+							onclick={() => chooseAssistantModel(model.id)}
 						>
 							<strong>{model.label}</strong>
 							<small>{model.tagline}</small>
@@ -1284,19 +1350,16 @@
 			<div class="assistant-group" role="group" aria-label="Assistant thinking effort">
 				<span class="assistant-group-label">Thinking</span>
 				<div class="engine-models assistant-grid">
-					{#each REALTIME_EFFORTS as effort (effort.id)}
+					{#each assistantEfforts as effort (effort.id)}
 						<button
 							type="button"
 							class="engine-model"
-							class:selected={providersState.realtimeEffort === effort.id}
-							aria-pressed={providersState.realtimeEffort === effort.id}
-							onclick={() => {
-								void providersState.setRealtimeEffort(effort.id as RealtimeEffort);
-								assistant.applyLiveSettings();
-							}}
+							class:selected={assistantEffortId === effort.id}
+							aria-pressed={assistantEffortId === effort.id}
+							onclick={() => chooseAssistantEffort(effort.id)}
 						>
 							<strong>{effort.label}</strong>
-							<small>{ASSISTANT_EFFORT_NOTES[effort.id]}</small>
+							<small>{effort.note}</small>
 						</button>
 					{/each}
 				</div>

@@ -5,9 +5,13 @@
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
 	import {
+		LIVE_BRAIN_MODELS,
+		LIVE_EFFORTS,
+		LIVE_VOICES,
 		REALTIME_EFFORTS,
 		REALTIME_MODELS,
 		REALTIME_VOICES,
+		type LiveEffort,
 		type RealtimeEffort
 	} from '$lib/domain/provider-catalog';
 	import type { NormalizedDocument } from '$lib/domain/types';
@@ -170,6 +174,35 @@
 		assistant.stop();
 	}
 
+	/* GPT-Live and GPT Realtime keep their own voice, model, and effort. */
+	let live = $derived(assistant.engine === 'live');
+	let voices = $derived(live ? LIVE_VOICES : REALTIME_VOICES);
+	let voiceId = $derived(live ? providersState.liveVoice : providersState.realtimeVoice);
+	let models = $derived(live ? LIVE_BRAIN_MODELS : REALTIME_MODELS);
+	let modelId = $derived(live ? providersState.liveBrainModel : providersState.realtimeModelId);
+	let efforts = $derived<Array<{ id: string; label: string }>>(
+		live ? LIVE_EFFORTS : REALTIME_EFFORTS
+	);
+	let effortId = $derived(live ? providersState.liveBrainEffort : providersState.realtimeEffort);
+
+	function chooseVoice(id: string): void {
+		if (live) void providersState.setLiveVoice(id);
+		else void providersState.setRealtimeVoice(id);
+		assistant.applyLiveSettings();
+	}
+
+	function chooseModel(id: string): void {
+		if (live) void providersState.setLiveBrainModel(id);
+		else void providersState.setRealtimeModel(id);
+		assistant.applyLiveSettings();
+	}
+
+	function chooseEffort(id: string): void {
+		if (live) void providersState.setLiveBrainEffort(id as LiveEffort);
+		else void providersState.setRealtimeEffort(id as RealtimeEffort);
+		assistant.applyLiveSettings();
+	}
+
 	let status = $derived(assistant.status);
 	let listening = $derived(assistant.listening);
 	let handsFree = $derived(assistant.mode === 'handsFree' && assistant.active);
@@ -254,21 +287,18 @@
 				<div class="menu-heading">
 					<strong>Voice</strong>
 					{#if assistant.active}
-						<small>applies now · restarts the chat</small>
+						<small>{live ? 'applies now · reconnects' : 'applies now · restarts the chat'}</small>
 					{/if}
 				</div>
 				<div class="voice-options">
-					{#each REALTIME_VOICES as voice (voice.id)}
+					{#each voices as voice (voice.id)}
 						<button
-							class:selected={voice.id === providersState.realtimeVoice}
+							class:selected={voice.id === voiceId}
 							type="button"
 							role="menuitemradio"
-							aria-checked={voice.id === providersState.realtimeVoice}
+							aria-checked={voice.id === voiceId}
 							title={voice.tagline}
-							onclick={() => {
-								void providersState.setRealtimeVoice(voice.id);
-								assistant.applyLiveSettings();
-							}}
+							onclick={() => chooseVoice(voice.id)}
 						>
 							{voice.label}
 						</button>
@@ -276,24 +306,26 @@
 				</div>
 			</div>
 
-			<div class="menu-group" role="group" aria-label="Assistant model">
+			<div
+				class="menu-group"
+				role="group"
+				aria-label={live ? 'Assistant brain' : 'Assistant model'}
+			>
 				<div class="menu-heading">
-					<strong>Model</strong>
+					<strong>{live ? 'Brain' : 'Model'}</strong>
+					{#if live}<small>reads the document for the voice</small>{/if}
 				</div>
 				<div class="segmented-options">
-					{#each REALTIME_MODELS as model (model.id)}
+					{#each models as model (model.id)}
 						<button
-							class:selected={model.id === providersState.realtimeModelId}
+							class:selected={model.id === modelId}
 							type="button"
 							role="menuitemradio"
-							aria-checked={model.id === providersState.realtimeModelId}
+							aria-checked={model.id === modelId}
 							title={model.tagline}
-							onclick={() => {
-								void providersState.setRealtimeModel(model.id);
-								assistant.applyLiveSettings();
-							}}
+							onclick={() => chooseModel(model.id)}
 						>
-							{model.label.replace('GPT Realtime ', '')}
+							{model.label.replace('GPT Realtime ', '').replace('GPT-6 ', '')}
 						</button>
 					{/each}
 				</div>
@@ -305,16 +337,13 @@
 					<small>higher is smarter, slower</small>
 				</div>
 				<div class="segmented-options">
-					{#each REALTIME_EFFORTS as effort (effort.id)}
+					{#each efforts as effort (effort.id)}
 						<button
-							class:selected={effort.id === providersState.realtimeEffort}
+							class:selected={effort.id === effortId}
 							type="button"
 							role="menuitemradio"
-							aria-checked={effort.id === providersState.realtimeEffort}
-							onclick={() => {
-								void providersState.setRealtimeEffort(effort.id as RealtimeEffort);
-								assistant.applyLiveSettings();
-							}}
+							aria-checked={effort.id === effortId}
+							onclick={() => chooseEffort(effort.id)}
 						>
 							{effort.label}
 						</button>

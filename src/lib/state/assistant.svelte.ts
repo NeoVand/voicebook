@@ -4,8 +4,11 @@
  * typed-chat panel's own state lives here, so it survives an engine switch.
  */
 import type { PassageRange, ReaderFocus } from '$lib/domain/assistant-context';
+import type { AssistantEngine } from '$lib/domain/provider-catalog';
 import type { NormalizedDocument } from '$lib/domain/types';
 import type { AssistantSession } from './assistant-session.svelte';
+import { liveAssistant } from './live-assistant.svelte';
+import { providersState } from './providers.svelte';
 import { realtimeAssistant } from './realtime-assistant.svelte';
 
 class Assistant {
@@ -20,12 +23,23 @@ class Assistant {
 	chatPosition = $state<{ left: number; top: number } | null>(null);
 
 	private get engines(): AssistantSession[] {
-		return [realtimeAssistant];
+		return [liveAssistant, realtimeAssistant];
 	}
 
 	/** The engine running (or about to run) the conversation. */
 	get session(): AssistantSession {
-		return realtimeAssistant;
+		return providersState.assistantEngine === 'realtime' ? realtimeAssistant : liveAssistant;
+	}
+
+	get engine(): AssistantEngine {
+		return providersState.assistantEngine;
+	}
+
+	/** Switch engines; a conversation on the other one ends. */
+	async setEngine(engine: AssistantEngine): Promise<void> {
+		if (engine === providersState.assistantEngine) return;
+		this.session.stop();
+		await providersState.setAssistantEngine(engine);
 	}
 
 	get status() {
