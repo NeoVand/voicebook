@@ -371,6 +371,8 @@ export interface RealtimeVoiceSpec {
 	tagline: string;
 	/** OpenAI's conversation-tuned picks, shown with a badge. */
 	recommended?: boolean;
+	/** Only GPT-Live speaks it; the speech endpoint cannot preview it. */
+	liveOnly?: boolean;
 }
 
 /** Every voice the realtime endpoint accepts (probed from the API's own
@@ -410,6 +412,77 @@ export const DEFAULT_REALTIME_EFFORT: RealtimeEffort = 'low';
 export function isRealtimeEffort(value: string): value is RealtimeEffort {
 	return REALTIME_EFFORTS.some((effort) => effort.id === value);
 }
+
+/* ── GPT-Live voice assistant ────────────────────────────────────────────── */
+
+/** Which engine runs the voice assistant. GPT-Live is a full-duplex voice
+ * that hands document questions to a GPT-6 brain; GPT Realtime is one
+ * speech-to-speech model carrying everything itself. */
+export type AssistantEngine = 'live' | 'realtime';
+
+export const ASSISTANT_ENGINES: Array<{ id: AssistantEngine; label: string; tagline: string }> = [
+	{
+		id: 'live',
+		label: 'GPT-Live',
+		tagline: 'natural back-and-forth · a GPT-6 brain reads the document · recommended'
+	},
+	{ id: 'realtime', label: 'GPT Realtime', tagline: 'one speech-to-speech model' }
+];
+
+export const DEFAULT_ASSISTANT_ENGINE: AssistantEngine = 'live';
+
+export function isAssistantEngine(value: string): value is AssistantEngine {
+	return ASSISTANT_ENGINES.some((engine) => engine.id === value);
+}
+
+export const LIVE_MODEL = 'gpt-live-1';
+
+/** The Responses models a GPT-Live voice delegates to. First entry is the
+ * default. */
+export const LIVE_BRAIN_MODELS: RealtimeModelSpec[] = [
+	{ id: 'gpt-6-luna', label: 'GPT-6 Luna', tagline: 'fast · recommended' },
+	{ id: 'gpt-6-sol', label: 'GPT-6 Sol', tagline: 'deeper answers · slower' }
+];
+
+export type LiveEffort = 'none' | 'low' | 'medium' | 'high';
+
+/** The brain's reasoning.effort. GPT-6 defaults to medium when unset, so it
+ * is always sent. */
+export const LIVE_EFFORTS: Array<{ id: LiveEffort; label: string }> = [
+	{ id: 'none', label: 'None' },
+	{ id: 'low', label: 'Low' },
+	{ id: 'medium', label: 'Med' },
+	{ id: 'high', label: 'High' }
+];
+
+/** None answers fastest; the brain still reads before it speaks. */
+export const DEFAULT_LIVE_EFFORT: LiveEffort = 'none';
+
+export function isLiveEffort(value: string): value is LiveEffort {
+	return LIVE_EFFORTS.some((effort) => effort.id === value);
+}
+
+/** GPT-Live speaks Realtime's ten voices plus twelve with regional accents.
+ * The twelve exist only on Live — the speech endpoint rejects them, so they
+ * cannot be previewed through it. */
+export const LIVE_VOICES: RealtimeVoiceSpec[] = [
+	...REALTIME_VOICES,
+	{ id: 'gleam', label: 'Gleam', tagline: 'North American · bright', liveOnly: true },
+	{ id: 'meridian', label: 'Meridian', tagline: 'North American · steady', liveOnly: true },
+	{ id: 'vesper', label: 'Vesper', tagline: 'British', liveOnly: true },
+	{ id: 'willow', label: 'Willow', tagline: 'Irish · soft', liveOnly: true },
+	{ id: 'stone', label: 'Stone', tagline: 'Irish · grounded', liveOnly: true },
+	{ id: 'quartz', label: 'Quartz', tagline: 'Australian · clear', liveOnly: true },
+	{ id: 'ripple', label: 'Ripple', tagline: 'Australian · easygoing', liveOnly: true },
+	{ id: 'delta', label: 'Delta', tagline: 'Southern U.S. · warm', liveOnly: true },
+	{ id: 'cinder', label: 'Cinder', tagline: 'Southern U.S. · deep', liveOnly: true },
+	{ id: 'beacon', label: 'Beacon', tagline: 'Filipino English', liveOnly: true },
+	{ id: 'bossa', label: 'Bossa', tagline: 'Brazilian Portuguese', liveOnly: true },
+	{ id: 'tempo', label: 'Tempo', tagline: 'Brazilian Portuguese', liveOnly: true }
+];
+
+/** Marin, like Realtime — the voice OpenAI tunes for conversation. */
+export const DEFAULT_LIVE_VOICE = 'marin';
 
 export const PROVIDER_LABELS: Record<ApiProvider, { label: string; vendor: string }> = {
 	anthropic: { label: 'Claude', vendor: 'Anthropic' },

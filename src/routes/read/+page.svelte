@@ -80,7 +80,7 @@
 	import { player } from '$lib/state/player.svelte';
 	import { providersState } from '$lib/state/providers.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
-	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
+	import { assistant } from '$lib/state/assistant.svelte';
 	import { studyState } from '$lib/state/study.svelte';
 	import type { PassageRange } from '$lib/domain/assistant-context';
 
@@ -481,7 +481,7 @@
 				if (element) scrollNarrationIntoView(element);
 			});
 		};
-		realtimeAssistant.onShowPassage = (range) => {
+		assistant.onShowPassage = (range) => {
 			assistantFocus = range;
 			assistantPointId = undefined;
 			requestAnimationFrame(() => {
@@ -490,7 +490,7 @@
 				if (element) scrollNarrationIntoView(element);
 			});
 		};
-		realtimeAssistant.onPointAt = (index) => {
+		assistant.onPointAt = (index) => {
 			const segment = book?.segments[index];
 			if (!segment) return;
 			assistantPointId = segment.id;
@@ -499,16 +499,16 @@
 				if (element) scrollNarrationIntoView(element);
 			});
 		};
-		realtimeAssistant.onClearHighlight = () => {
+		assistant.onClearHighlight = () => {
 			assistantFocus = undefined;
 			assistantPointId = undefined;
 		};
-		realtimeAssistant.onGetReaderFocus = () => ({
+		assistant.onGetReaderFocus = () => ({
 			selection: selectionSegmentRange(),
 			hovered: hoveredSegmentId ? segmentIndexes.get(hoveredSegmentId) : undefined,
 			playhead: player.currentSegmentIndex
 		});
-		realtimeAssistant.onAddAnnotation = (range, note) => {
+		assistant.onAddAnnotation = (range, note) => {
 			const current = book;
 			if (!current) return false;
 			const annotation = annotationForRange(current, range, { createdBy: 'assistant', note });
@@ -522,7 +522,7 @@
 			});
 			return true;
 		};
-		realtimeAssistant.onPlayPassage = (range) => {
+		assistant.onPlayPassage = (range) => {
 			const endSegment = book?.segments[range.endIndex];
 			if (!book || !endSegment) return;
 			player.autoFollow = true;
@@ -545,13 +545,13 @@
 			if (scrollbarTimer) clearTimeout(scrollbarTimer);
 			if (spaceHoldTimer) clearTimeout(spaceHoldTimer);
 			player.onSegmentChange = undefined;
-			realtimeAssistant.stop();
-			realtimeAssistant.onShowPassage = undefined;
-			realtimeAssistant.onClearHighlight = undefined;
-			realtimeAssistant.onPlayPassage = undefined;
-			realtimeAssistant.onGetReaderFocus = undefined;
-			realtimeAssistant.onPointAt = undefined;
-			realtimeAssistant.onAddAnnotation = undefined;
+			assistant.stop();
+			assistant.onShowPassage = undefined;
+			assistant.onClearHighlight = undefined;
+			assistant.onPlayPassage = undefined;
+			assistant.onGetReaderFocus = undefined;
+			assistant.onPointAt = undefined;
+			assistant.onAddAnnotation = undefined;
 			narrationState.stop();
 			void releasePdfRenderer();
 		};
@@ -579,7 +579,7 @@
 		// being left while it is still the one in the player.
 		narrationState.stop();
 		studyState.stop();
-		realtimeAssistant.stop();
+		assistant.stop();
 		narrationStartAction = undefined;
 		annotationEditor = undefined;
 		expandedStudyNodes.clear();
@@ -1384,14 +1384,14 @@
 			clearTimeout(spaceHoldTimer);
 			spaceHoldTimer = setTimeout(() => {
 				spaceHolding = true;
-				if (book) void realtimeAssistant.beginTalking(book);
+				if (book) void assistant.beginTalking(book);
 			}, 250);
 		} else if (event.key === '/') {
 			// Hold Space to talk, press / to type — the same assistant either
 			// way. Handled before the focused-control guard because "/" does
 			// nothing to a button, and the caret should always land.
 			event.preventDefault();
-			if (book) realtimeAssistant.openChat();
+			if (book) assistant.openChat();
 		} else if (target?.matches('button,[data-segment-id]')) return;
 		else if (event.key.toLowerCase() === 'j') void player.seekBy(-10);
 		else if (event.key.toLowerCase() === 'l') void player.seekBy(10);
@@ -1422,13 +1422,13 @@
 		clearTimeout(spaceHoldTimer);
 		if (spaceHolding) {
 			spaceHolding = false;
-			realtimeAssistant.stopTalking();
+			assistant.stopTalking();
 			return;
 		}
 		// While a voice conversation is on, Space belongs to it — a quick tap
 		// hushes the assistant into standby instead of toggling narration.
-		if (realtimeAssistant.active) {
-			realtimeAssistant.hush();
+		if (assistant.active) {
+			assistant.hush();
 			return;
 		}
 		if (player.isBuffering) player.cancelGeneration();
@@ -2410,36 +2410,32 @@
 				</button>
 			{/if}
 
-			{#if realtimeAssistant.status !== 'idle' && (readerChrome.assistantCaptions || realtimeAssistant.status === 'error')}
-				<div
-					class="assistant-caption"
-					class:failed={realtimeAssistant.status === 'error'}
-					role="status"
-				>
+			{#if assistant.status !== 'idle' && (readerChrome.assistantCaptions || assistant.status === 'error')}
+				<div class="assistant-caption" class:failed={assistant.status === 'error'} role="status">
 					<span
 						class="assistant-caption-dot"
-						class:speaking={realtimeAssistant.speaking || realtimeAssistant.listening}
+						class:speaking={assistant.speaking || assistant.listening}
 						aria-hidden="true"
 					></span>
 					<span class="assistant-caption-text">
-						{#if realtimeAssistant.tourProgress && realtimeAssistant.status === 'live'}
+						{#if assistant.tourProgress && assistant.status === 'live'}
 							<strong class="assistant-tour-step">
-								Stop {realtimeAssistant.tourProgress.stop} of {realtimeAssistant.tourProgress.of}
+								Stop {assistant.tourProgress.stop} of {assistant.tourProgress.of}
 							</strong>
 							·
 						{/if}
-						{realtimeAssistant.status === 'connecting'
+						{assistant.status === 'connecting'
 							? 'Connecting…'
-							: realtimeAssistant.status === 'error'
-								? realtimeAssistant.errorMessage
-								: realtimeAssistant.caption ||
-									(realtimeAssistant.listening
-										? realtimeAssistant.mode === 'handsFree'
+							: assistant.status === 'error'
+								? assistant.errorMessage
+								: assistant.caption ||
+									(assistant.listening
+										? assistant.mode === 'handsFree'
 											? 'Listening — click the mic for options'
 											: 'Listening — release to send'
 										: 'Hold the mic or Space to talk — click the mic for options')}
 					</span>
-					{#if realtimeAssistant.status !== 'error'}
+					{#if assistant.status !== 'error'}
 						<button
 							class="assistant-caption-close"
 							type="button"
@@ -2453,11 +2449,8 @@
 					<button
 						class="assistant-caption-close"
 						type="button"
-						aria-label={realtimeAssistant.active ? 'End the voice conversation' : 'Dismiss'}
-						onclick={() =>
-							realtimeAssistant.active
-								? realtimeAssistant.stop()
-								: realtimeAssistant.dismissError()}
+						aria-label={assistant.active ? 'End the voice conversation' : 'Dismiss'}
+						onclick={() => (assistant.active ? assistant.stop() : assistant.dismissError())}
 					>
 						<Icon icon={X} size={13} />
 					</button>

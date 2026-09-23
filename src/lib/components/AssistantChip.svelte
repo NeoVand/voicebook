@@ -5,15 +5,19 @@
 	import type { Attachment } from 'svelte/attachments';
 	import { fly } from 'svelte/transition';
 	import {
+		LIVE_BRAIN_MODELS,
+		LIVE_EFFORTS,
+		LIVE_VOICES,
 		REALTIME_EFFORTS,
 		REALTIME_MODELS,
 		REALTIME_VOICES,
+		type LiveEffort,
 		type RealtimeEffort
 	} from '$lib/domain/provider-catalog';
 	import type { NormalizedDocument } from '$lib/domain/types';
 	import { providersState } from '$lib/state/providers.svelte';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
-	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
+	import { assistant } from '$lib/state/assistant.svelte';
 
 	interface Props {
 		book: NormalizedDocument;
@@ -75,7 +79,7 @@
 		holdTimer = setTimeout(() => {
 			holding = true;
 			closeMenu();
-			void realtimeAssistant.beginTalking(book);
+			void assistant.beginTalking(book);
 		}, HOLD_MS);
 	}
 
@@ -84,7 +88,7 @@
 		if (holding) {
 			holding = false;
 			lastTapAt = 0;
-			realtimeAssistant.stopTalking();
+			assistant.stopTalking();
 			return;
 		}
 		const now = performance.now();
@@ -92,7 +96,7 @@
 			lastTapAt = 0;
 			clearTimeout(tapTimer);
 			closeMenu();
-			realtimeAssistant.toggleHandsFree(book);
+			assistant.toggleHandsFree(book);
 		} else {
 			lastTapAt = now;
 			clearTimeout(tapTimer);
@@ -110,7 +114,7 @@
 		clearTimeout(holdTimer);
 		if (holding) {
 			holding = false;
-			realtimeAssistant.stopTalking();
+			assistant.stopTalking();
 		}
 	}
 
@@ -131,7 +135,7 @@
 			event.preventDefault();
 			holding = true;
 			closeMenu();
-			void realtimeAssistant.beginTalking(book);
+			void assistant.beginTalking(book);
 		} else if (event.key === 'Enter') {
 			event.preventDefault();
 			if (open) closeMenu(true);
@@ -147,7 +151,7 @@
 			event.preventDefault();
 			if (holding) {
 				holding = false;
-				realtimeAssistant.stopTalking();
+				assistant.stopTalking();
 			}
 		}
 	}
@@ -167,12 +171,41 @@
 
 	function endConversation(): void {
 		closeMenu(true);
-		realtimeAssistant.stop();
+		assistant.stop();
 	}
 
-	let status = $derived(realtimeAssistant.status);
-	let listening = $derived(realtimeAssistant.listening);
-	let handsFree = $derived(realtimeAssistant.mode === 'handsFree' && realtimeAssistant.active);
+	/* GPT-Live and GPT Realtime keep their own voice, model, and effort. */
+	let live = $derived(assistant.engine === 'live');
+	let voices = $derived(live ? LIVE_VOICES : REALTIME_VOICES);
+	let voiceId = $derived(live ? providersState.liveVoice : providersState.realtimeVoice);
+	let models = $derived(live ? LIVE_BRAIN_MODELS : REALTIME_MODELS);
+	let modelId = $derived(live ? providersState.liveBrainModel : providersState.realtimeModelId);
+	let efforts = $derived<Array<{ id: string; label: string }>>(
+		live ? LIVE_EFFORTS : REALTIME_EFFORTS
+	);
+	let effortId = $derived(live ? providersState.liveBrainEffort : providersState.realtimeEffort);
+
+	function chooseVoice(id: string): void {
+		if (live) void providersState.setLiveVoice(id);
+		else void providersState.setRealtimeVoice(id);
+		assistant.applyLiveSettings();
+	}
+
+	function chooseModel(id: string): void {
+		if (live) void providersState.setLiveBrainModel(id);
+		else void providersState.setRealtimeModel(id);
+		assistant.applyLiveSettings();
+	}
+
+	function chooseEffort(id: string): void {
+		if (live) void providersState.setLiveBrainEffort(id as LiveEffort);
+		else void providersState.setRealtimeEffort(id as RealtimeEffort);
+		assistant.applyLiveSettings();
+	}
+
+	let status = $derived(assistant.status);
+	let listening = $derived(assistant.listening);
+	let handsFree = $derived(assistant.mode === 'handsFree' && assistant.active);
 
 	let label = $derived(
 		status === 'connecting'
@@ -208,7 +241,7 @@
 		class:connecting={status === 'connecting'}
 		class:live={status === 'live'}
 		class:listening={status === 'live' && listening}
-		class:speaking={status === 'live' && realtimeAssistant.speaking && !listening}
+		class:speaking={status === 'live' && assistant.speaking && !listening}
 		class:failed={status === 'error'}
 		class:open
 		type="button"
@@ -253,22 +286,19 @@
 			<div class="menu-group" role="group" aria-label="Assistant voice">
 				<div class="menu-heading">
 					<strong>Voice</strong>
-					{#if realtimeAssistant.active}
-						<small>applies now · restarts the chat</small>
+					{#if assistant.active}
+						<small>{live ? 'applies now · reconnects' : 'applies now · restarts the chat'}</small>
 					{/if}
 				</div>
 				<div class="voice-options">
-					{#each REALTIME_VOICES as voice (voice.id)}
+					{#each voices as voice (voice.id)}
 						<button
-							class:selected={voice.id === providersState.realtimeVoice}
+							class:selected={voice.id === voiceId}
 							type="button"
 							role="menuitemradio"
-							aria-checked={voice.id === providersState.realtimeVoice}
+							aria-checked={voice.id === voiceId}
 							title={voice.tagline}
-							onclick={() => {
-								void providersState.setRealtimeVoice(voice.id);
-								realtimeAssistant.applyLiveSettings();
-							}}
+							onclick={() => chooseVoice(voice.id)}
 						>
 							{voice.label}
 						</button>
@@ -276,24 +306,26 @@
 				</div>
 			</div>
 
-			<div class="menu-group" role="group" aria-label="Assistant model">
+			<div
+				class="menu-group"
+				role="group"
+				aria-label={live ? 'Assistant brain' : 'Assistant model'}
+			>
 				<div class="menu-heading">
-					<strong>Model</strong>
+					<strong>{live ? 'Brain' : 'Model'}</strong>
+					{#if live}<small>reads the document for the voice</small>{/if}
 				</div>
 				<div class="segmented-options">
-					{#each REALTIME_MODELS as model (model.id)}
+					{#each models as model (model.id)}
 						<button
-							class:selected={model.id === providersState.realtimeModelId}
+							class:selected={model.id === modelId}
 							type="button"
 							role="menuitemradio"
-							aria-checked={model.id === providersState.realtimeModelId}
+							aria-checked={model.id === modelId}
 							title={model.tagline}
-							onclick={() => {
-								void providersState.setRealtimeModel(model.id);
-								realtimeAssistant.applyLiveSettings();
-							}}
+							onclick={() => chooseModel(model.id)}
 						>
-							{model.label.replace('GPT Realtime ', '')}
+							{model.label.replace('GPT Realtime ', '').replace('GPT-6 ', '')}
 						</button>
 					{/each}
 				</div>
@@ -305,16 +337,13 @@
 					<small>higher is smarter, slower</small>
 				</div>
 				<div class="segmented-options">
-					{#each REALTIME_EFFORTS as effort (effort.id)}
+					{#each efforts as effort (effort.id)}
 						<button
-							class:selected={effort.id === providersState.realtimeEffort}
+							class:selected={effort.id === effortId}
 							type="button"
 							role="menuitemradio"
-							aria-checked={effort.id === providersState.realtimeEffort}
-							onclick={() => {
-								void providersState.setRealtimeEffort(effort.id as RealtimeEffort);
-								realtimeAssistant.applyLiveSettings();
-							}}
+							aria-checked={effort.id === effortId}
+							onclick={() => chooseEffort(effort.id)}
 						>
 							{effort.label}
 						</button>
@@ -329,7 +358,7 @@
 				aria-checked={handsFree}
 				onclick={() => {
 					closeMenu();
-					realtimeAssistant.toggleHandsFree(book);
+					assistant.toggleHandsFree(book);
 				}}
 			>
 				<Icon icon={Mic} size={15} strokeWidth={1.8} aria-hidden="true" />
@@ -343,20 +372,22 @@
 				class="menu-item"
 				type="button"
 				role="menuitemcheckbox"
-				aria-checked={realtimeAssistant.chatOpen}
+				aria-checked={assistant.chatOpen}
 				onclick={() => {
 					closeMenu();
-					if (realtimeAssistant.chatOpen) realtimeAssistant.chatOpen = false;
-					else realtimeAssistant.openChat();
+					if (assistant.chatOpen) assistant.chatOpen = false;
+					else assistant.openChat();
 				}}
 			>
 				<Icon icon={Keyboard} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>Type instead</strong>
 					<small>
-						{realtimeAssistant.chatOpen
+						{assistant.chatOpen
 							? 'Chat panel is open'
-							: 'Ask by typing — replies stay silent'}
+							: readerChrome.spokenChatReplies
+								? 'Ask by typing — replies are read aloud too'
+								: 'Ask by typing — replies stay silent'}
 					</small>
 				</span>
 				<kbd class="menu-key" aria-hidden="true">/</kbd>
@@ -384,13 +415,13 @@
 				class="menu-item danger"
 				type="button"
 				role="menuitem"
-				disabled={!realtimeAssistant.active}
+				disabled={!assistant.active}
 				onclick={endConversation}
 			>
 				<Icon icon={PhoneOff} size={15} strokeWidth={1.8} aria-hidden="true" />
 				<span>
 					<strong>End conversation</strong>
-					<small>{realtimeAssistant.active ? 'Hang up' : 'Not connected'}</small>
+					<small>{assistant.active ? 'Hang up' : 'Not connected'}</small>
 				</span>
 			</button>
 		</div>

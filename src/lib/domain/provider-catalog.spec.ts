@@ -12,7 +12,15 @@ import {
 	getElevenLabsModel,
 	isCloudLlmProvider,
 	normalizeElevenLabsOptions,
-	type ElevenLabsModelSpec
+	type ElevenLabsModelSpec,
+	ASSISTANT_ENGINES,
+	DEFAULT_ASSISTANT_ENGINE,
+	DEFAULT_LIVE_EFFORT,
+	LIVE_BRAIN_MODELS,
+	LIVE_VOICES,
+	REALTIME_VOICES,
+	isAssistantEngine,
+	isLiveEffort
 } from './provider-catalog';
 
 describe('cloud LLM provider catalog', () => {
@@ -145,5 +153,25 @@ describe('elevenlabs voice options', () => {
 		expect(a).toBe(b);
 		expect(a).toBe('eleven_flash_v2_5#similarity_boost=0.75,speed=1.1,stability=0.5');
 		expect(a).not.toBe(elevenLabsRevision(flash, normalizeElevenLabsOptions(flash, { speed: 1 })));
+	});
+});
+
+describe('GPT-Live catalog', () => {
+	it('defaults the assistant to GPT-Live with a GPT-6 Luna brain answering fast', () => {
+		expect(DEFAULT_ASSISTANT_ENGINE).toBe('live');
+		expect(ASSISTANT_ENGINES.map((engine) => engine.id)).toEqual(['live', 'realtime']);
+		expect(LIVE_BRAIN_MODELS[0].id).toBe('gpt-6-luna');
+		expect(DEFAULT_LIVE_EFFORT).toBe('none');
+		expect(isAssistantEngine('realtime')).toBe(true);
+		expect(isAssistantEngine('claude')).toBe(false);
+		expect(isLiveEffort('medium')).toBe(true);
+		expect(isLiveEffort('minimal')).toBe(false);
+	});
+
+	it('offers Realtime’s voices plus twelve only Live speaks', () => {
+		const ids = LIVE_VOICES.map((voice) => voice.id);
+		expect(new Set(ids).size).toBe(22);
+		expect(ids.slice(0, REALTIME_VOICES.length)).toEqual(REALTIME_VOICES.map((voice) => voice.id));
+		expect(LIVE_VOICES.filter((voice) => voice.liveOnly)).toHaveLength(12);
 	});
 });

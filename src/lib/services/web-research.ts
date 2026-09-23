@@ -34,6 +34,14 @@ export class WebResearchError extends Error {
  */
 const RESEARCH_MAX_OUTPUT_TOKENS = 2_000;
 
+/**
+ * A voice is waiting on the answer. GPT-6 reasons at 'medium' unless told
+ * otherwise, and measured on one question (2026-09-22): medium 16 s with four
+ * searches, none 9–15 s with three, low 4.6–8.4 s with one or two, with
+ * answers as good.
+ */
+const RESEARCH_EFFORT = 'low';
+
 export function webResearchRequestBody(model: string, query: string): Record<string, unknown> {
 	return {
 		model,
@@ -43,6 +51,7 @@ export function webResearchRequestBody(model: string, query: string): Record<str
 			'no preamble — only the sentences.',
 		input: query,
 		tools: [{ type: 'web_search' }],
+		reasoning: { effort: RESEARCH_EFFORT },
 		max_output_tokens: RESEARCH_MAX_OUTPUT_TOKENS
 	};
 }

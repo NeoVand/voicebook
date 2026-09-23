@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DocumentBlock, NormalizedDocument, SpeechSegment } from './types';
 import {
 	assistantTools,
+	brainTools,
 	buildAssistantInstructions,
 	describePassageLocation,
 	parseAssistantToolCall,
@@ -115,7 +116,7 @@ describe('buildAssistantInstructions', () => {
 	});
 
 	it('sends a document too long to carry whole as a map, never half of it', () => {
-		const built = buildAssistantInstructions(doc(), 120);
+		const built = buildAssistantInstructions(doc(), { inlineBudget: 120 });
 		expect(built.mode).toBe('map');
 		expect(built.map?.sections.map((section) => section.title)).toEqual([
 			'Whale Song',
@@ -161,7 +162,7 @@ describe('buildAssistantInstructions', () => {
 					}
 				]
 			}),
-			120
+			{ inlineBudget: 120 }
 		);
 		expect(built.instructions).toContain('=== ABSTRACT ===\nSongs and journeys of whales.');
 		expect(built.instructions).toContain('=== READER STATE ===');
@@ -239,6 +240,47 @@ describe('buildAssistantInstructions', () => {
 		);
 		expect(built.instructions).toContain('=== READER STATE ===');
 		expect(built.instructions).toContain('- ⟦3⟧ Reader wants the migration data revisited.');
+	});
+});
+
+describe('brain instructions', () => {
+	it('writes for the ear and leaves the greeting to the voice', () => {
+		const built = buildAssistantInstructions(doc(), { role: 'brain' });
+		expect(built.instructions).toContain('What you write is heard, not read.');
+		expect(built.instructions).toContain('no markdown, lists, headings');
+		expect(built.instructions).not.toContain('When the conversation begins, greet the reader');
+		expect(built.instructions).toContain('=== DOCUMENT: Whale Song ===');
+	});
+
+	it('reads a long document through the map like the voice does', () => {
+		const built = buildAssistantInstructions(doc(), { role: 'brain', inlineBudget: 120 });
+		expect(built.mode).toBe('map');
+		expect(built.instructions).toContain('What you write is heard, not read.');
+		expect(built.instructions).toContain('=== MAP: Whale Song ===');
+	});
+});
+
+describe('brainTools', () => {
+	it('leaves out the tools that must follow the voice as it plays', () => {
+		const names = brainTools(true).map((tool) => tool.name);
+		for (const paced of ['plan_tour', 'continue_tour', 'point_at']) {
+			expect(names).not.toContain(paced);
+		}
+		expect(names).toEqual(expect.arrayContaining(['show_passage', 'read_section', 'web_research']));
+		expect(brainTools(true).some((tool) => 'async' in tool)).toBe(false);
+	});
+
+	it('runs the screen-only tools async for typed chat', () => {
+		const tools = brainTools(false, { asyncScreenTools: true });
+		expect(tools.filter((tool) => tool.async).map((tool) => tool.name)).toEqual([
+			'show_passage',
+			'clear_highlight',
+			'add_highlight',
+			'add_note',
+			'save_memory',
+			'play_section'
+		]);
+		expect(tools.find((tool) => tool.name === 'get_reader_focus')?.async).toBeUndefined();
 	});
 });
 

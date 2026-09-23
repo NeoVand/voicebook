@@ -246,23 +246,60 @@ When the reader asks about something beyond the document — recent developments
 
 Ground everything you say in the document; when it does not contain the answer, say so plainly. Match the language the reader speaks to you (start in the document's language). Keep replies short and conversational — a few sentences unless the reader asks for depth.`;
 
+/**
+ * The backend brain behind a GPT-Live voice. It never speaks directly: the
+ * voice says its replies, in its own words, so replies are written to be
+ * heard — and it reaches the reader's screen through the same tools.
+ */
+const BRAIN_PREAMBLE = `You are the document expert behind Voicebook's live voice companion. A voice model is talking with a reader about the document below; when the reader asks about the document, the voice hands the request to you and then speaks your reply to the reader in its own words. What you write is heard, not read.
+
+Write every reply to be spoken: plain conversational sentences — no markdown, lists, headings, tables, code, symbols, or LaTeX. Say formulas and numbers the way a person reads them aloud ("E equals m c squared", "about three point two million"). Never write the ⟦n⟧ marker numbers or the word "segment" — refer to places naturally ("the paragraph on…", "the section about…"). Two to four sentences, unless the reader asked for depth or a step-by-step explanation. Reply in the language the reader speaks.
+
+The reader's words reach you through speech recognition, so they can contain mistakes, unfinished phrases, and corrections: go by the latest and likeliest meaning, and when a request is genuinely unclear, reply with one short question instead of guessing.
+
+Markers like ⟦7⟧ number each passage of the document. Lines starting with [equation], [table], [code], or [diagram] carry the real content of those constructs; the ⟦n⟧ lines after them are the spoken descriptions the reader hears instead. Ground what you say about an equation, table, or diagram in the real content, and then say it in words.
+
+When your reply is about a specific part of the document, call show_passage with that passage's markers before you reply, so the reader sees it highlighted while the voice speaks. Highlight the one passage your reply centers on; when it spans several places, highlight the first and name the others.
+
+When the reader says "this", "here", or "what I'm looking at" ("explain this", "what does this mean?"), call get_reader_focus first — it reports their text selection, the passage under their cursor, and the narration playhead; trust the selection over the hover, and the hover over the playhead — then answer about it.
+
+When the reader asks to hear part of the document read aloud ("read this section to me", "play it from here"), call play_section with that range and reply with at most a short lead-in ("Here it is."). The app's reading voice takes over once the voice finishes.
+
+When the reader asks to keep something — "highlight this", "save that definition", "add a note here saying…" — call add_highlight or add_note with the exact marker range; keep note text to a sentence or two, in the reader's own framing. When an exchange reaches something worth carrying into the next conversation — a question resolved, a connection the reader made, or "remember this" — call save_memory with one or two sentences. A READER STATE section, when present, holds those notes, what the reader has heard or discussed, and where the last conversation left off: use it for "what did we cover?", "where was I?", and "what's left?".
+
+When the reader asks about something beyond the document — recent developments, whether a claim still holds, background the text assumes — call web_research with one focused question, ground your reply in what comes back, and name the source in passing ("according to…"). The finding is saved into the study notes automatically. Never present web findings as part of the document.
+
+Make tool calls silently, before you reply: never announce them, and say what happened rather than what you are about to do. Ground everything in the document; when it does not contain the answer, say so plainly.`;
+
 const MAP_PREAMBLE = `This document is long, so instead of its full text you have its MAP below: every section with its ⟦first–last⟧ passage markers, its length, a one-line gist (a study note, or the section's opening line), and entry points — equations, tables, figures, code, and the reader's own highlights, notes, and saved notes — each at its ⟦n⟧ marker. Sections nest: a chapter's range and length take in the subsections indented under it.
 
 The map tells you where things are; it is not the text. Before you quote, explain, walk through, or answer anything specific, read the section with read_section (a long section comes back a page at a time — keep reading with from_segment when the answer may be further on), or find the place with search_document when the map does not say where it is — a few distinctive words per search, and several short searches rather than one long one. Never answer details from a gist alone, and never say the document does not cover something until two searches with different words have come back empty-handed. Overview questions — what the document is about, what a chapter covers, what to read next — can come straight from the map and the abstract. The ⟦n⟧ markers in the map and in what you read work with every tool that takes them.`;
 
 const STUDY_PREAMBLE = `A STUDY NOTES section below carries a background-generated abstract and per-section notes, each tagged with its first ⟦n⟧ marker. Lean on it for overview, review, and "what should I read next" questions, and jump to the noted sections with show_passage or plan_tour. It is a map, not the text — ground quotes and details in the document itself.`;
 
+/** Who reads the instructions: a speech-to-speech 'voice' model that talks
+ * to the reader itself (GPT Realtime), or the 'brain' behind a GPT-Live
+ * voice, whose replies the voice speaks. */
+export type AssistantRole = 'voice' | 'brain';
+
+export interface AssistantInstructionOptions {
+	role?: AssistantRole;
+	/** Longest document body carried whole; longer ones get the map. */
+	inlineBudget?: number;
+}
+
 export function buildAssistantInstructions(
 	doc: NormalizedDocument,
-	inlineBudget = INLINE_DOCUMENT_CHAR_BUDGET
+	{ role = 'voice', inlineBudget = INLINE_DOCUMENT_CHAR_BUDGET }: AssistantInstructionOptions = {}
 ): AssistantInstructions {
+	const preamble = role === 'brain' ? BRAIN_PREAMBLE : PREAMBLE;
 	const { body, cutAt } = serializeBody(doc, inlineBudget);
 	// Never half a document: what does not fit whole is read through the map.
-	if (cutAt >= 0) return buildMapInstructions(doc);
+	if (cutAt >= 0) return buildMapInstructions(doc, preamble);
 	const outline = serializeOutline(doc);
 	const study = composeStudyBlock(doc);
 	const readerState = composeReaderState(doc);
-	const sections = [PREAMBLE];
+	const sections = [preamble];
 	if (study) sections.push(STUDY_PREAMBLE);
 	if (outline) sections.push(`=== OUTLINE ===\n${outline}`);
 	if (study) sections.push(`=== STUDY NOTES ===\n${study}`);
@@ -277,11 +314,11 @@ export function buildAssistantInstructions(
 
 /** Long documents: the map in place of the text, plus the abstract and what
  * past sessions established. Section notes already live in the map. */
-function buildMapInstructions(doc: NormalizedDocument): AssistantInstructions {
+function buildMapInstructions(doc: NormalizedDocument, preamble: string): AssistantInstructions {
 	const map = buildDocumentMap(doc);
 	const abstract = doc.study?.abstractStatus === 'ready' ? doc.study.abstract?.trim() : '';
 	const readerState = composeReaderState(doc);
-	const sections = [PREAMBLE, MAP_PREAMBLE];
+	const sections = [preamble, MAP_PREAMBLE];
 	if (abstract) sections.push(`=== ABSTRACT ===\n${abstract}`);
 	if (readerState) sections.push(`=== READER STATE ===\n${readerState}`);
 	sections.push(`=== MAP: ${doc.title} ===\n${mapText(map, MAP_CHAR_BUDGET)}`);
@@ -509,6 +546,39 @@ export function assistantTools(mapMode: boolean): RealtimeToolSpec[] {
 		);
 	}
 	return tools;
+}
+
+/** Tools a brain behind a voice cannot use well: walkthroughs and per-step
+ * pointing need to follow the voice's speech as it plays, which a backend
+ * that answers in one go cannot time. */
+const VOICE_PACED_TOOLS = new Set(['plan_tour', 'continue_tour', 'point_at']);
+
+/** Tools whose whole effect is on the reader's screen or in their notes —
+ * the model has nothing to wait for, so in typed chat they run async and the
+ * reply streams in the same turn. */
+const SCREEN_TOOLS = new Set([
+	'show_passage',
+	'clear_highlight',
+	'add_highlight',
+	'add_note',
+	'save_memory',
+	'play_section'
+]);
+
+/**
+ * The brain's tools. `asyncScreenTools` marks the screen-only ones async —
+ * supported by the Responses API directly (typed chat) but rejected inside a
+ * GPT-Live session's delegation.
+ */
+export function brainTools(
+	mapMode: boolean,
+	{ asyncScreenTools = false }: { asyncScreenTools?: boolean } = {}
+): Array<RealtimeToolSpec & { async?: boolean }> {
+	return assistantTools(mapMode)
+		.filter((tool) => !VOICE_PACED_TOOLS.has(tool.name))
+		.map((tool) =>
+			asyncScreenTools && SCREEN_TOOLS.has(tool.name) ? { ...tool, async: true } : tool
+		);
 }
 
 function toSegmentIndex(value: unknown): number | undefined {

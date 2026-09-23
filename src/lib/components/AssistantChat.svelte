@@ -5,7 +5,7 @@
 	import { fly } from 'svelte/transition';
 	import type { NormalizedDocument } from '$lib/domain/types';
 	import { readerChrome } from '$lib/state/reader-chrome.svelte';
-	import { realtimeAssistant } from '$lib/state/realtime-assistant.svelte';
+	import { assistant } from '$lib/state/assistant.svelte';
 
 	interface Props {
 		book: NormalizedDocument;
@@ -34,7 +34,7 @@
 	// Opening the panel means you intend to type — from the menu or from "/",
 	// which bumps the token so an already-open panel still takes the caret.
 	$effect(() => {
-		void realtimeAssistant.chatFocusToken;
+		void assistant.chatFocusToken;
 		const element = composer;
 		if (element) requestAnimationFrame(() => element.focus());
 	});
@@ -42,20 +42,20 @@
 	// Keep the newest turn in view as messages stream in — and when the wait
 	// indicator appears, which is the only thing on screen during a search.
 	$effect(() => {
-		void realtimeAssistant.messages.length;
-		void realtimeAssistant.messages.at(-1)?.text;
-		void realtimeAssistant.activity;
+		void assistant.messages.length;
+		void assistant.messages.at(-1)?.text;
+		void assistant.activity;
 		const element = list;
 		if (element) element.scrollTop = element.scrollHeight;
 	});
 
-	let busy = $derived(realtimeAssistant.status === 'connecting');
+	let busy = $derived(assistant.status === 'connecting');
 
 	async function send(): Promise<void> {
 		const text = draft.trim();
 		if (!text || busy) return;
 		draft = '';
-		await realtimeAssistant.sendTyped(book, text);
+		await assistant.sendTyped(book, text);
 	}
 
 	function handleComposerKeydown(event: KeyboardEvent): void {
@@ -68,7 +68,7 @@
 	function handlePanelKeydown(event: KeyboardEvent): void {
 		if (event.key === 'Escape') {
 			event.preventDefault();
-			realtimeAssistant.chatOpen = false;
+			assistant.chatOpen = false;
 		}
 	}
 
@@ -130,7 +130,7 @@
 
 	function moveDrag(event: PointerEvent): void {
 		if (!dragging) return;
-		realtimeAssistant.chatPosition = clamp(
+		assistant.chatPosition = clamp(
 			dragStart.left + (event.clientX - dragStart.pointerX),
 			dragStart.top + (event.clientY - dragStart.pointerY)
 		);
@@ -148,8 +148,8 @@
 	// Running once on open also pulls any out-of-range stored position back.
 	$effect(() => {
 		const settle = () => {
-			const position = realtimeAssistant.chatPosition;
-			if (position) realtimeAssistant.chatPosition = clamp(position.left, position.top);
+			const position = assistant.chatPosition;
+			if (position) assistant.chatPosition = clamp(position.left, position.top);
 		};
 		requestAnimationFrame(settle);
 		window.addEventListener('resize', settle);
@@ -157,20 +157,16 @@
 	});
 </script>
 
-{#if realtimeAssistant.chatOpen}
+{#if assistant.chatOpen}
 	<div
 		class="assistant-chat"
 		class:dragging
-		class:moved={Boolean(realtimeAssistant.chatPosition)}
+		class:moved={Boolean(assistant.chatPosition)}
 		role="dialog"
 		aria-label="Type to the assistant"
 		tabindex="-1"
-		style:left={realtimeAssistant.chatPosition
-			? `${realtimeAssistant.chatPosition.left}px`
-			: undefined}
-		style:top={realtimeAssistant.chatPosition
-			? `${realtimeAssistant.chatPosition.top}px`
-			: undefined}
+		style:left={assistant.chatPosition ? `${assistant.chatPosition.left}px` : undefined}
+		style:top={assistant.chatPosition ? `${assistant.chatPosition.top}px` : undefined}
 		transition:fly={{ y: 8, duration: 140 }}
 		onkeydown={handlePanelKeydown}
 		{@attach trackPanel}
@@ -188,19 +184,19 @@
 				class="chat-close"
 				type="button"
 				aria-label="Close chat"
-				onclick={() => (realtimeAssistant.chatOpen = false)}
+				onclick={() => (assistant.chatOpen = false)}
 			>
 				<Icon icon={X} size={14} />
 			</button>
 		</header>
 		<div class="chat-messages" {@attach trackList}>
-			{#if !realtimeAssistant.messages.length}
+			{#if !assistant.messages.length}
 				<p class="chat-hint">
 					Ask about this document by typing — same assistant, no speaking needed. It can highlight
 					and scroll to what it mentions.
 				</p>
 			{/if}
-			{#each realtimeAssistant.messages as message (message.id)}
+			{#each assistant.messages as message (message.id)}
 				<div class="chat-message {message.role}" class:pending={message.pending}>
 					{#if message.channel === 'voice'}
 						<span class="chat-voice-mark" title="Spoken"
@@ -210,9 +206,9 @@
 					<span class="chat-text">{message.text}</span>
 				</div>
 			{/each}
-			{#if realtimeAssistant.activity}
+			{#if assistant.activity}
 				<div class="chat-activity" role="status">
-					{#if realtimeAssistant.activity === 'searching'}
+					{#if assistant.activity === 'searching'}
 						<Icon icon={Globe} size={11} aria-hidden="true" />
 						<span>Searching the web</span>
 					{:else}
@@ -222,8 +218,8 @@
 				</div>
 			{/if}
 		</div>
-		{#if realtimeAssistant.status === 'error' && realtimeAssistant.errorMessage}
-			<p class="chat-error" role="alert">{realtimeAssistant.errorMessage}</p>
+		{#if assistant.status === 'error' && assistant.errorMessage}
+			<p class="chat-error" role="alert">{assistant.errorMessage}</p>
 		{/if}
 		<footer>
 			<textarea
