@@ -9,6 +9,8 @@ describe('webResearchRequestBody', () => {
 		expect(body.tools).toEqual([{ type: 'web_search' }]);
 		expect(String(body.instructions)).toContain('three to five plain sentences');
 		expect(body.max_output_tokens).toBeGreaterThan(0);
+		// GPT-6 would otherwise reason at 'medium' and search more — slow for a voice.
+		expect(body.reasoning).toEqual({ effort: 'low' });
 	});
 });
 

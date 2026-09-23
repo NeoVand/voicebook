@@ -383,7 +383,11 @@
 				<span>
 					<strong>Type instead</strong>
 					<small>
-						{assistant.chatOpen ? 'Chat panel is open' : 'Ask by typing — replies stay silent'}
+						{assistant.chatOpen
+							? 'Chat panel is open'
+							: readerChrome.spokenChatReplies
+								? 'Ask by typing — replies are read aloud too'
+								: 'Ask by typing — replies stay silent'}
 					</small>
 				</span>
 				<kbd class="menu-key" aria-hidden="true">/</kbd>
