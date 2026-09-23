@@ -6,6 +6,15 @@
  * state/realtime-assistant.svelte.ts.
  */
 import { ANNOTATION_NOTE_LIMIT } from './annotations';
+import {
+	buildDocumentMap,
+	mapSection,
+	mapText,
+	sectionAt,
+	tidyMath,
+	type DocumentMap
+} from './document-map';
+import { searchDocument } from './document-search';
 import { tableMarkdown } from './narration';
 import { MEMORY_TEXT_LIMIT, composeReaderState, composeStudyBlock } from './study-tree';
 import type { DocumentBlock, NormalizedDocument } from './types';
@@ -34,7 +43,9 @@ export type AssistantToolCall =
 	| { name: 'plan_tour'; stops: TourStop[] }
 	| { name: 'continue_tour' }
 	| { name: 'get_reader_focus' }
-	| { name: 'point_at'; segment: number };
+	| { name: 'point_at'; segment: number }
+	| { name: 'read_section'; section: string; fromSegment?: number }
+	| { name: 'search_document'; query: string };
 
 /** What the reader is pointing at right now, as segment indexes. */
 export interface ReaderFocus {
@@ -47,9 +58,13 @@ export const TOUR_STOP_LIMIT = 8;
 
 export interface AssistantInstructions {
 	instructions: string;
-	/** True when the document text had to be cut to fit the context budget. */
-	truncated: boolean;
+	/** 'whole': the full text is in context. 'map': the document map is, and
+	 * the model reads what it needs through read_section / search_document. */
+	mode: 'whole' | 'map';
 	segmentCount: number;
+	/** The map the instructions were built from (map mode), for the reading
+	 * tools to resolve section handles against. */
+	map?: DocumentMap;
 }
 
 export interface RealtimeToolSpec {
@@ -59,9 +74,24 @@ export interface RealtimeToolSpec {
 	parameters: Record<string, unknown>;
 }
 
-/** ~90k tokens of document text — inside the model's 128k window with room
- * left for the conversation itself. */
-export const ASSISTANT_CONTEXT_CHAR_BUDGET = 360_000;
+/**
+ * Documents up to about 30k tokens (roughly 20,000 words) travel whole:
+ * below this the full text is cheaper than the lookups a map needs, and it
+ * answers fastest. Longer ones get the map and reading tools — every answer
+ * re-reads the context, so carrying a book costs per question, runs into
+ * per-minute token limits, and buries the passage that matters.
+ */
+export const INLINE_DOCUMENT_CHAR_BUDGET = 120_000;
+
+/** The map's share of the instructions (~15k tokens): room for hundreds of
+ * sections before levels start collapsing. */
+export const MAP_CHAR_BUDGET = 60_000;
+
+/** One read_section page (~5k tokens) — a map part fits whole; longer
+ * sections continue on request. Every extra page is another model round. */
+export const READ_SECTION_CHAR_LIMIT = 20_000;
+
+const SEARCH_RESULT_LIMIT = 8;
 
 /** Tool outputs stay small; the model re-requests when it needs more. */
 export const READ_PASSAGE_CHAR_LIMIT = 8_000;
@@ -119,7 +149,7 @@ function marker(index: number): string {
 
 function segmentText(doc: NormalizedDocument, index: number): string {
 	const segment = doc.segments[index];
-	const text = segment.text.replace(/\s+/g, ' ').trim();
+	const text = tidyMath(segment.text).replace(/\s+/g, ' ').trim();
 	return text || segment.normalizedText.replace(/\s+/g, ' ').trim();
 }
 
@@ -129,7 +159,7 @@ function segmentText(doc: NormalizedDocument, index: number): string {
 function blockSource(block: DocumentBlock | undefined): string {
 	if (!block) return '';
 	if (block.table) return `[table]\n${tableMarkdown(block.table)}`;
-	if (block.kind === 'math') return `[equation] ${block.text.trim()}`;
+	if (block.kind === 'math') return `[equation] ${tidyMath(block.text).trim()}`;
 	if (block.kind === 'mermaid' || (block.kind === 'code' && block.codeLanguage === 'mermaid')) {
 		return `[diagram]\n${block.text.trim()}`;
 	}
@@ -216,13 +246,19 @@ When the reader asks about something beyond the document — recent developments
 
 Ground everything you say in the document; when it does not contain the answer, say so plainly. Match the language the reader speaks to you (start in the document's language). Keep replies short and conversational — a few sentences unless the reader asks for depth.`;
 
+const MAP_PREAMBLE = `This document is long, so instead of its full text you have its MAP below: every section with its ⟦first–last⟧ passage markers, its length, a one-line gist (a study note, or the section's opening line), and entry points — equations, tables, figures, code, and the reader's own highlights, notes, and saved notes — each at its ⟦n⟧ marker. Sections nest: a chapter's range and length take in the subsections indented under it.
+
+The map tells you where things are; it is not the text. Before you quote, explain, walk through, or answer anything specific, read the section with read_section (a long section comes back a page at a time — keep reading with from_segment when the answer may be further on), or find the place with search_document when the map does not say where it is — a few distinctive words per search, and several short searches rather than one long one. Never answer details from a gist alone, and never say the document does not cover something until two searches with different words have come back empty-handed. Overview questions — what the document is about, what a chapter covers, what to read next — can come straight from the map and the abstract. The ⟦n⟧ markers in the map and in what you read work with every tool that takes them.`;
+
 const STUDY_PREAMBLE = `A STUDY NOTES section below carries a background-generated abstract and per-section notes, each tagged with its first ⟦n⟧ marker. Lean on it for overview, review, and "what should I read next" questions, and jump to the noted sections with show_passage or plan_tour. It is a map, not the text — ground quotes and details in the document itself.`;
 
 export function buildAssistantInstructions(
 	doc: NormalizedDocument,
-	charBudget = ASSISTANT_CONTEXT_CHAR_BUDGET
+	inlineBudget = INLINE_DOCUMENT_CHAR_BUDGET
 ): AssistantInstructions {
-	const { body, cutAt } = serializeBody(doc, charBudget);
+	const { body, cutAt } = serializeBody(doc, inlineBudget);
+	// Never half a document: what does not fit whole is read through the map.
+	if (cutAt >= 0) return buildMapInstructions(doc);
 	const outline = serializeOutline(doc);
 	const study = composeStudyBlock(doc);
 	const readerState = composeReaderState(doc);
@@ -232,15 +268,28 @@ export function buildAssistantInstructions(
 	if (study) sections.push(`=== STUDY NOTES ===\n${study}`);
 	if (readerState) sections.push(`=== READER STATE ===\n${readerState}`);
 	sections.push(`=== DOCUMENT: ${doc.title} ===\n${body}`);
-	if (cutAt >= 0) {
-		sections.push(
-			`[The document is truncated here. Passages ${marker(cutAt)} through ${marker(doc.segments.length - 1)} are omitted — call read_passage to fetch any of them.]`
-		);
-	}
 	return {
 		instructions: sections.join('\n\n'),
-		truncated: cutAt >= 0,
+		mode: 'whole',
 		segmentCount: doc.segments.length
+	};
+}
+
+/** Long documents: the map in place of the text, plus the abstract and what
+ * past sessions established. Section notes already live in the map. */
+function buildMapInstructions(doc: NormalizedDocument): AssistantInstructions {
+	const map = buildDocumentMap(doc);
+	const abstract = doc.study?.abstractStatus === 'ready' ? doc.study.abstract?.trim() : '';
+	const readerState = composeReaderState(doc);
+	const sections = [PREAMBLE, MAP_PREAMBLE];
+	if (abstract) sections.push(`=== ABSTRACT ===\n${abstract}`);
+	if (readerState) sections.push(`=== READER STATE ===\n${readerState}`);
+	sections.push(`=== MAP: ${doc.title} ===\n${mapText(map, MAP_CHAR_BUDGET)}`);
+	return {
+		instructions: sections.join('\n\n'),
+		mode: 'map',
+		segmentCount: doc.segments.length,
+		map
 	};
 }
 
@@ -248,7 +297,8 @@ function segmentParameter(description: string): Record<string, unknown> {
 	return { type: 'integer', minimum: 0, description };
 }
 
-export function assistantTools(includeReadPassage: boolean): RealtimeToolSpec[] {
+/** The assistant's tools; map mode adds the reading tools. */
+export function assistantTools(mapMode: boolean): RealtimeToolSpec[] {
 	const tools: RealtimeToolSpec[] = [
 		{
 			type: 'function',
@@ -405,20 +455,58 @@ export function assistantTools(includeReadPassage: boolean): RealtimeToolSpec[] 
 			}
 		}
 	];
-	if (includeReadPassage) {
-		tools.push({
-			type: 'function',
-			name: 'read_passage',
-			description: 'Fetch the exact text of a segment range that is missing from your context.',
-			parameters: {
-				type: 'object',
-				properties: {
-					start_segment: segmentParameter('First segment number to fetch.'),
-					end_segment: segmentParameter('Last segment number to fetch, inclusive.')
-				},
-				required: ['start_segment', 'end_segment']
+	if (mapMode) {
+		tools.push(
+			{
+				type: 'function',
+				name: 'read_section',
+				description:
+					'Read the text of one section from the document map, by its S-number. Long sections come back a page at a time; pass from_segment to continue where the last page stopped.',
+				parameters: {
+					type: 'object',
+					properties: {
+						section: {
+							type: 'string',
+							description: 'The section handle from the map, e.g. "S12".'
+						},
+						from_segment: segmentParameter(
+							'Optional ⟦n⟧ marker to continue reading from, inside the section.'
+						)
+					},
+					required: ['section']
+				}
+			},
+			{
+				type: 'function',
+				name: 'search_document',
+				description:
+					'Find passages by their words — a name, a term, a phrase, a quote — when the map does not say where something is. Use two to four distinctive words the text itself would use; for a different angle, search again rather than adding words. Returns the best matches with their ⟦n⟧ markers and sections.',
+				parameters: {
+					type: 'object',
+					properties: {
+						query: {
+							type: 'string',
+							description: 'Two to four distinctive words, e.g. "doubloon mast".'
+						}
+					},
+					required: ['query']
+				}
+			},
+			{
+				type: 'function',
+				name: 'read_passage',
+				description:
+					'Read the exact text of a ⟦n⟧ marker range — a search hit, a map entry point, or the passages around one.',
+				parameters: {
+					type: 'object',
+					properties: {
+						start_segment: segmentParameter('First segment number to fetch.'),
+						end_segment: segmentParameter('Last segment number to fetch, inclusive.')
+					},
+					required: ['start_segment', 'end_segment']
+				}
 			}
-		});
+		);
 	}
 	return tools;
 }
@@ -443,6 +531,32 @@ export function parseAssistantToolCall(
 		return { call: { name } };
 	}
 	if (name === 'plan_tour') return parsePlanTour(doc, parsed);
+	if (name === 'read_section') {
+		const record = (parsed ?? {}) as Record<string, unknown>;
+		const section =
+			typeof record.section === 'string'
+				? record.section.trim()
+				: typeof record.section === 'number'
+					? String(record.section)
+					: '';
+		if (!section) return { error: 'read_section needs a section handle from the map, like "S12".' };
+		const from = toSegmentIndex(record.from_segment);
+		return {
+			call: {
+				name: 'read_section',
+				section: section.slice(0, 120),
+				...(from === undefined ? {} : { fromSegment: from })
+			}
+		};
+	}
+	if (name === 'search_document') {
+		const query =
+			typeof (parsed as { query?: unknown })?.query === 'string'
+				? (parsed as { query: string }).query.trim()
+				: '';
+		if (!query) return { error: 'search_document needs a non-empty query string.' };
+		return { call: { name: 'search_document', query: query.slice(0, 200) } };
+	}
 	if (name === 'web_research') {
 		const query =
 			typeof (parsed as { query?: unknown })?.query === 'string'
@@ -531,12 +645,14 @@ function parsePlanTour(
 	return { call: { name: 'plan_tour', stops: parsedStops } };
 }
 
-/** The passage's text with markers kept, so the model can cite precisely. */
+/** The passage's text with markers kept, so the model can cite precisely.
+ * `lastIndex` is the last passage included (-1 when none fit), so a reader
+ * paging through a long range knows where to continue. */
 export function readPassageText(
 	doc: NormalizedDocument,
 	range: PassageRange,
 	charLimit = READ_PASSAGE_CHAR_LIMIT
-): { text: string; truncated: boolean } {
+): { text: string; truncated: boolean; lastIndex: number } {
 	const blocksById = new Map(doc.blocks.map((block) => [block.id, block]));
 	const parts: string[] = [];
 	let length = 0;
@@ -547,12 +663,14 @@ export function readPassageText(
 		const source =
 			segment.blockId === previousBlockId ? '' : blockSource(blocksById.get(segment.blockId));
 		const piece = `${separator}${source ? `${source}\n` : ''}${marker(index)} ${segmentText(doc, index)}`;
-		if (length + piece.length > charLimit) return { text: parts.join(''), truncated: true };
+		if (length + piece.length > charLimit) {
+			return { text: parts.join(''), truncated: true, lastIndex: index - 1 };
+		}
 		parts.push(piece);
 		length += piece.length;
 		previousBlockId = segment.blockId;
 	}
-	return { text: parts.join(''), truncated: false };
+	return { text: parts.join(''), truncated: false, lastIndex: range.endIndex };
 }
 
 /** Title of the nearest outline entry at or before the passage — feedback the
@@ -569,4 +687,70 @@ export function describePassageLocation(doc: NormalizedDocument, range: PassageR
 		if (position !== undefined && position <= target) title = entry.title;
 	}
 	return title;
+}
+
+/**
+ * read_section's result: the section's text with markers, a page at a time.
+ * The map is the one the instructions were built from, so the S-numbers the
+ * model saw are the ones that resolve.
+ */
+export function readSectionOutput(
+	doc: NormalizedDocument,
+	map: DocumentMap,
+	handle: string,
+	fromSegment?: number,
+	charLimit = READ_SECTION_CHAR_LIMIT
+): Record<string, unknown> {
+	const section = mapSection(map, handle);
+	if (!section) {
+		return {
+			error: `There is no section "${handle}". Use an S-number from the map, S1 to S${map.sections.length}.`
+		};
+	}
+	const start =
+		fromSegment !== undefined && fromSegment >= section.start && fromSegment <= section.end
+			? fromSegment
+			: section.start;
+	const page = readPassageText(doc, { startIndex: start, endIndex: section.end }, charLimit);
+	// A single passage longer than a page still has to come through.
+	const text =
+		page.lastIndex < start
+			? readPassageText(doc, { startIndex: start, endIndex: start }, Number.POSITIVE_INFINITY).text
+			: page.text;
+	const lastIndex = Math.max(page.lastIndex, start);
+	const output: Record<string, unknown> = {
+		section: `${section.id} ${section.title}`,
+		passages: `⟦${start}⟧–⟦${lastIndex}⟧ of ⟦${section.start}⟧–⟦${section.end}⟧`,
+		text
+	};
+	if (lastIndex < section.end) {
+		output.continue_from = lastIndex + 1;
+		output.note = `The section continues — call read_section with from_segment ${lastIndex + 1} to read on.`;
+	}
+	return output;
+}
+
+/** search_document's result: the best matches, each placed on the map. */
+export function searchDocumentOutput(
+	doc: NormalizedDocument,
+	map: DocumentMap,
+	query: string
+): Record<string, unknown> {
+	const hits = searchDocument(doc, query, SEARCH_RESULT_LIMIT);
+	if (!hits.length) {
+		return {
+			results: [],
+			note: 'Nothing in the document uses those words. Try other terms, or look through the map.'
+		};
+	}
+	return {
+		results: hits.map((hit) => {
+			const section = sectionAt(map, hit.snippetSegment);
+			return {
+				...(section ? { section: `${section.id} ${section.title}` } : {}),
+				passages: hit.start === hit.end ? `⟦${hit.start}⟧` : `⟦${hit.start}⟧–⟦${hit.end}⟧`,
+				text: `${marker(hit.snippetSegment)} ${tidyMath(hit.snippet)}`
+			};
+		})
+	};
 }
