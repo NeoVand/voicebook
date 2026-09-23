@@ -261,17 +261,18 @@ describe('brain instructions', () => {
 });
 
 describe('brainTools', () => {
-	it('leaves out the tools that must follow the voice as it plays', () => {
+	it('walks through with the voice, but cannot point word by word', () => {
 		const names = brainTools(true).map((tool) => tool.name);
-		for (const paced of ['plan_tour', 'continue_tour', 'point_at']) {
-			expect(names).not.toContain(paced);
-		}
-		expect(names).toEqual(expect.arrayContaining(['show_passage', 'read_section', 'web_research']));
+		expect(names).not.toContain('point_at');
+		expect(names).toEqual(
+			expect.arrayContaining(['plan_tour', 'continue_tour', 'show_passage', 'read_section'])
+		);
 		expect(brainTools(true).some((tool) => 'async' in tool)).toBe(false);
 	});
 
-	it('runs the screen-only tools async for typed chat', () => {
-		const tools = brainTools(false, { asyncScreenTools: true });
+	it('runs the screen-only tools async for typed chat, which has no voice to pace a tour', () => {
+		const tools = brainTools(false, { typed: true });
+		expect(tools.map((tool) => tool.name)).not.toContain('plan_tour');
 		expect(tools.filter((tool) => tool.async).map((tool) => tool.name)).toEqual([
 			'show_passage',
 			'clear_highlight',

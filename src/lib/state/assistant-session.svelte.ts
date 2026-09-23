@@ -24,6 +24,12 @@ import { appState } from './app-state.svelte';
 import { providersState } from './providers.svelte';
 
 export type AssistantStatus = 'idle' | 'connecting' | 'live' | 'error';
+
+/** How every walkthrough stop is narrated. Left alone, a model narrates the
+ * whole tour at stop 1, re-highlights what is already highlighted, and asks
+ * whether to go on — the app handles all of that. */
+const TOUR_STOP_NOTE =
+	"It is highlighted. Narrate this stop only, in a sentence or two. The app highlights each stop itself and moves on when you finish, so don't call show_passage, preview later stops, or ask whether to continue.";
 export type AssistantMode = 'ptt' | 'handsFree';
 export type AssistantActivity = '' | 'thinking' | 'searching';
 
@@ -115,6 +121,8 @@ export abstract class AssistantSession {
 	/** Leave hands-free for hold-to-talk (play_section: the microphone must
 	 * not hear the narrator). */
 	protected abstract setHandsFree(on: boolean): void;
+	/** Ask the model to narrate the next walkthrough stop (or wrap up). */
+	protected abstract tourNudge(text: string): void;
 
 	/** Clear a lingering error pill without starting a session. */
 	dismissError(): void {
@@ -215,7 +223,7 @@ export abstract class AssistantSession {
 				stop: 1,
 				of: call.stops.length,
 				point: call.stops[0].point,
-				note: 'Stop 1 is highlighted. Narrate it briefly; the app advances you when you finish.'
+				note: TOUR_STOP_NOTE
 			};
 		}
 		if (call.name === 'continue_tour') {
@@ -395,5 +403,27 @@ export abstract class AssistantSession {
 		this.touchRange(tour.stops[tour.index].range);
 		this.onShowPassage?.(tour.stops[tour.index].range);
 		this.tourProgress = { stop: tour.index + 1, of: tour.stops.length };
+	}
+
+	/** The voice finished a stop: highlight the next and have it narrated, or
+	 * wrap up after the last. */
+	protected advanceTour(): void {
+		const tour = this.tour;
+		if (!tour || tour.paused) return;
+		if (tour.index + 1 < tour.stops.length) {
+			tour.index += 1;
+			this.applyTourStop();
+			const stop = tour.stops[tour.index];
+			const point = stop.point.trim().replace(/[.!?]+$/, '');
+			this.tourNudge(
+				`Tour stop ${tour.index + 1} of ${tour.stops.length}${point ? `: ${point}` : ''}. ${TOUR_STOP_NOTE}`
+			);
+		} else {
+			this.tour = undefined;
+			this.tourProgress = undefined;
+			this.tourNudge(
+				'That was the last stop. Wrap up in one sentence and ask whether they want to dig into any of the stops.'
+			);
+		}
 	}
 }
